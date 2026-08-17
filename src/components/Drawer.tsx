@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/appStore";
+import { ConfigSheet } from "./ConfigSheet";
 
 function baseName(path: string | undefined): string {
   if (!path) return "?";
@@ -17,6 +19,8 @@ export function Drawer({ onClose }: { onClose: () => void }) {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const openSession = useAppStore((s) => s.openSession);
   const setLang = useAppStore((s) => s.setLang);
+  const configOptions = useAppStore((s) => s.configOptions);
+  const [configOpen, setConfigOpen] = useState<string | null>(null);
 
   const sessions = instances
     .flatMap((i) =>
@@ -70,6 +74,31 @@ export function Drawer({ onClose }: { onClose: () => void }) {
           );
         })}
 
+        {configOptions.length > 0 && (
+          <>
+            <h2 className="px-4 pb-1 pt-5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              {t("config.title")}
+            </h2>
+            {configOptions.map((opt) => {
+              const current = opt.options?.find((v) => v.value === opt.currentValue);
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setConfigOpen(opt.id)}
+                  className="flex items-center justify-between gap-3 px-4 py-2.5 text-left active:bg-zinc-900"
+                >
+                  <span className="shrink-0 text-sm text-zinc-300">
+                    {t(`config.${opt.id}`, { defaultValue: opt.name ?? opt.id })}
+                  </span>
+                  <span className="truncate text-xs text-zinc-500">
+                    {current?.name ?? opt.currentValue ?? "—"}
+                  </span>
+                </button>
+              );
+            })}
+          </>
+        )}
+
         <div className="mt-auto flex gap-2 border-t border-zinc-800 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
           <button
             onClick={() => switchLang("en")}
@@ -88,6 +117,8 @@ export function Drawer({ onClose }: { onClose: () => void }) {
             中文
           </button>
         </div>
+
+        {configOpen && <ConfigSheet optionId={configOpen} onClose={() => setConfigOpen(null)} />}
       </aside>
     </div>
   );

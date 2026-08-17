@@ -21,6 +21,22 @@ export interface ConnectionProfile {
   token: string;
 }
 
+// Session config (session/load result + config_option_update). Shape matches
+// the bridge's buildConfigOptions output (id: model | mode | thought).
+export interface ConfigOption {
+  id: string;
+  name?: string;
+  category?: string;
+  currentValue?: string;
+  options?: { value: string; name: string }[];
+}
+
+// usage_update session/update payload — the editor's context bar data.
+export interface ContextUsage {
+  used: number;
+  size: number;
+}
+
 // ACP wire types. Deliberately permissive: unknown kinds/fields must be
 // ignored. The SessionUpdate union is discriminated by `sessionUpdate`
 // (per @agentclientprotocol schema), NOT by `kind`.

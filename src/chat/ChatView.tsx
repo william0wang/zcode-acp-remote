@@ -14,6 +14,7 @@ import rehypeHighlight from "rehype-highlight";
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
+import { Spinner } from "../components/Spinner";
 import type { ChatMessage } from "../lib/types";
 
 // ACP chat model -> assistant-ui message model (the ACP runtime adapter).
@@ -134,6 +135,7 @@ function Thread({
 }) {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const loadingSession = useAppStore((s) => s.loadingSession);
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col">
       <ThreadPrimitive.Viewport
@@ -142,8 +144,17 @@ function Thread({
         className="flex flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 py-4"
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
-          <div className="mt-24 text-center text-sm text-zinc-500">
-            {activeSessionId ? t("chat.empty") : t("chat.noSession")}
+          <div className="mt-24 flex flex-col items-center gap-3 text-center text-sm text-zinc-500">
+            {loadingSession ? (
+              <>
+                <Spinner className="size-7" />
+                <span>{t("chat.loadingSession")}</span>
+              </>
+            ) : activeSessionId ? (
+              t("chat.empty")
+            ) : (
+              t("chat.noSession")
+            )}
           </div>
         </AuiIf>
         {hasMore && (

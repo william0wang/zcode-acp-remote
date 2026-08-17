@@ -9,7 +9,7 @@ import {
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
-import { contentText, type ChatMessage, type ChatPart, type ConnectionProfile, type HubInstance, type SessionUpdate } from "../lib/types";
+import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type SessionUpdate } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
@@ -61,6 +61,12 @@ interface AppState {
   hasMore: boolean;
   totalMessages: number | null;
   loadingEarlier: boolean;
+  // Session config (model/mode/thought) + context usage, from the attach
+  // response and config_option_update / current_mode_update / usage_update.
+  configOptions: ConfigOption[];
+  currentModeId: string | null;
+  usage: ContextUsage | null;
+  loadingSession: boolean;
 
   init: () => void;
   connectToHub: (profile: ConnectionProfile) => void;
@@ -71,6 +77,7 @@ interface AppState {
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
+  setConfigOption: (configId: string, value: string) => Promise<void>;
   sendPrompt: (text: string) => Promise<void>;
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
@@ -184,23 +191,31 @@ export const useAppStore = create<AppState>((set, get) => {
     return msgs.slice(0, i).concat(m, msgs.slice(i + 1));
   }
 
-  // Applies one update to a messages array; returns null when nothing changed.
+  // Applies one update; returns a partial state patch, or null when nothing
+  // changed. Message kinds operate on the given array; session-level kinds
+  // (config/usage) carry their own values.
   function applyOne(
     msgs: ChatMessage[],
     u: SessionUpdate,
-  ): { msgs: ChatMessage[]; planText?: string | null } | null {
+  ): {
+    messages?: ChatMessage[];
+    planText?: string | null;
+    configOptions?: ConfigOption[];
+    currentModeId?: string;
+    usage?: ContextUsage;
+  } | null {
     const kind = u.sessionUpdate;
 
     if (kind === "user_message_chunk" || kind === "agent_message_chunk") {
       const role = kind === "user_message_chunk" ? "user" : "assistant";
       const text = contentText(u.content);
       if (!text) return null;
-      return { msgs: appendChunkMessage(msgs, u, role, text, "text") };
+      return { messages: appendChunkMessage(msgs, u, role, text, "text") };
     }
     if (kind === "agent_thought_chunk") {
       const text = contentText(u.content);
       if (!text) return null;
-      return { msgs: appendChunkMessage(msgs, u, "assistant", text, "thought") };
+      return { messages: appendChunkMessage(msgs, u, "assistant", text, "thought") };
     }
     if (kind === "tool_call") {
       const part = {
@@ -214,15 +229,15 @@ export const useAppStore = create<AppState>((set, get) => {
       if (mid) {
         const i = msgs.findIndex((m) => m.id === mid);
         if (i >= 0) {
-          return { msgs: patchMessage(msgs, i, { ...msgs[i], parts: [...msgs[i].parts, part] }) };
+          return { messages: patchMessage(msgs, i, { ...msgs[i], parts: [...msgs[i].parts, part] }) };
         }
         return {
-          msgs: [...msgs, { id: mid, role: "assistant", parts: [part], createdAt: Date.now() }],
+          messages: [...msgs, { id: mid, role: "assistant", parts: [part], createdAt: Date.now() }],
         };
       }
       const ensured = ensureMessage(msgs, "assistant");
       return {
-        msgs: ensured.messages.map((m) =>
+        messages: ensured.messages.map((m) =>
           m.id === ensured.message.id ? { ...m, parts: [...m.parts, part] } : m,
         ),
       };
@@ -248,7 +263,7 @@ export const useAppStore = create<AppState>((set, get) => {
               : p,
           ),
         };
-        return { msgs: msgs.slice(0, i).concat(patched, msgs.slice(i + 1)) };
+        return { messages: msgs.slice(0, i).concat(patched, msgs.slice(i + 1)) };
       }
       return null;
     }
@@ -263,7 +278,19 @@ export const useAppStore = create<AppState>((set, get) => {
           return `${mark} ${entry.content ?? ""}`;
         })
         .join("\n");
-      return { msgs, planText: lines || null };
+      return { planText: lines || null };
+    }
+    if (kind === "config_option_update") {
+      const opts = Array.isArray(u.configOptions) ? (u.configOptions as ConfigOption[]) : null;
+      return opts ? { configOptions: opts } : null;
+    }
+    if (kind === "current_mode_update") {
+      return typeof u.currentModeId === "string" ? { currentModeId: u.currentModeId } : null;
+    }
+    if (kind === "usage_update") {
+      const used = typeof u.used === "number" ? u.used : null;
+      const size = typeof u.size === "number" ? u.size : null;
+      return used != null && size != null ? { usage: { used, size } } : null;
     }
     // Unknown kinds (additive-only contract): ignore.
     return null;
@@ -296,16 +323,22 @@ export const useAppStore = create<AppState>((set, get) => {
       const batch = updateQueue;
       updateQueue = [];
       set((state) => {
-        let msgs = state.messages;
+        let messages = state.messages;
         let planText = state.planText;
+        let configOptions = state.configOptions;
+        let currentModeId = state.currentModeId;
+        let usage = state.usage;
         for (const { sessionId: sid, u: upd } of batch) {
           if (state.activeSessionId !== sid) continue;
-          const r = applyOne(msgs, upd);
+          const r = applyOne(messages, upd);
           if (!r) continue;
-          msgs = r.msgs;
+          if (r.messages) messages = r.messages;
           if (r.planText !== undefined) planText = r.planText;
+          if (r.configOptions) configOptions = r.configOptions;
+          if (r.currentModeId !== undefined) currentModeId = r.currentModeId;
+          if (r.usage) usage = r.usage;
         }
-        return { messages: msgs, planText };
+        return { messages, planText, configOptions, currentModeId, usage };
       });
     }, 120);
   }
@@ -347,6 +380,10 @@ export const useAppStore = create<AppState>((set, get) => {
         hasMore: false,
         totalMessages: null,
         loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        loadingSession: false,
       });
       reconnectAttempt = 0;
       return;
@@ -449,6 +486,10 @@ export const useAppStore = create<AppState>((set, get) => {
     hasMore: false,
     totalMessages: null,
     loadingEarlier: false,
+    configOptions: [],
+    currentModeId: null,
+    usage: null,
+    loadingSession: false,
 
     init: () => {
       const profile = loadProfile();
@@ -487,6 +528,10 @@ export const useAppStore = create<AppState>((set, get) => {
         hasMore: false,
         totalMessages: null,
         loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        loadingSession: false,
       });
     },
 
@@ -529,6 +574,10 @@ export const useAppStore = create<AppState>((set, get) => {
         hasMore: false,
         totalMessages: null,
         loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        loadingSession: false,
       });
       await openConnection(s.profile, instanceId);
       // Attach to the requested session, else the most recently updated one.
@@ -569,6 +618,10 @@ export const useAppStore = create<AppState>((set, get) => {
         hasMore: false,
         totalMessages: null,
         loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        loadingSession: true,
       });
       try {
         const result = await acp.request("session/load", {
@@ -580,13 +633,19 @@ export const useAppStore = create<AppState>((set, get) => {
           _meta: { zcode: { limit: REPLAY_TAIL_LIMIT } },
         });
         const meta = readReplayMeta(result);
+        const res = result as
+          | { modes?: { currentModeId?: string }; configOptions?: ConfigOption[] }
+          | null;
         set({
           replayCursor: meta?.cursor ?? null,
           hasMore: meta?.hasMore ?? false,
           totalMessages: typeof meta?.totalMessages === "number" ? meta.totalMessages : null,
+          configOptions: Array.isArray(res?.configOptions) ? res!.configOptions! : [],
+          currentModeId: res?.modes?.currentModeId ?? null,
+          loadingSession: false,
         });
       } catch (e) {
-        set({ notice: `session/load failed: ${(e as Error).message}` });
+        set({ notice: `session/load failed: ${(e as Error).message}`, loadingSession: false });
       }
     },
 
@@ -616,7 +675,8 @@ export const useAppStore = create<AppState>((set, get) => {
           for (const { sessionId: sid, u } of page) {
             if (sid !== sessionId) continue;
             const r = applyOne(segment, u);
-            if (r) segment = r.msgs; // plan snapshots in old pages are stale: skip
+            if (r?.messages) segment = r.messages;
+            // plan/config/usage in old pages are stale: take messages only
           }
           let rest = state.messages;
           if (segment.length && rest.length && segment[segment.length - 1].id === rest[0].id) {
@@ -646,6 +706,25 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ notice: `load_earlier failed: ${msg}` });
         }
         return false;
+      }
+    },
+
+    // Model / mode / thought switching via the bridge's configOptions.
+    setConfigOption: async (configId, value) => {
+      const s = get();
+      if (!acp || s.connState !== "open" || !s.activeSessionId) return;
+      try {
+        const result = await acp.request("session/set_config_option", {
+          sessionId: s.activeSessionId,
+          configId,
+          value,
+        });
+        const opts = (result as { configOptions?: ConfigOption[] } | null)?.configOptions;
+        if (Array.isArray(opts)) set({ configOptions: opts });
+        // The bridge also broadcasts config_option_update / current_mode_update
+        // to every client (editor included) — the store picks those up too.
+      } catch (e) {
+        set({ notice: `config change failed: ${(e as Error).message}` });
       }
     },
 

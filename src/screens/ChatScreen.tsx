@@ -3,12 +3,17 @@ import { useTranslation } from "react-i18next";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { Spinner } from "../components/Spinner";
 import { useAppStore } from "../store/appStore";
 
 function baseName(path: string | undefined): string {
   if (!path) return "";
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || path;
+}
+
+function fmtK(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
 }
 
 export function ChatScreen() {
@@ -20,6 +25,7 @@ export function ChatScreen() {
   const connState = useAppStore((s) => s.connState);
   const planText = useAppStore((s) => s.planText);
   const notice = useAppStore((s) => s.notice);
+  const usage = useAppStore((s) => s.usage);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
 
   const instance = instances.find((i) => i.id === instanceId);
@@ -54,8 +60,8 @@ export function ChatScreen() {
     : null;
 
   return (
-    <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
-      <header className="flex items-center gap-3 border-b border-zinc-800 px-3 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
+    <div className="relative flex h-full flex-col bg-zinc-950 text-zinc-100">
+      <header className="relative flex items-center gap-3 border-b border-zinc-800 px-3 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
         <button
           onClick={() => setDrawerOpen(true)}
           aria-label="menu"
@@ -66,10 +72,21 @@ export function ChatScreen() {
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{title}</div>
           {workspace && (
-            <div className="truncate text-[11px] text-zinc-500">{workspace}</div>
+            <div className="truncate text-[11px] text-zinc-500">
+              {workspace}
+              {usage && usage.size > 0 && ` · ${fmtK(usage.used)}/${fmtK(usage.size)}`}
+            </div>
           )}
         </div>
         <span className={`size-2.5 shrink-0 rounded-full ${statusDot}`} aria-label={connState} />
+        {usage && usage.size > 0 && (
+          <div className="absolute inset-x-0 bottom-0 h-0.5 bg-zinc-800/60">
+            <div
+              className="h-full bg-blue-500"
+              style={{ width: `${Math.min(100, (usage.used / usage.size) * 100)}%` }}
+            />
+          </div>
+        )}
       </header>
 
       {connState === "reconnecting" && (
@@ -102,6 +119,13 @@ export function ChatScreen() {
 
       {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
       <PermissionDialog />
+
+      {connState === "connecting" && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-zinc-950/90">
+          <Spinner className="size-8" />
+          <div className="text-sm text-zinc-400">{t("chat.connecting")}</div>
+        </div>
+      )}
     </div>
   );
 }

@@ -26,8 +26,16 @@
     "loadEarlierGeneric": "加载更早的消息",
     "loadingEarlier": "加载中…",
     "reconnecting": "重连中…",
+    "connecting": "连接中…",
+    "loadingSession": "正在加载会话…",
     "plan": "计划",
     "untitled": "未命名会话"
+  },
+  "config": {
+    "title": "会话",
+    "model": "模型",
+    "mode": "模式",
+    "thought": "思考"
   },
   "permission": {
     "title": "权限请求",

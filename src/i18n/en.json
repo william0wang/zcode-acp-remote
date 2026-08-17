@@ -26,8 +26,16 @@
     "loadEarlierGeneric": "Load earlier messages",
     "loadingEarlier": "Loading…",
     "reconnecting": "Reconnecting…",
+    "connecting": "Connecting…",
+    "loadingSession": "Loading session…",
     "plan": "Plan",
     "untitled": "Untitled session"
+  },
+  "config": {
+    "title": "Session",
+    "model": "Model",
+    "mode": "Mode",
+    "thought": "Thought"
   },
   "permission": {
     "title": "Permission requested",
