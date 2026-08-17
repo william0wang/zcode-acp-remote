@@ -37,17 +37,41 @@ export interface ContextUsage {
   size: number;
 }
 
-// account/usage_stats plan entry (Proposal 0002): one per quota window.
-// usedPercent (0-100) is always present; used/limit only when the API
-// reports absolute counts; windowHours 5 (rolling) / 168 (weekly).
-export interface PlanUsage {
-  id: string;
-  name?: string;
+// account/usage_stats (Proposal 0002) — the combined dual-provider quota
+// behind the zcode-quota CLI: one GLM section plus one Opencode Go section.
+// GLM items pass through verbatim (counts, reset timestamps, per-model
+// details); Go windows carry the countdown resolved to absolute epoch ms.
+export interface QuotaItem {
+  key: string;
+  label: string;
   usedPercent: number;
-  used?: number;
-  limit?: number;
-  windowHours?: number;
-  resetsAt?: number;
+  usedCount?: number;
+  totalCount?: number;
+  nextResetTime?: number;
+  detail?: { modelCode: string; usage: number }[];
+}
+
+export interface GlmUsageStats {
+  kind: "success" | "auth_error" | "rate_limited" | "unavailable";
+  level?: string;
+  items?: QuotaItem[];
+}
+
+export interface GoWindowEntry {
+  key: string;
+  label: string;
+  usagePercent: number;
+  resetsAt: number;
+}
+
+export interface GoUsageStats {
+  kind: "success" | "not_configured" | "auth_error" | "unavailable";
+  windows?: GoWindowEntry[];
+}
+
+export interface AccountUsageStats {
+  glm: GlmUsageStats;
+  opencode: GoUsageStats;
 }
 
 // available_commands_update entry (ACP AvailableCommand shape): the bridge's

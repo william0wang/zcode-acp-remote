@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/appStore";
-import type { PlanUsage } from "../lib/types";
+import type { GoWindowEntry, QuotaItem } from "../lib/types";
 import { ConfigSheet } from "./ConfigSheet";
 
 function baseName(path: string | undefined): string {
@@ -10,12 +10,80 @@ function baseName(path: string | undefined): string {
   return parts[parts.length - 1] || path;
 }
 
-// "3h 12m" / "45m" remaining until the window resets; empty when already due.
-function fmtRemaining(resetsAt: number): string {
-  const mins = Math.max(0, Math.round((resetsAt - Date.now()) / 60000));
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+// Local `MM-DD HH:MM` reset stamp — the same layout the zcode-quota CLI card
+// uses, so the app reads identically to the terminal output.
+function fmtResetTime(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function capitalise(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// Status lines, verbatim from the CLI card's non-success prose.
+const GLM_STATUS: Record<string, string> = {
+  auth_error: "🔒 Quota auth expired — re-login in the ZCode app",
+  rate_limited: "⏳ Quota service busy, try again shortly",
+  unavailable: "⚠ Quota info unavailable",
+};
+const GO_STATUS: Record<string, string> = {
+  auth_error: "auth expired — refresh your opencode.ai cookie",
+  unavailable: "unavailable",
+};
+
+// One bar line — CLI layout: label, bar, then `NN% · reset · count` trailing.
+function QuotaRow({
+  label,
+  percent,
+  resetMs,
+  count,
+  detail,
+}: {
+  label: string;
+  percent: number;
+  resetMs?: number;
+  count?: number;
+  detail?: QuotaItem["detail"];
+}) {
+  const clamped = Math.min(100, Math.max(0, percent));
+  return (
+    <div className="px-4 py-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="shrink-0 font-mono text-xs text-zinc-300">{label}</span>
+        <span className="truncate text-xs tabular-nums text-zinc-500">
+          {percent}%
+          {resetMs != null && ` · ${fmtResetTime(resetMs)}`}
+          {count != null && ` · ${count}`}
+        </span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-800">
+        <div
+          className={`h-full rounded-full ${clamped >= 90 ? "bg-red-500" : "bg-blue-500"}`}
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+      {detail?.map((d) => (
+        <p key={d.modelCode} className="mt-0.5 pl-1 font-mono text-[11px] text-zinc-600">
+          {d.modelCode} {d.usage}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function SectionHeader({ title, divided }: { title: string; divided?: boolean }) {
+  return (
+    <h3
+      className={`px-4 pb-0.5 pt-2 text-xs font-semibold text-zinc-300 ${
+        divided ? "mt-2 border-t border-zinc-800/70" : ""
+      }`}
+    >
+      {title}
+    </h3>
+  );
 }
 
 // One flat list across every bridge instance: session title as the main line,
@@ -26,12 +94,13 @@ export function Drawer({ onClose }: { onClose: () => void }) {
   const instances = useAppStore((s) => s.instances);
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
   const setLang = useAppStore((s) => s.setLang);
   const configOptions = useAppStore((s) => s.configOptions);
-  const planUsage = useAppStore((s) => s.planUsage);
+  const usageStats = useAppStore((s) => s.usageStats);
   const quotaUnavailable = useAppStore((s) => s.quotaUnavailable);
-  const refreshPlanUsage = useAppStore((s) => s.refreshPlanUsage);
+  const refreshUsageStats = useAppStore((s) => s.refreshUsageStats);
   const [configOpen, setConfigOpen] = useState<string | null>(null);
 
   const sessions = instances
@@ -55,9 +124,17 @@ export function Drawer({ onClose }: { onClose: () => void }) {
         className="flex h-full w-80 max-w-[85%] flex-col overflow-y-auto bg-zinc-950 pt-[max(env(safe-area-inset-top),0.75rem)] text-zinc-100"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="px-4 pb-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
-          {t("chat.sessions")}
-        </h2>
+        <div className="flex items-center justify-between px-4 pb-1">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            {t("chat.sessions")}
+          </h2>
+          <button
+            onClick={() => void refreshInstances()}
+            className="text-xs text-zinc-500 active:text-zinc-300"
+          >
+            {t("picker.refresh")}
+          </button>
+        </div>
         {sessions.length === 0 && (
           <p className="px-4 py-2 text-xs text-zinc-600">{t("chat.noSessions")}</p>
         )}
@@ -86,7 +163,8 @@ export function Drawer({ onClose }: { onClose: () => void }) {
           );
         })}
 
-        {configOptions.length > 0 && (
+        {/* Session-scoped config — meaningless until a session is attached. */}
+        {activeSessionId != null && configOptions.length > 0 && (
           <>
             <h2 className="px-4 pb-1 pt-5 text-xs font-medium uppercase tracking-wide text-zinc-500">
               {t("config.title")}
@@ -111,14 +189,14 @@ export function Drawer({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {(quotaUnavailable || (planUsage && planUsage.length > 0)) && (
+        {(quotaUnavailable || usageStats) && (
           <>
             <div className="flex items-center justify-between px-4 pb-1 pt-5">
               <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
                 {t("quota.title")}
               </h2>
               <button
-                onClick={() => void refreshPlanUsage()}
+                onClick={() => void refreshUsageStats()}
                 className="text-xs text-zinc-500 active:text-zinc-300"
               >
                 {t("quota.refresh")}
@@ -127,36 +205,51 @@ export function Drawer({ onClose }: { onClose: () => void }) {
             {quotaUnavailable ? (
               <p className="px-4 py-1 text-xs text-zinc-600">{t("quota.unavailable")}</p>
             ) : (
-              planUsage!.map((p: PlanUsage) => {
-              const counts =
-                typeof p.used === "number" && typeof p.limit === "number"
-                  ? `${p.used}/${p.limit}`
-                  : "";
-              const rem = p.resetsAt ? fmtRemaining(p.resetsAt) : "";
-              return (
-                <div key={p.id} className="px-4 py-2">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-sm text-zinc-300">{p.name ?? p.id}</span>
-                    <span className="text-xs tabular-nums text-zinc-500">
-                      {p.usedPercent}%{counts && ` · ${counts}`}
-                    </span>
-                  </div>
-                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
-                    <div
-                      className={`h-full rounded-full ${
-                        p.usedPercent >= 90 ? "bg-red-500" : "bg-blue-500"
-                      }`}
-                      style={{ width: `${Math.min(100, Math.max(0, p.usedPercent))}%` }}
-                    />
-                  </div>
-                  {rem && (
-                    <p className="mt-1 text-[11px] text-zinc-600">
-                      {t("quota.resetsIn", { time: rem })}
+              usageStats && (
+                <>
+                  <SectionHeader
+                    title={`GLM Coding Plan${
+                      usageStats.glm.level ? ` · ${capitalise(usageStats.glm.level)}` : ""
+                    }`}
+                  />
+                  {usageStats.glm.kind === "success" ? (
+                    usageStats.glm.items?.map((it) => (
+                      <QuotaRow
+                        key={it.key}
+                        label={it.label}
+                        percent={it.usedPercent}
+                        resetMs={it.nextResetTime}
+                        count={it.usedCount}
+                        detail={it.detail}
+                      />
+                    ))
+                  ) : (
+                    <p className="px-4 py-1 text-xs text-zinc-600">
+                      {GLM_STATUS[usageStats.glm.kind] ?? GLM_STATUS.unavailable}
                     </p>
                   )}
-                </div>
-              );
-              })
+
+                  {usageStats.opencode.kind !== "not_configured" && (
+                    <>
+                      <SectionHeader title="Opencode Go" divided />
+                      {usageStats.opencode.kind === "success" ? (
+                        usageStats.opencode.windows?.map((w: GoWindowEntry) => (
+                          <QuotaRow
+                            key={w.key}
+                            label={w.label}
+                            percent={w.usagePercent}
+                            resetMs={w.resetsAt}
+                          />
+                        ))
+                      ) : (
+                        <p className="px-4 py-1 text-xs text-zinc-600">
+                          {GO_STATUS[usageStats.opencode.kind] ?? GO_STATUS.unavailable}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </>
+              )
             )}
           </>
         )}

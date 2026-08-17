@@ -9,7 +9,7 @@ import {
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
-import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type PlanUsage, type SessionUpdate, type SlashCommand } from "../lib/types";
+import { contentText, type AccountUsageStats, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type GoUsageStats, type GoWindowEntry, type GlmUsageStats, type HubInstance, type QuotaItem, type SessionUpdate, type SlashCommand } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
@@ -29,6 +29,44 @@ function readReplayMeta(result: unknown): ReplayMeta | null {
   if (typeof result !== "object" || result === null) return null;
   const meta = (result as { replayMeta?: unknown }).replayMeta;
   return typeof meta === "object" && meta !== null ? (meta as ReplayMeta) : null;
+}
+
+// Validates an account/usage_stats result into the combined GLM + Opencode
+// Go shape; null when the payload doesn't fit (treated like a failed fetch).
+function parseUsageStats(result: unknown): AccountUsageStats | null {
+  if (typeof result !== "object" || result === null) return null;
+  const r = result as { glm?: unknown; opencode?: unknown };
+  if (typeof r.glm !== "object" || r.glm === null) return null;
+  if (typeof r.opencode !== "object" || r.opencode === null) return null;
+
+  const glm = r.glm as Partial<GlmUsageStats>;
+  const go = r.opencode as Partial<GoUsageStats>;
+  const items = Array.isArray(glm.items)
+    ? glm.items.filter((it) => it && typeof it.usedPercent === "number")
+    : undefined;
+  const windows = Array.isArray(go.windows)
+    ? go.windows.filter((w) => w && typeof w.usagePercent === "number")
+    : undefined;
+
+  return {
+    glm: {
+      kind: (["success", "auth_error", "rate_limited", "unavailable"] as const).includes(
+        glm.kind as GlmUsageStats["kind"],
+      )
+        ? (glm.kind as GlmUsageStats["kind"])
+        : "unavailable",
+      ...(typeof glm.level === "string" ? { level: glm.level } : {}),
+      ...(items ? { items: items as QuotaItem[] } : {}),
+    },
+    opencode: {
+      kind: (
+        ["success", "not_configured", "auth_error", "unavailable"] as const
+      ).includes(go.kind as GoUsageStats["kind"])
+        ? (go.kind as GoUsageStats["kind"])
+        : "unavailable",
+      ...(windows ? { windows: windows as GoWindowEntry[] } : {}),
+    },
+  };
 }
 
 export interface PermissionOption {
@@ -69,8 +107,9 @@ interface AppState {
   // Slash commands from available_commands_update (overwrite semantics),
   // driving the "/" completion menu in the composer.
   availableCommands: SlashCommand[];
-  // Account-level plan quota (account/usage_stats), pulled after connect.
-  planUsage: PlanUsage[] | null;
+  // Account-level quota (account/usage_stats): the combined GLM + Opencode
+  // Go structure mirroring the zcode-quota CLI card, pulled after connect.
+  usageStats: AccountUsageStats | null;
   // Last quota fetch failed — keep the section header + Refresh visible so a
   // long-lived connection can still retry (REMOTE-CLIENTS: hide data, retry later).
   quotaUnavailable: boolean;
@@ -86,7 +125,7 @@ interface AppState {
   loadSession: (sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
-  refreshPlanUsage: () => Promise<void>;
+  refreshUsageStats: () => Promise<void>;
   sendPrompt: (text: string) => Promise<void>;
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
@@ -407,7 +446,7 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        planUsage: null,
+        usageStats: null,
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -485,7 +524,7 @@ export const useAppStore = create<AppState>((set, get) => {
       await conn.connect();
       // Account quota is pull-only; fetch alongside (re)connect, not on
       // every session switch — quota changes are slow.
-      void get().refreshPlanUsage();
+      void get().refreshUsageStats();
       const active = get().activeSessionId;
       if (active) {
         // Replay is the catch-up mechanism after any disconnect.
@@ -519,7 +558,7 @@ export const useAppStore = create<AppState>((set, get) => {
     currentModeId: null,
     usage: null,
     availableCommands: [],
-    planUsage: null,
+    usageStats: null,
     quotaUnavailable: false,
     loadingSession: false,
 
@@ -564,7 +603,7 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        planUsage: null,
+        usageStats: null,
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -613,7 +652,7 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        planUsage: null,
+        usageStats: null,
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -767,24 +806,20 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    // Plan quota via account/usage_stats. Pull-only (no push); fetched after
-    // connect and on demand from the drawer. On failure just hide the
-    // section — the next attach or refresh retries.
-    refreshPlanUsage: async () => {
+    // Combined quota via account/usage_stats (GLM + Opencode Go), mirroring
+    // the zcode-quota CLI card. Pull-only; fetched after connect and on
+    // demand from the drawer. On failure just hide the section — the next
+    // attach or refresh retries. Per-provider failures arrive as section
+    // `kind` strings (rendered like the CLI's status lines), not rejections.
+    refreshUsageStats: async () => {
       const conn = acp;
       if (!conn || get().connState !== "open") return;
       try {
         const result = await conn.request("account/usage_stats", {});
         if (acp !== conn) return; // superseded by a newer connection
-        const plans = (result as { plans?: PlanUsage[] } | null)?.plans;
-        set({
-          planUsage: Array.isArray(plans)
-            ? plans.filter((p) => p && typeof p.usedPercent === "number")
-            : null,
-          quotaUnavailable: false,
-        });
+        set({ usageStats: parseUsageStats(result), quotaUnavailable: false });
       } catch {
-        if (acp === conn) set({ planUsage: null, quotaUnavailable: true });
+        if (acp === conn) set({ usageStats: null, quotaUnavailable: true });
       }
     },
 
