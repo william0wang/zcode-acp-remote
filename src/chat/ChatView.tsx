@@ -1,10 +1,11 @@
-import { memo, useCallback, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AuiIf,
   AssistantRuntimeProvider,
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  unstable_useComposerInput,
   useExternalStoreRuntime,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -118,6 +119,125 @@ const AssistantMessage = memo(function AssistantMessage() {
   );
 });
 
+// Composer input row + the "/" completion menu. The command list comes from
+// the bridge's available_commands_update; the query is the composer's first
+// (and so far only) token. Enter/Tab complete, arrows navigate, Escape or a
+// space dismisses until the query changes. Keydown is intercepted in the
+// CAPTURE phase on the form so it beats ComposerPrimitive.Input's Enter-send.
+function Composer() {
+  const { t } = useTranslation();
+  const commands = useAppStore((s) => s.availableCommands);
+  const { value, setText } = unstable_useComposerInput();
+  const [highlight, setHighlight] = useState(0);
+  const [dismissedToken, setDismissedToken] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const token = value.split(/\s/, 1)[0] ?? "";
+  const matches = useMemo(() => {
+    if (!token.startsWith("/")) return [];
+    const q = token.slice(1).toLowerCase();
+    return commands.filter((c) => c.name.toLowerCase().startsWith(q));
+  }, [token, commands]);
+
+  // Still typing the command token (no space yet) and not dismissed.
+  const open = matches.length > 0 && !/\s/.test(value) && dismissedToken !== token;
+  const idx = Math.min(highlight, matches.length - 1);
+
+  useEffect(() => {
+    setHighlight(0);
+  }, [token]);
+  useEffect(() => {
+    listRef.current
+      ?.querySelector(`[data-idx="${idx}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [idx, open]);
+
+  const select = useCallback(
+    (name: string) => {
+      setText(`/${name} ` + value.slice(token.length).trimStart());
+      setDismissedToken(`/${name}`);
+    },
+    [setText, value, token],
+  );
+
+  const onKeyDownCapture = (e: React.KeyboardEvent) => {
+    if (!open || e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      setHighlight((h) => Math.min(h + 1, matches.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      select(matches[idx].name);
+    } else if (e.key === "Escape") {
+      setDismissedToken(token);
+    }
+  };
+
+  return (
+    <ThreadPrimitive.ViewportFooter className="sticky bottom-0 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
+      {open && (
+        <div
+          ref={listRef}
+          role="listbox"
+          className="mb-2 max-h-56 overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl"
+        >
+          {matches.map((c, i) => (
+            <button
+              key={c.name}
+              data-idx={i}
+              role="option"
+              aria-selected={i === idx}
+              // Keep the software keyboard open: focus stays in the textarea.
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => select(c.name)}
+              className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${
+                i === idx ? "bg-zinc-800" : "active:bg-zinc-800"
+              }`}
+            >
+              <span className="shrink-0 font-mono text-sm text-blue-400">/{c.name}</span>
+              <span className="min-w-0 truncate text-xs text-zinc-500">
+                {c.description}
+                {c.input?.hint ? ` — ${c.input.hint}` : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <ComposerPrimitive.Root
+        onKeyDownCapture={onKeyDownCapture}
+        className="flex items-end gap-2 rounded-3xl border border-zinc-700 bg-zinc-900 px-3 py-2"
+      >
+        <ComposerPrimitive.Input
+          rows={1}
+          placeholder={t("chat.inputPlaceholder")}
+          className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+        />
+        <AuiIf condition={(s) => s.thread.isRunning}>
+          <ComposerPrimitive.Cancel
+            aria-label={t("common.cancel")}
+            className="flex size-9 items-center justify-center rounded-full bg-zinc-700 text-sm text-zinc-200"
+          >
+            ■
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
+        <AuiIf condition={(s) => !s.thread.isRunning}>
+          <ComposerPrimitive.Send
+            className="flex size-9 items-center justify-center rounded-full bg-blue-600 text-sm text-white disabled:opacity-30"
+          >
+            ↑
+          </ComposerPrimitive.Send>
+        </AuiIf>
+      </ComposerPrimitive.Root>
+    </ThreadPrimitive.ViewportFooter>
+  );
+}
+
 function Thread({
   viewportRef,
   onScroll,
@@ -175,30 +295,7 @@ function Thread({
             message.role === "user" ? <UserMessage /> : <AssistantMessage />
           }
         </ThreadPrimitive.Messages>
-        <ThreadPrimitive.ViewportFooter className="sticky bottom-0 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
-          <ComposerPrimitive.Root className="flex items-end gap-2 rounded-3xl border border-zinc-700 bg-zinc-900 px-3 py-2">
-            <ComposerPrimitive.Input
-              rows={1}
-              placeholder={t("chat.inputPlaceholder")}
-              className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
-            />
-            <AuiIf condition={(s) => s.thread.isRunning}>
-              <ComposerPrimitive.Cancel
-                aria-label={t("common.cancel")}
-                className="flex size-9 items-center justify-center rounded-full bg-zinc-700 text-sm text-zinc-200"
-              >
-                ■
-              </ComposerPrimitive.Cancel>
-            </AuiIf>
-            <AuiIf condition={(s) => !s.thread.isRunning}>
-              <ComposerPrimitive.Send
-                className="flex size-9 items-center justify-center rounded-full bg-blue-600 text-sm text-white disabled:opacity-30"
-              >
-                ↑
-              </ComposerPrimitive.Send>
-            </AuiIf>
-          </ComposerPrimitive.Root>
-        </ThreadPrimitive.ViewportFooter>
+        <Composer />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
   );

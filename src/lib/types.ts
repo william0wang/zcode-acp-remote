@@ -50,6 +50,14 @@ export interface PlanUsage {
   resetsAt?: number;
 }
 
+// available_commands_update entry (ACP AvailableCommand shape): the bridge's
+// slash commands, advertised per session after load (overwrite semantics).
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  input?: { hint?: string };
+}
+
 // ACP wire types. Deliberately permissive: unknown kinds/fields must be
 // ignored. The SessionUpdate union is discriminated by `sessionUpdate`
 // (per @agentclientprotocol schema), NOT by `kind`.

@@ -9,7 +9,7 @@ import {
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
-import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type PlanUsage, type SessionUpdate } from "../lib/types";
+import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type PlanUsage, type SessionUpdate, type SlashCommand } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
@@ -66,6 +66,9 @@ interface AppState {
   configOptions: ConfigOption[];
   currentModeId: string | null;
   usage: ContextUsage | null;
+  // Slash commands from available_commands_update (overwrite semantics),
+  // driving the "/" completion menu in the composer.
+  availableCommands: SlashCommand[];
   // Account-level plan quota (account/usage_stats), pulled after connect.
   planUsage: PlanUsage[] | null;
   // Last quota fetch failed — keep the section header + Refresh visible so a
@@ -209,6 +212,7 @@ export const useAppStore = create<AppState>((set, get) => {
     configOptions?: ConfigOption[];
     currentModeId?: string;
     usage?: ContextUsage;
+    availableCommands?: SlashCommand[];
   } | null {
     const kind = u.sessionUpdate;
 
@@ -298,6 +302,17 @@ export const useAppStore = create<AppState>((set, get) => {
       const size = typeof u.size === "number" ? u.size : null;
       return used != null && size != null ? { usage: { used, size } } : null;
     }
+    if (kind === "available_commands_update") {
+      // Full snapshot, overwrite semantics — the bridge re-sends it after
+      // each session/load, so keep the latest list.
+      const list = Array.isArray(u.availableCommands) ? u.availableCommands : null;
+      if (!list) return null;
+      const commands = list.filter(
+        (c): c is SlashCommand =>
+          typeof c === "object" && c !== null && typeof (c as SlashCommand).name === "string",
+      );
+      return { availableCommands: commands };
+    }
     // Unknown kinds (additive-only contract): ignore.
     return null;
   }
@@ -334,6 +349,7 @@ export const useAppStore = create<AppState>((set, get) => {
         let configOptions = state.configOptions;
         let currentModeId = state.currentModeId;
         let usage = state.usage;
+        let availableCommands = state.availableCommands;
         for (const { sessionId: sid, u: upd } of batch) {
           if (state.activeSessionId !== sid) continue;
           const r = applyOne(messages, upd);
@@ -343,8 +359,9 @@ export const useAppStore = create<AppState>((set, get) => {
           if (r.configOptions) configOptions = r.configOptions;
           if (r.currentModeId !== undefined) currentModeId = r.currentModeId;
           if (r.usage) usage = r.usage;
+          if (r.availableCommands) availableCommands = r.availableCommands;
         }
-        return { messages, planText, configOptions, currentModeId, usage };
+        return { messages, planText, configOptions, currentModeId, usage, availableCommands };
       });
     }, 120);
   }
@@ -389,6 +406,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        availableCommands: [],
         planUsage: null,
         quotaUnavailable: false,
         loadingSession: false,
@@ -500,6 +518,7 @@ export const useAppStore = create<AppState>((set, get) => {
     configOptions: [],
     currentModeId: null,
     usage: null,
+    availableCommands: [],
     planUsage: null,
     quotaUnavailable: false,
     loadingSession: false,
@@ -544,6 +563,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        availableCommands: [],
         planUsage: null,
         quotaUnavailable: false,
         loadingSession: false,
@@ -592,6 +612,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        availableCommands: [],
         planUsage: null,
         quotaUnavailable: false,
         loadingSession: false,
@@ -638,6 +659,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        availableCommands: [],
         loadingSession: true,
       });
       try {
