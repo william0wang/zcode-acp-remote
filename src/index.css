@@ -1,0 +1,27 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #0a0a0a;
+  color: #f4f4f5;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Contain wide markdown (code blocks, tables) inside message bubbles. */
+.prose :where(pre) {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.prose :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}

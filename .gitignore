@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.local
+src-tauri/target/
+.DS_Store
+.zcode
+.playwright-mcp/
