@@ -13,6 +13,17 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Local release signing lives in <repo>/.signing/ (whole directory
+// gitignored): keystore.properties holds the credentials, keystore.jks the
+// key itself. storeFile in the properties is relative to that directory.
+val signingDir = File(rootProject.projectDir.parentFile.parentFile.parentFile, ".signing")
+val keystoreProperties = Properties().apply {
+    val propFile = File(signingDir, "keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "app.zcode.acp"
@@ -23,6 +34,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.isNotEmpty()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = File(signingDir, keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -38,6 +59,11 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            // Sideloaded personal client: LAN hubs speak plain http (TLS is
+            // the tunnel's job per REMOTE-CLIENTS.md). Cleartext must be
+            // allowed or release builds cannot attach at all.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
