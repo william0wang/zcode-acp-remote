@@ -24,7 +24,7 @@ export function InstancePicker() {
         <h1 className="text-lg font-semibold">{t("picker.title")}</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => void refreshInstances()}
+            onClick={() => void refreshInstances({ probe: true })}
             className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300"
           >
             {t("picker.refresh")}

@@ -119,7 +119,7 @@ interface AppState {
   connectToHub: (profile: ConnectionProfile) => void;
   forgetHub: () => void;
   setLang: (lang: Lang) => void;
-  refreshInstances: () => Promise<void>;
+  refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
   connectInstance: (instanceId: string, attachSessionId?: string) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
@@ -419,7 +419,9 @@ export const useAppStore = create<AppState>((set, get) => {
   async function tryReconnect(): Promise<void> {
     const s = get();
     if (!s.profile || !s.instanceId) return;
-    await s.refreshInstances();
+    // Probe: a hard-killed bridge lingers in the heartbeat view for up to 30s,
+    // which would keep the reconnect loop retrying a dead instance.
+    await s.refreshInstances({ probe: true });
     // Re-read after the await: the hub/instance may have changed meanwhile.
     const cur = get();
     if (!cur.profile || cur.profile !== s.profile || cur.instanceId !== s.instanceId) return;
@@ -614,12 +616,12 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ lang });
     },
 
-    refreshInstances: async () => {
+    refreshInstances: async (opts?: { probe?: boolean }) => {
       const client = hub();
       if (!client) return;
       const profile = get().profile;
       try {
-        const instances = await client.instances();
+        const instances = await client.instances(opts?.probe === true);
         if (get().profile !== profile) return; // hub changed mid-flight
         set({ instances, instancesError: null });
       } catch (e) {

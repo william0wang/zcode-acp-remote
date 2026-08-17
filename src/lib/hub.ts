@@ -36,8 +36,14 @@ export class HubClient {
     await (await this.fetch("/api/health")).text();
   }
 
-  async instances(): Promise<HubInstance[]> {
-    const res = await this.fetch("/api/instances");
+  /**
+   * Fetch registered instances. With `probe` the hub TCP-probes each bridge
+   * first and prunes unreachable ones (hard-killed bridges otherwise linger
+   * for the 30s heartbeat TTL); use it where an immediately-honest list
+   * matters — manual refresh, reconnect liveness checks.
+   */
+  async instances(probe = false): Promise<HubInstance[]> {
+    const res = await this.fetch(`/api/instances${probe ? "?probe=1" : ""}`);
     const data: unknown = await res.json();
     if (!Array.isArray(data)) throw new HubApiError("unexpected /api/instances payload");
     return data as HubInstance[];

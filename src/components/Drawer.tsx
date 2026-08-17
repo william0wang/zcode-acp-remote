@@ -129,7 +129,7 @@ export function Drawer({ onClose }: { onClose: () => void }) {
             {t("chat.sessions")}
           </h2>
           <button
-            onClick={() => void refreshInstances()}
+            onClick={() => void refreshInstances({ probe: true })}
             className="text-xs text-zinc-500 active:text-zinc-300"
           >
             {t("picker.refresh")}
