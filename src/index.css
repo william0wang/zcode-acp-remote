@@ -1,6 +1,21 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/*
+ * Layered dark palette ("quiet dark", ChatGPT-like): the app reads as stacked
+ * surfaces rather than one flat zinc background. Semantic names keep the
+ * component classes free of raw hex values.
+ */
+@theme {
+  --color-canvas: #0d0d0f; /* app base */
+  --color-surface: #161619; /* panels, sheets, cards */
+  --color-raised: #1e1e22; /* composer shell, user bubble, inputs */
+  --color-hairline: #2a2a2f; /* 1px separators and rings */
+  --color-ink: #ececf1; /* primary text */
+  --color-dim: #a6a6b0; /* secondary text */
+  --color-faint: #6f6f7a; /* muted text */
+}
+
 html,
 body,
 #root {
@@ -8,13 +23,13 @@ body,
 }
 
 body {
-  background: #0a0a0a;
-  color: #f4f4f5;
+  background: var(--color-canvas);
+  color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
-/* Contain wide markdown (code blocks, tables) inside message bubbles. */
+/* Contain wide markdown (code blocks, tables) inside the message column. */
 .prose :where(pre) {
   overflow-x: auto;
   max-width: 100%;

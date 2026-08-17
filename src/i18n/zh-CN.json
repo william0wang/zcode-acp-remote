@@ -29,7 +29,13 @@
     "connecting": "连接中…",
     "loadingSession": "正在加载会话…",
     "plan": "计划",
-    "untitled": "未命名会话"
+    "untitled": "未命名会话",
+    "thinking": "思考中…",
+    "thought": "思考过程"
+  },
+  "panel": {
+    "title": "设置",
+    "language": "语言"
   },
   "config": {
     "title": "会话",
@@ -52,6 +58,7 @@
     "noSession": "请先选择一个会话（从菜单）"
   },
   "common": {
-    "cancel": "取消"
+    "cancel": "取消",
+    "close": "关闭"
   }
 }

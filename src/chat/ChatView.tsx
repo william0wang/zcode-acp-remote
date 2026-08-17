@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AuiIf,
   AssistantRuntimeProvider,
@@ -7,11 +7,13 @@ import {
   ThreadPrimitive,
   unstable_useComposerInput,
   useExternalStoreRuntime,
+  groupPartByType,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { ArrowUp, Brain, ChevronDown, Square, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
@@ -26,15 +28,11 @@ const convertMessage = (m: ChatMessage): ThreadMessageLike => ({
   createdAt: new Date(m.createdAt),
   content: m.parts.map((p) => {
     if (p.type === "text") return { type: "text" as const, text: p.text };
-    // Thought streams render as markdown blockquotes (dim, visually set off).
+    // Thought streams map onto the reasoning part type so they render through
+    // the collapsible ThoughtCard (auto-status marks the last part of the
+    // streaming message "running", which drives expand/collapse).
     if (p.type === "thought") {
-      return {
-        type: "text" as const,
-        text: p.text
-          .split("\n")
-          .map((l) => `> ${l}`)
-          .join("\n"),
-      };
+      return { type: "reasoning" as const, text: p.text };
     }
     return {
       type: "tool-call" as const,
@@ -57,7 +55,7 @@ function messageText(message: ThreadMessageLike | string): string {
 
 function MarkdownText({ text }: { text: string }) {
   return (
-    <div className="prose prose-sm prose-invert prose-pre:border prose-pre:border-zinc-800 prose-pre:bg-zinc-950 max-w-none">
+    <div className="prose prose-sm prose-invert max-w-none prose-pre:rounded-xl prose-pre:bg-canvas prose-pre:ring-1 prose-pre:ring-hairline">
       <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
         {text}
       </Markdown>
@@ -72,15 +70,70 @@ function ToolCard({
 }) {
   const detail = (part.args as { detail?: string } | undefined)?.detail ?? "";
   return (
-    <details className="my-2 max-w-full overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-xs">
-      <summary className="flex min-w-0 cursor-pointer list-none px-3 py-2 text-zinc-300">
+    <details className="my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
+      <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-dim">
+        <Wrench className="size-3.5 shrink-0 text-faint" />
         <span className="shrink-0 font-medium">{part.toolName}</span>
-        {detail && <span className="ml-2 truncate text-zinc-500">{detail.slice(0, 72)}</span>}
+        {detail && <span className="truncate text-faint">{detail.slice(0, 72)}</span>}
       </summary>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-zinc-800 px-3 py-2 text-zinc-400">
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 text-faint">
         {detail || "…"}
       </pre>
     </details>
+  );
+}
+
+// Collapsible reasoning block. `streaming` comes from the group part's
+// auto-status: it holds the block open (bottom-pinned on the newest tokens)
+// while the model thinks, collapses once the answer starts, and defers to the
+// first manual toggle permanently afterwards.
+function ThoughtCard({ streaming, children }: { streaming: boolean; children: ReactNode }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (touched) return;
+    setOpen(streaming);
+  }, [streaming, touched]);
+
+  // Bottom-pinned live preview while streaming.
+  useEffect(() => {
+    if (streaming && open) {
+      const el = boxRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+
+  return (
+    <div className="my-2 rounded-xl bg-white/[0.04]">
+      <button
+        onClick={() => {
+          setTouched(true);
+          setOpen((o) => !o);
+        }}
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left"
+      >
+        <Brain className={`size-3.5 shrink-0 ${streaming ? "animate-pulse text-dim" : "text-faint"}`} />
+        <span className="text-xs font-medium text-dim">
+          {streaming ? t("chat.thinking") : t("chat.thought")}
+        </span>
+        <ChevronDown
+          className={`ml-auto size-3.5 shrink-0 text-faint transition-transform duration-200 ${
+            open ? "" : "-rotate-90"
+          }`}
+        />
+      </button>
+      {open && (
+        <div
+          ref={boxRef}
+          className="max-h-52 overflow-y-auto px-3 pb-2.5 text-[13px] leading-relaxed text-faint"
+        >
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -91,7 +144,7 @@ function ToolCard({
 const UserMessage = memo(function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex min-w-0 justify-end">
-      <div className="max-w-[88%] min-w-0 break-words whitespace-pre-wrap rounded-2xl bg-blue-600 px-4 py-2.5 text-sm text-white">
+      <div className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink">
         <MessagePrimitive.Parts>
           {({ part }) => (part.type === "text" ? <>{part.text}</> : null)}
         </MessagePrimitive.Parts>
@@ -100,20 +153,30 @@ const UserMessage = memo(function UserMessage() {
   );
 });
 
+// Assistant replies render full-width without a bubble — markdown (code,
+// lists) reads far better unconfined; only the user side gets a bubble.
 const AssistantMessage = memo(function AssistantMessage() {
   return (
-    <MessagePrimitive.Root className="flex min-w-0 justify-start">
-      <div className="max-w-[88%] min-w-0 overflow-hidden rounded-2xl bg-zinc-900 px-4 py-3 text-sm leading-relaxed text-zinc-100">
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            if (part.type === "text") {
-              if (!part.text) return null;
-              return <MarkdownText text={part.text} />;
+    <MessagePrimitive.Root className="min-w-0">
+      <div className="w-full text-[15px] leading-relaxed text-ink">
+        <MessagePrimitive.GroupedParts groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}>
+          {({ part, children }) => {
+            switch (part.type) {
+              case "group-reasoning":
+                return <ThoughtCard streaming={part.status.type === "running"}>{children}</ThoughtCard>;
+              case "reasoning":
+                return part.text ? <p className="whitespace-pre-wrap">{part.text}</p> : null;
+              case "text":
+                return part.text ? <MarkdownText text={part.text} /> : null;
+              case "tool-call":
+                return <ToolCard part={part} />;
+              case "indicator":
+                return <Spinner className="my-1 size-4" />;
+              default:
+                return null;
             }
-            if (part.type === "tool-call") return <ToolCard part={part} />;
-            return null;
           }}
-        </MessagePrimitive.Parts>
+        </MessagePrimitive.GroupedParts>
       </div>
     </MessagePrimitive.Root>
   );
@@ -180,12 +243,12 @@ function Composer() {
   };
 
   return (
-    <ThreadPrimitive.ViewportFooter className="sticky bottom-0 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
+    <ThreadPrimitive.ViewportFooter className="sticky bottom-0 bg-canvas pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
       {open && (
         <div
           ref={listRef}
           role="listbox"
-          className="mb-2 max-h-56 overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl"
+          className="mb-2 max-h-56 overflow-y-auto rounded-2xl bg-surface py-1 shadow-2xl ring-1 ring-hairline"
         >
           {matches.map((c, i) => (
             <button
@@ -197,11 +260,11 @@ function Composer() {
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => select(c.name)}
               className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${
-                i === idx ? "bg-zinc-800" : "active:bg-zinc-800"
+                i === idx ? "bg-white/[0.06]" : "active:bg-white/[0.06]"
               }`}
             >
-              <span className="shrink-0 font-mono text-sm text-blue-400">/{c.name}</span>
-              <span className="min-w-0 truncate text-xs text-zinc-500">
+              <span className="shrink-0 font-mono text-sm text-dim">/{c.name}</span>
+              <span className="min-w-0 truncate text-xs text-faint">
                 {c.description}
                 {c.input?.hint ? ` — ${c.input.hint}` : ""}
               </span>
@@ -211,26 +274,24 @@ function Composer() {
       )}
       <ComposerPrimitive.Root
         onKeyDownCapture={onKeyDownCapture}
-        className="flex items-end gap-2 rounded-3xl border border-zinc-700 bg-zinc-900 px-3 py-2"
+        className="flex items-end gap-1.5 rounded-[26px] bg-raised p-1.5 pl-4 ring-1 ring-inset ring-hairline"
       >
         <ComposerPrimitive.Input
           rows={1}
           placeholder={t("chat.inputPlaceholder")}
-          className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+          className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] text-ink placeholder:text-faint focus:outline-none"
         />
         <AuiIf condition={(s) => s.thread.isRunning}>
           <ComposerPrimitive.Cancel
             aria-label={t("common.cancel")}
-            className="flex size-9 items-center justify-center rounded-full bg-zinc-700 text-sm text-zinc-200"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform active:scale-90"
           >
-            ■
+            <Square className="size-3 fill-current" />
           </ComposerPrimitive.Cancel>
         </AuiIf>
         <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send
-            className="flex size-9 items-center justify-center rounded-full bg-blue-600 text-sm text-white disabled:opacity-30"
-          >
-            ↑
+          <ComposerPrimitive.Send className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition disabled:opacity-25 active:scale-90">
+            <ArrowUp className="size-4.5" strokeWidth={2.5} />
           </ComposerPrimitive.Send>
         </AuiIf>
       </ComposerPrimitive.Root>
@@ -261,27 +322,28 @@ function Thread({
       <ThreadPrimitive.Viewport
         ref={viewportRef}
         onScroll={onScroll}
-        className="flex flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 py-4"
+        className="flex flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-3.5 py-4"
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
-          <div className="mt-24 flex flex-col items-center gap-3 text-center text-sm text-zinc-500">
-            {loadingSession ? (
-              <>
-                <Spinner className="size-7" />
-                <span>{t("chat.loadingSession")}</span>
-              </>
-            ) : activeSessionId ? (
-              t("chat.empty")
-            ) : (
-              t("chat.noSession")
-            )}
+          <div className="mt-[22vh] flex flex-col items-center gap-3 text-center">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">ZCode</h1>
+            <p className="max-w-64 text-sm text-faint">
+              {loadingSession ? (
+                t("chat.loadingSession")
+              ) : activeSessionId ? (
+                t("chat.empty")
+              ) : (
+                t("chat.noSession")
+              )}
+            </p>
+            {loadingSession && <Spinner className="size-5" />}
           </div>
         </AuiIf>
         {hasMore && (
           <button
             onClick={onExpand}
             disabled={loadingEarlier}
-            className="mx-auto shrink-0 rounded-full border border-zinc-700 px-3 py-1 text-xs text-zinc-400 active:bg-zinc-800 disabled:opacity-50"
+            className="mx-auto shrink-0 rounded-full bg-surface px-3 py-1 text-xs text-dim ring-1 ring-hairline active:bg-white/[0.06] disabled:opacity-50"
           >
             {loadingEarlier
               ? t("chat.loadingEarlier")

@@ -29,7 +29,13 @@
     "connecting": "Connecting…",
     "loadingSession": "Loading session…",
     "plan": "Plan",
-    "untitled": "Untitled session"
+    "untitled": "Untitled session",
+    "thinking": "Thinking…",
+    "thought": "Thought"
+  },
+  "panel": {
+    "title": "Settings",
+    "language": "Language"
   },
   "config": {
     "title": "Session",
@@ -52,6 +58,7 @@
     "noSession": "Pick a session first (from the menu)"
   },
   "common": {
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "close": "Close"
   }
 }

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Menu, SlidersHorizontal } from "lucide-react";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
+import { SidePanel } from "../components/SidePanel";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { Spinner } from "../components/Spinner";
 import { useAppStore } from "../store/appStore";
@@ -19,6 +21,7 @@ function fmtK(n: number): string {
 export function ChatScreen() {
   const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const instances = useAppStore((s) => s.instances);
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -60,27 +63,34 @@ export function ChatScreen() {
     : null;
 
   return (
-    <div className="relative flex h-full flex-col bg-zinc-950 text-zinc-100">
-      <header className="relative flex items-center gap-3 border-b border-zinc-800 px-3 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
+    <div className="relative flex h-full flex-col bg-canvas text-ink">
+      <header className="relative flex items-center gap-1 border-b border-hairline px-1.5 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
         <button
           onClick={() => setDrawerOpen(true)}
-          aria-label="menu"
-          className="flex size-9 items-center justify-center rounded-lg text-zinc-300 active:bg-zinc-800"
+          aria-label={t("chat.sessions")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
         >
-          ☰
+          <Menu className="size-5" />
         </button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{title}</div>
+          <div className="truncate text-[15px] font-medium">{title}</div>
           {workspace && (
-            <div className="truncate text-[11px] text-zinc-500">
+            <div className="truncate text-[11px] text-faint">
               {workspace}
               {usage && usage.size > 0 && ` · ${fmtK(usage.used)}/${fmtK(usage.size)}`}
             </div>
           )}
         </div>
-        <span className={`size-2.5 shrink-0 rounded-full ${statusDot}`} aria-label={connState} />
+        <span className={`mr-1.5 size-2 shrink-0 rounded-full ${statusDot}`} aria-label={connState} />
+        <button
+          onClick={() => setPanelOpen(true)}
+          aria-label={t("panel.title")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+        >
+          <SlidersHorizontal className="size-5" />
+        </button>
         {usage && usage.size > 0 && (
-          <div className="absolute inset-x-0 bottom-0 h-0.5 bg-zinc-800/60">
+          <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/[0.06]">
             <div
               className="h-full bg-blue-500"
               style={{ width: `${Math.min(100, (usage.used / usage.size) * 100)}%` }}
@@ -96,19 +106,17 @@ export function ChatScreen() {
       )}
 
       {noticeText && (
-        <div className="flex items-center justify-between gap-2 bg-zinc-800 px-4 py-1.5 text-xs text-zinc-300">
+        <div className="flex items-center justify-between gap-2 bg-white/[0.05] px-4 py-1.5 text-xs text-dim">
           <span className="truncate">{noticeText}</span>
-          <button onClick={dismissNotice} className="shrink-0 text-zinc-500">
+          <button onClick={dismissNotice} className="shrink-0 text-faint">
             ✕
           </button>
         </div>
       )}
 
       {planText && (
-        <details className="border-b border-zinc-800 bg-zinc-900/60 px-4 py-2 text-xs text-zinc-400">
-          <summary className="cursor-pointer select-none text-zinc-300">
-            {t("chat.plan")}
-          </summary>
+        <details className="border-b border-hairline bg-surface/60 px-4 py-2 text-xs text-dim">
+          <summary className="cursor-pointer select-none text-dim">{t("chat.plan")}</summary>
           <pre className="mt-1 whitespace-pre-wrap font-sans">{planText}</pre>
         </details>
       )}
@@ -118,12 +126,13 @@ export function ChatScreen() {
       </div>
 
       {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
+      {panelOpen && <SidePanel onClose={() => setPanelOpen(false)} />}
       <PermissionDialog />
 
       {connState === "connecting" && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-zinc-950/90">
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-canvas/90">
           <Spinner className="size-8" />
-          <div className="text-sm text-zinc-400">{t("chat.connecting")}</div>
+          <div className="text-sm text-dim">{t("chat.connecting")}</div>
         </div>
       )}
     </div>

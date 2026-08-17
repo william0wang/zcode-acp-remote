@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Check } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 
 // Bottom sheet listing one config option's values (model / mode / thought).
@@ -15,10 +16,10 @@ export function ConfigSheet({ optionId, onClose }: { optionId: string; onClose: 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/50" onClick={onClose}>
       <div
-        className="max-h-[65%] w-full overflow-y-auto rounded-t-2xl bg-zinc-950 px-2 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3"
+        className="max-h-[65%] w-full overflow-y-auto rounded-t-2xl border-t border-hairline bg-surface px-2 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-3 pb-2 text-sm font-medium text-zinc-100">{label}</div>
+        <div className="px-3 pb-2 text-sm font-medium text-ink">{label}</div>
         {(option.options ?? []).map((v) => {
           const active = v.value === option.currentValue;
           return (
@@ -29,11 +30,11 @@ export function ConfigSheet({ optionId, onClose }: { optionId: string; onClose: 
                 if (!active) void setConfigOption(option.id, v.value);
               }}
               className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm ${
-                active ? "text-blue-400" : "text-zinc-300 active:bg-zinc-900"
+                active ? "bg-white/[0.07] font-medium text-ink" : "text-dim active:bg-white/[0.05]"
               }`}
             >
               <span className="truncate">{v.name}</span>
-              {active && <span className="ml-2 shrink-0">✓</span>}
+              {active && <Check className="ml-2 size-4 shrink-0 text-dim" />}
             </button>
           );
         })}

@@ -37,12 +37,12 @@ export function ConnectScreen() {
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-zinc-950 px-6 text-zinc-100">
+    <div className="flex h-full items-center justify-center bg-canvas px-6 text-ink">
       <form onSubmit={onSubmit} className="w-full max-w-sm">
-        <h1 className="text-center text-2xl font-semibold">ZCode ACP</h1>
-        <p className="mt-2 text-center text-sm text-zinc-500">{t("connect.subtitle")}</p>
+        <h1 className="text-center text-2xl font-semibold tracking-tight">ZCode ACP</h1>
+        <p className="mt-2 text-center text-sm text-faint">{t("connect.subtitle")}</p>
 
-        <label className="mt-8 block text-xs font-medium text-zinc-400">
+        <label className="mt-8 block text-xs font-medium text-dim">
           {t("connect.hubUrl")}
         </label>
         <input
@@ -52,10 +52,10 @@ export function ConnectScreen() {
           autoCapitalize="none"
           autoCorrect="off"
           inputMode="url"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm focus:border-blue-500 focus:outline-none"
+          className="mt-1 w-full rounded-xl bg-raised px-4 py-3 text-sm text-ink ring-1 ring-inset ring-hairline placeholder:text-faint focus:ring-2 focus:ring-white/40 focus:outline-none"
         />
 
-        <label className="mt-4 block text-xs font-medium text-zinc-400">
+        <label className="mt-4 block text-xs font-medium text-dim">
           {t("connect.token")}
         </label>
         <input
@@ -64,7 +64,7 @@ export function ConnectScreen() {
           type="password"
           autoCapitalize="none"
           autoCorrect="off"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm focus:border-blue-500 focus:outline-none"
+          className="mt-1 w-full rounded-xl bg-raised px-4 py-3 text-sm text-ink ring-1 ring-inset ring-hairline placeholder:text-faint focus:ring-2 focus:ring-white/40 focus:outline-none"
         />
 
         {error && (
@@ -76,7 +76,7 @@ export function ConnectScreen() {
         <button
           type="submit"
           disabled={testing || !hubUrl.trim() || !token.trim()}
-          className="mt-6 w-full rounded-xl bg-blue-600 py-3 text-sm font-medium text-white disabled:opacity-40"
+          className="mt-6 w-full rounded-xl bg-white py-3 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
         >
           {testing ? t("connect.testing") : t("connect.connect")}
         </button>

@@ -17,8 +17,8 @@ export function PermissionDialog() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(env(safe-area-inset-bottom),1.5rem)]">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900 p-4">
-        <h2 className="text-sm font-semibold text-zinc-100">{t("permission.title")}</h2>
+      <div className="w-full max-w-md rounded-2xl border border-hairline bg-surface p-4">
+        <h2 className="text-sm font-semibold text-ink">{t("permission.title")}</h2>
         <div className="mt-3 flex flex-col gap-2">
           {permission.options.map((o) => (
             <button
@@ -30,7 +30,7 @@ export function PermissionDialog() {
             </button>
           ))}
         </div>
-        <p className="mt-3 text-center text-xs text-zinc-500">{t("permission.hint")}</p>
+        <p className="mt-3 text-center text-xs text-faint">{t("permission.hint")}</p>
       </div>
     </div>
   );
