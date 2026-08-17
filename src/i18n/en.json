@@ -8,13 +8,11 @@
     "invalidUrl": "Enter a valid http(s) URL"
   },
   "picker": {
-    "title": "Instances",
+    "title": "Sessions",
     "refresh": "Refresh",
     "changeServer": "Change server",
     "connecting": "Connecting…",
-    "empty": "No bridge instances. Open your editor with the bridge running.",
-    "sessionCount_one": "{{count}} session",
-    "sessionCount_other": "{{count}} sessions"
+    "empty": "No sessions yet. Open your editor with the bridge running."
   },
   "chat": {
     "empty": "No messages yet",

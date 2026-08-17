@@ -8,16 +8,30 @@ function baseName(path: string | undefined): string {
   return parts[parts.length - 1] || path;
 }
 
+// Entry screen = the same flat session list the left drawer shows: sessions
+// across every bridge instance, newest first. Tapping one connects its
+// instance and attaches in a single step. (Instance cards would only add a
+// dead second hop for an attach-only client.)
 export function InstancePicker() {
   const { t } = useTranslation();
   const instances = useAppStore((s) => s.instances);
   const instancesError = useAppStore((s) => s.instancesError);
   const connState = useAppStore((s) => s.connState);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
-  const connectInstance = useAppStore((s) => s.connectInstance);
+  const openSession = useAppStore((s) => s.openSession);
   const forgetHub = useAppStore((s) => s.forgetHub);
 
   const connecting = connState === "connecting";
+
+  const sessions = instances
+    .flatMap((i) =>
+      (i.sessions ?? []).map((s) => ({
+        ...s,
+        instanceId: i.id,
+        workspace: i.workspace,
+      })),
+    )
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
@@ -49,25 +63,23 @@ export function InstancePicker() {
         </p>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 pb-8">
-        {instances.length === 0 && !instancesError && (
+      <div className="flex-1 overflow-y-auto pb-8">
+        {sessions.length === 0 && !instancesError && (
           <p className="mt-16 text-center text-sm text-faint">{t("picker.empty")}</p>
         )}
-        {instances.map((inst) => (
+        {sessions.map((s) => (
           <button
-            key={inst.id}
+            key={`${s.instanceId}:${s.sessionId}`}
             disabled={connecting}
-            onClick={() => void connectInstance(inst.id)}
-            className="mb-3 w-full rounded-2xl bg-surface p-4 text-left ring-1 ring-hairline active:bg-white/[0.06] disabled:opacity-50"
+            onClick={() => void openSession(s.instanceId, s.sessionId)}
+            className="flex w-full flex-col px-4 py-3 text-left active:bg-white/[0.05] disabled:opacity-50"
           >
-            <div className="flex items-center justify-between">
-              <span className="truncate font-medium">{baseName(inst.workspace)}</span>
-              <span className="ml-2 shrink-0 text-xs text-faint">pid {inst.pid}</span>
-            </div>
-            <div className="mt-1 truncate text-xs text-faint">{inst.workspace}</div>
-            <div className="mt-2 text-xs text-dim">
-              {t("picker.sessionCount", { count: inst.sessions?.length ?? 0 })}
-            </div>
+            <span className="truncate text-sm text-dim">
+              {s.title || t("chat.untitled")}
+            </span>
+            <span className="mt-0.5 truncate text-xs text-faint">
+              {baseName(s.workspace)}
+            </span>
           </button>
         ))}
       </div>

@@ -8,13 +8,11 @@
     "invalidUrl": "请输入有效的 http(s) 地址"
   },
   "picker": {
-    "title": "实例",
+    "title": "会话",
     "refresh": "刷新",
     "changeServer": "更换服务器",
     "connecting": "连接中…",
-    "empty": "暂无桥接实例。请先在编辑器中启动桥接。",
-    "sessionCount_one": "{{count}} 个会话",
-    "sessionCount_other": "{{count}} 个会话"
+    "empty": "暂无会话。请先在编辑器中启动桥接。"
   },
   "chat": {
     "empty": "还没有消息",
