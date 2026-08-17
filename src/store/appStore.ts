@@ -92,6 +92,9 @@ interface AppState {
   messages: ChatMessage[];
   planText: string | null;
   isRunning: boolean;
+  // Follow-ups typed while a turn is running; flushed in order the moment
+  // the current prompt settles (or immediately via forceSendPending).
+  pendingPrompts: string[];
   permission: PendingPermission | null;
   notice: string | null;
   // Pagination state from the attach response's replayMeta.
@@ -122,11 +125,18 @@ interface AppState {
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
   connectInstance: (instanceId: string, attachSessionId?: string) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
+  // Detaches from the instance and returns to the session list; unlike
+  // forgetHub the saved hub profile (and instance polling) stays alive.
+  closeSession: () => void;
   loadSession: (sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   refreshUsageStats: () => Promise<void>;
   sendPrompt: (text: string) => Promise<void>;
+  runPrompt: (text: string) => Promise<void>;
+  // Interrupts the running turn so the queued follow-up goes out immediately.
+  forceSendPending: () => void;
+  discardPending: (index: number) => void;
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
   dismissNotice: () => void;
@@ -437,6 +447,7 @@ export const useAppStore = create<AppState>((set, get) => {
         instanceId: null,
         activeSessionId: null,
         messages: [],
+        pendingPrompts: [],
         planText: null,
         permission: null,
         notice: "notice.instanceGone",
@@ -548,6 +559,7 @@ export const useAppStore = create<AppState>((set, get) => {
     instanceId: null,
     activeSessionId: null,
     messages: [],
+    pendingPrompts: [],
     planText: null,
     isRunning: false,
     permission: null,
@@ -594,6 +606,7 @@ export const useAppStore = create<AppState>((set, get) => {
         instanceId: null,
         activeSessionId: null,
         messages: [],
+        pendingPrompts: [],
         planText: null,
         permission: null,
         notice: null,
@@ -643,6 +656,7 @@ export const useAppStore = create<AppState>((set, get) => {
         connState: "connecting",
         activeSessionId: null,
         messages: [],
+        pendingPrompts: [],
         planText: null,
         permission: null,
         notice: null,
@@ -684,6 +698,38 @@ export const useAppStore = create<AppState>((set, get) => {
       await get().connectInstance(instanceId, sessionId);
     },
 
+    closeSession: () => {
+      stopReconnect();
+      connSeq++; // invalidate any in-flight connection events
+      acp?.close();
+      acp = null;
+      pendingRespond = null;
+      reconnectAttempt = 0;
+      dropQueuedUpdates();
+      set({
+        connState: "idle",
+        instanceId: null,
+        activeSessionId: null,
+        messages: [],
+        pendingPrompts: [],
+        planText: null,
+        permission: null,
+        notice: null,
+        replayCursor: null,
+        hasMore: false,
+        totalMessages: null,
+        loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        availableCommands: [],
+        usageStats: null,
+        quotaUnavailable: false,
+        loadingSession: false,
+        isRunning: false,
+      });
+    },
+
     loadSession: async (sessionId) => {
       if (!acp || get().connState !== "open") return;
       // Replay arrives as session/update notifications; reset first.
@@ -691,6 +737,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         activeSessionId: sessionId,
         messages: [],
+        pendingPrompts: [],
         planText: null,
         permission: null,
         replayCursor: null,
@@ -826,6 +873,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     // Attach-only client: sessions are created in the editor, never here.
+    // ACP allows one prompt at a time: while a turn is running, new text
+    // queues as pending instead — it goes out the moment the turn settles.
     sendPrompt: async (text) => {
       const s = get();
       if (!acp || s.connState !== "open") return;
@@ -833,6 +882,16 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ notice: "notice.noSession" });
         return;
       }
+      if (s.isRunning) {
+        set((state) => ({ pendingPrompts: [...state.pendingPrompts, text] }));
+        return;
+      }
+      await get().runPrompt(text);
+    },
+
+    runPrompt: async (text) => {
+      const s = get();
+      if (!acp || s.connState !== "open" || !s.activeSessionId) return;
       // Live turns never echo the user's message back (only replay does), so
       // insert it optimistically; replay replaces the whole history anyway.
       set((state) => {
@@ -854,7 +913,31 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ notice: `prompt failed: ${(e as Error).message}` });
       } finally {
         set({ isRunning: false });
+        // Auto-flush: the queue is FIFO, and each settled turn sends the next.
+        const stillOpen = get().connState === "open" && get().activeSessionId === sessionId;
+        const next = stillOpen ? get().pendingPrompts[0] : undefined;
+        if (next != null) {
+          set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
+          await get().runPrompt(next);
+        }
       }
+    },
+
+    forceSendPending: () => {
+      const s = get();
+      if (s.pendingPrompts.length === 0) return;
+      if (s.isRunning) {
+        // Cancelling settles the running prompt, which auto-flushes the queue.
+        get().cancelTurn();
+      } else {
+        const next = s.pendingPrompts[0];
+        set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
+        void get().runPrompt(next);
+      }
+    },
+
+    discardPending: (index) => {
+      set((state) => ({ pendingPrompts: state.pendingPrompts.filter((_, i) => i !== index) }));
     },
 
     cancelTurn: () => {

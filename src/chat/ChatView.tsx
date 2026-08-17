@@ -13,7 +13,7 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Brain, ChevronDown, Square, Wrench } from "lucide-react";
+import { ArrowUp, Brain, ChevronDown, Square, Wrench, X, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
@@ -190,6 +190,8 @@ const AssistantMessage = memo(function AssistantMessage() {
 function Composer() {
   const { t } = useTranslation();
   const commands = useAppStore((s) => s.availableCommands);
+  const isRunning = useAppStore((s) => s.isRunning);
+  const sendPrompt = useAppStore((s) => s.sendPrompt);
   const { value, setText } = unstable_useComposerInput();
   const [highlight, setHighlight] = useState(0);
   const [dismissedToken, setDismissedToken] = useState<string | null>(null);
@@ -243,7 +245,7 @@ function Composer() {
   };
 
   return (
-    <ThreadPrimitive.ViewportFooter className="sticky bottom-0 bg-canvas pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2">
+    <ThreadPrimitive.ViewportFooter className="sticky bottom-0 bg-canvas pb-[max(var(--safe-bottom),0.5rem)] pt-2">
       {open && (
         <div
           ref={listRef}
@@ -281,21 +283,84 @@ function Composer() {
           placeholder={t("chat.inputPlaceholder")}
           className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] text-ink placeholder:text-faint focus:outline-none"
         />
-        <AuiIf condition={(s) => s.thread.isRunning}>
+        {/* While a turn runs the Send stays a Send: a draft queues as pending
+            (sendPrompt routes it), never a dead button. Cancel stops the turn.
+            Plain button on purpose — ComposerPrimitive.Send disables itself
+            while the thread runs. */}
+        {isRunning && (
           <ComposerPrimitive.Cancel
             aria-label={t("common.cancel")}
             className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform active:scale-90"
           >
             <Square className="size-3 fill-current" />
           </ComposerPrimitive.Cancel>
-        </AuiIf>
-        <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition disabled:opacity-25 active:scale-90">
+        )}
+        {(!isRunning || value.trim().length > 0) && (
+          <button
+            onClick={() => {
+              const text = value.trim();
+              if (!text) return;
+              setText("");
+              void sendPrompt(text);
+            }}
+            disabled={!value.trim()}
+            aria-label={t("chat.send")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition disabled:opacity-25 active:scale-90"
+          >
             <ArrowUp className="size-4.5" strokeWidth={2.5} />
-          </ComposerPrimitive.Send>
-        </AuiIf>
+          </button>
+        )}
       </ComposerPrimitive.Root>
     </ThreadPrimitive.ViewportFooter>
+  );
+}
+
+// Queued follow-ups while a turn runs: dimmed user bubbles that go out by
+// themselves when the turn settles — or right away via force-send (which
+// interrupts the current turn).
+function PendingPrompts() {
+  const { t } = useTranslation();
+  const pendingPrompts = useAppStore((s) => s.pendingPrompts);
+  const forceSendPending = useAppStore((s) => s.forceSendPending);
+  const discardPending = useAppStore((s) => s.discardPending);
+  const lastRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    lastRef.current?.scrollIntoView({ block: "end" });
+  }, [pendingPrompts.length]);
+
+  if (pendingPrompts.length === 0) return null;
+  return (
+    <>
+      {pendingPrompts.map((text, i) => (
+        <div
+          key={i}
+          ref={i === pendingPrompts.length - 1 ? lastRef : undefined}
+          className="flex min-w-0 justify-end opacity-60"
+        >
+          <div className="flex max-w-[85%] min-w-0 flex-col break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink">
+            <span>{text}</span>
+            <span className="mt-1 flex items-center justify-end gap-3 text-[11px]">
+              <span className="text-faint">{t("chat.pending")}</span>
+              <button
+                onClick={forceSendPending}
+                className="flex items-center gap-1 font-medium text-dim active:text-ink"
+              >
+                <Zap className="size-3" />
+                {t("chat.sendNow")}
+              </button>
+              <button
+                onClick={() => discardPending(i)}
+                aria-label={t("chat.discard")}
+                className="flex size-4 items-center justify-center text-faint"
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -357,6 +422,7 @@ function Thread({
             message.role === "user" ? <UserMessage /> : <AssistantMessage />
           }
         </ThreadPrimitive.Messages>
+        <PendingPrompts />
         <Composer />
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -377,6 +443,9 @@ export function ChatView() {
     totalMessages != null ? Math.max(0, totalMessages - messages.length) : null;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const expandingRef = useRef(false);
+  // Stick-to-bottom: stays anchored while content grows (send, streaming),
+  // releases once the user scrolls away from the bottom.
+  const anchoredRef = useRef(true);
 
   // Older history arrives as PREPENDED pages (session/load_earlier). Anchor
   // the viewport: sample until the content height actually grew (network +
@@ -406,11 +475,26 @@ export function ChatView() {
   const onScroll = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
+    anchoredRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (el.scrollTop < 60 && el.scrollHeight > el.clientHeight) expand();
   }, [expand]);
 
+  // Follow the stream: every messages write scrolls down while anchored. The
+  // rAF defers past React's commit so scrollHeight already includes the new
+  // content; expand()'s restore runs first and flips the anchor off.
+  useEffect(() => {
+    if (!anchoredRef.current) return;
+    const el = viewportRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [messages]);
+
   const onNew = useCallback(
     async (message: ThreadMessageLike | string) => {
+      // A fresh send always follows its reply.
+      anchoredRef.current = true;
       await sendPrompt(messageText(message));
     },
     [sendPrompt],

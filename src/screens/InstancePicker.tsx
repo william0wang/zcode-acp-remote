@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { SettingsPanel } from "../components/SidePanel";
 
 function baseName(path: string | undefined): string {
   if (!path) return "?";
@@ -19,7 +21,7 @@ export function InstancePicker() {
   const connState = useAppStore((s) => s.connState);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
-  const forgetHub = useAppStore((s) => s.forgetHub);
+  const [panelOpen, setPanelOpen] = useState(false);
 
   const connecting = connState === "connecting";
 
@@ -35,7 +37,7 @@ export function InstancePicker() {
 
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
-      <header className="flex items-center gap-1 px-3 pb-2 pt-[max(env(safe-area-inset-top),0.75rem)]">
+      <header className="flex items-center gap-1 px-3 pb-2 pt-[max(var(--safe-top),0.75rem)]">
         <h1 className="flex-1 text-lg font-semibold tracking-tight">{t("picker.title")}</h1>
         <button
           onClick={() => void refreshInstances({ probe: true })}
@@ -45,10 +47,11 @@ export function InstancePicker() {
           <RefreshCw className="size-4.5" />
         </button>
         <button
-          onClick={forgetHub}
-          className="ml-1 rounded-full px-3 py-1.5 text-xs text-dim ring-1 ring-hairline active:bg-white/[0.06]"
+          onClick={() => setPanelOpen(true)}
+          aria-label={t("panel.title")}
+          className="ml-1 flex size-9 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
         >
-          {t("picker.changeServer")}
+          <SlidersHorizontal className="size-4.5" />
         </button>
       </header>
 
@@ -83,6 +86,8 @@ export function InstancePicker() {
           </button>
         ))}
       </div>
+
+      {panelOpen && <SettingsPanel onClose={() => setPanelOpen(false)} />}
     </div>
   );
 }

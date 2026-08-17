@@ -16,7 +16,7 @@ export function PermissionDialog() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(env(safe-area-inset-bottom),1.5rem)]">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(var(--safe-bottom),1.5rem)]">
       <div className="w-full max-w-md rounded-2xl border border-hairline bg-surface p-4">
         <h2 className="text-sm font-semibold text-ink">{t("permission.title")}</h2>
         <div className="mt-3 flex flex-col gap-2">

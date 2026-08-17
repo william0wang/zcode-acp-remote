@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Menu, SlidersHorizontal } from "lucide-react";
+import { ChevronLeft, Menu, SlidersHorizontal } from "lucide-react";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
-import { SidePanel } from "../components/SidePanel";
+import { SessionPanel } from "../components/SessionPanel";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { Spinner } from "../components/Spinner";
 import { useAppStore } from "../store/appStore";
@@ -30,6 +30,7 @@ export function ChatScreen() {
   const notice = useAppStore((s) => s.notice);
   const usage = useAppStore((s) => s.usage);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
+  const closeSession = useAppStore((s) => s.closeSession);
 
   const instance = instances.find((i) => i.id === instanceId);
   const session = instance?.sessions?.find((s) => s.sessionId === activeSessionId);
@@ -64,7 +65,14 @@ export function ChatScreen() {
 
   return (
     <div className="relative flex h-full flex-col bg-canvas text-ink">
-      <header className="relative flex items-center gap-1 border-b border-hairline px-1.5 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
+      <header className="relative flex items-center gap-1 border-b border-hairline px-1.5 pb-2 pt-[max(var(--safe-top),0.5rem)]">
+        <button
+          onClick={closeSession}
+          aria-label={t("chat.backToSessions")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+        >
+          <ChevronLeft className="size-5" />
+        </button>
         <button
           onClick={() => setDrawerOpen(true)}
           aria-label={t("chat.sessions")}
@@ -84,7 +92,7 @@ export function ChatScreen() {
         <span className={`mr-1.5 size-2 shrink-0 rounded-full ${statusDot}`} aria-label={connState} />
         <button
           onClick={() => setPanelOpen(true)}
-          aria-label={t("panel.title")}
+          aria-label={t("panel.session")}
           className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
         >
           <SlidersHorizontal className="size-5" />
@@ -126,7 +134,7 @@ export function ChatScreen() {
       </div>
 
       {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
-      {panelOpen && <SidePanel onClose={() => setPanelOpen(false)} />}
+      {panelOpen && <SessionPanel onClose={() => setPanelOpen(false)} />}
       <PermissionDialog />
 
       {connState === "connecting" && (

@@ -10,7 +10,6 @@
   "picker": {
     "title": "Sessions",
     "refresh": "Refresh",
-    "changeServer": "Change server",
     "connecting": "Connecting…",
     "empty": "No sessions yet. Open your editor with the bridge running."
   },
@@ -19,6 +18,7 @@
     "noSession": "No session selected — open the menu to pick one",
     "inputPlaceholder": "Message the agent…",
     "sessions": "Sessions",
+    "backToSessions": "All sessions",
     "noSessions": "No sessions yet",
     "loadEarlier": "Show {{n}} earlier messages",
     "loadEarlierGeneric": "Load earlier messages",
@@ -29,11 +29,20 @@
     "plan": "Plan",
     "untitled": "Untitled session",
     "thinking": "Thinking…",
-    "thought": "Thought"
+    "thought": "Thought",
+    "pending": "Pending",
+    "sendNow": "Send now",
+    "discard": "Discard",
+    "send": "Send"
   },
   "panel": {
     "title": "Settings",
-    "language": "Language"
+    "session": "Session",
+    "language": "Language",
+    "server": "Server",
+    "changeServer": "Change server",
+    "changeServerConfirm": "Tap again to confirm",
+    "changeServerHint": "Disconnects and clears the saved URL and token"
   },
   "config": {
     "title": "Session",

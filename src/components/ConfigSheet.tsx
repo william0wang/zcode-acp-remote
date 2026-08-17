@@ -16,7 +16,7 @@ export function ConfigSheet({ optionId, onClose }: { optionId: string; onClose: 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/50" onClick={onClose}>
       <div
-        className="max-h-[65%] w-full overflow-y-auto rounded-t-2xl border-t border-hairline bg-surface px-2 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3"
+        className="max-h-[65%] w-full overflow-y-auto rounded-t-2xl border-t border-hairline bg-surface px-2 pb-[max(var(--safe-bottom),1rem)] pt-3"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-3 pb-2 text-sm font-medium text-ink">{label}</div>

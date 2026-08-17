@@ -10,7 +10,6 @@
   "picker": {
     "title": "会话",
     "refresh": "刷新",
-    "changeServer": "更换服务器",
     "connecting": "连接中…",
     "empty": "暂无会话。请先在编辑器中启动桥接。"
   },
@@ -19,6 +18,7 @@
     "noSession": "未选择会话——打开菜单选择一个",
     "inputPlaceholder": "给 Agent 发消息…",
     "sessions": "会话",
+    "backToSessions": "全部会话",
     "noSessions": "暂无会话",
     "loadEarlier": "显示更早的 {{n}} 条消息",
     "loadEarlierGeneric": "加载更早的消息",
@@ -29,11 +29,20 @@
     "plan": "计划",
     "untitled": "未命名会话",
     "thinking": "思考中…",
-    "thought": "思考过程"
+    "thought": "思考过程",
+    "pending": "待发送",
+    "sendNow": "立即发送",
+    "discard": "移除",
+    "send": "发送"
   },
   "panel": {
     "title": "设置",
-    "language": "语言"
+    "session": "会话",
+    "language": "语言",
+    "server": "服务器",
+    "changeServer": "更换服务器",
+    "changeServerConfirm": "再点一次确认",
+    "changeServerHint": "断开连接并清除已保存的地址和令牌"
   },
   "config": {
     "title": "会话",

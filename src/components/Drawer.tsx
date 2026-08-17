@@ -31,7 +31,7 @@ export function Drawer({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex bg-black/50" onClick={onClose}>
       <aside
-        className="flex h-full w-80 max-w-[85%] flex-col overflow-y-auto border-r border-hairline bg-surface pt-[max(env(safe-area-inset-top),0.75rem)] text-ink"
+        className="flex h-full w-80 max-w-[85%] flex-col overflow-y-auto border-r border-hairline bg-surface pt-[max(var(--safe-top),0.75rem)] text-ink"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 pb-1">
