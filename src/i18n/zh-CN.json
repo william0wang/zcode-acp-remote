@@ -1,0 +1,44 @@
+{
+  "connect": {
+    "subtitle": "远程掌控你的 Agent 会话",
+    "hubUrl": "Hub 地址",
+    "token": "访问令牌",
+    "connect": "连接",
+    "testing": "测试中…",
+    "invalidUrl": "请输入有效的 http(s) 地址"
+  },
+  "picker": {
+    "title": "实例",
+    "refresh": "刷新",
+    "changeServer": "更换服务器",
+    "connecting": "连接中…",
+    "empty": "暂无桥接实例。请先在编辑器中启动桥接。",
+    "sessionCount_one": "{{count}} 个会话",
+    "sessionCount_other": "{{count}} 个会话"
+  },
+  "chat": {
+    "empty": "还没有消息",
+    "noSession": "未选择会话——打开菜单选择一个",
+    "inputPlaceholder": "给 Agent 发消息…",
+    "sessions": "会话",
+    "noSessions": "暂无会话",
+    "loadEarlier": "显示更早的 {{n}} 条消息",
+    "loadEarlierGeneric": "加载更早的消息",
+    "loadingEarlier": "加载中…",
+    "reconnecting": "重连中…",
+    "plan": "计划",
+    "untitled": "未命名会话"
+  },
+  "permission": {
+    "title": "权限请求",
+    "hint": "所有客户端中最先应答的生效"
+  },
+  "notice": {
+    "unsupported": "此交互请在编辑器中应答",
+    "instanceGone": "实例已离线——请选择其他实例",
+    "noSession": "请先选择一个会话（从菜单）"
+  },
+  "common": {
+    "cancel": "取消"
+  }
+}

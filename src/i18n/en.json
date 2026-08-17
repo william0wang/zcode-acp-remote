@@ -1,0 +1,44 @@
+{
+  "connect": {
+    "subtitle": "Remote control for your agent sessions",
+    "hubUrl": "Hub URL",
+    "token": "Access token",
+    "connect": "Connect",
+    "testing": "Testing…",
+    "invalidUrl": "Enter a valid http(s) URL"
+  },
+  "picker": {
+    "title": "Instances",
+    "refresh": "Refresh",
+    "changeServer": "Change server",
+    "connecting": "Connecting…",
+    "empty": "No bridge instances. Open your editor with the bridge running.",
+    "sessionCount_one": "{{count}} session",
+    "sessionCount_other": "{{count}} sessions"
+  },
+  "chat": {
+    "empty": "No messages yet",
+    "noSession": "No session selected — open the menu to pick one",
+    "inputPlaceholder": "Message the agent…",
+    "sessions": "Sessions",
+    "noSessions": "No sessions yet",
+    "loadEarlier": "Show {{n}} earlier messages",
+    "loadEarlierGeneric": "Load earlier messages",
+    "loadingEarlier": "Loading…",
+    "reconnecting": "Reconnecting…",
+    "plan": "Plan",
+    "untitled": "Untitled session"
+  },
+  "permission": {
+    "title": "Permission requested",
+    "hint": "The first answer across all clients wins"
+  },
+  "notice": {
+    "unsupported": "This interaction must be answered in your editor",
+    "instanceGone": "Instance went away — pick another one",
+    "noSession": "Pick a session first (from the menu)"
+  },
+  "common": {
+    "cancel": "Cancel"
+  }
+}
