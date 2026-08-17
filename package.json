@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:android": "bash scripts/build-android.sh",
+    "build:android:debug": "bash scripts/build-android.sh --debug"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.14",
