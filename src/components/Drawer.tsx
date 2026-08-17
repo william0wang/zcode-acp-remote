@@ -1,12 +1,21 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/appStore";
+import type { PlanUsage } from "../lib/types";
 import { ConfigSheet } from "./ConfigSheet";
 
 function baseName(path: string | undefined): string {
   if (!path) return "?";
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || path;
+}
+
+// "3h 12m" / "45m" remaining until the window resets; empty when already due.
+function fmtRemaining(resetsAt: number): string {
+  const mins = Math.max(0, Math.round((resetsAt - Date.now()) / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
 // One flat list across every bridge instance: session title as the main line,
@@ -20,6 +29,9 @@ export function Drawer({ onClose }: { onClose: () => void }) {
   const openSession = useAppStore((s) => s.openSession);
   const setLang = useAppStore((s) => s.setLang);
   const configOptions = useAppStore((s) => s.configOptions);
+  const planUsage = useAppStore((s) => s.planUsage);
+  const quotaUnavailable = useAppStore((s) => s.quotaUnavailable);
+  const refreshPlanUsage = useAppStore((s) => s.refreshPlanUsage);
   const [configOpen, setConfigOpen] = useState<string | null>(null);
 
   const sessions = instances
@@ -96,6 +108,56 @@ export function Drawer({ onClose }: { onClose: () => void }) {
                 </button>
               );
             })}
+          </>
+        )}
+
+        {(quotaUnavailable || (planUsage && planUsage.length > 0)) && (
+          <>
+            <div className="flex items-center justify-between px-4 pb-1 pt-5">
+              <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                {t("quota.title")}
+              </h2>
+              <button
+                onClick={() => void refreshPlanUsage()}
+                className="text-xs text-zinc-500 active:text-zinc-300"
+              >
+                {t("quota.refresh")}
+              </button>
+            </div>
+            {quotaUnavailable ? (
+              <p className="px-4 py-1 text-xs text-zinc-600">{t("quota.unavailable")}</p>
+            ) : (
+              planUsage!.map((p: PlanUsage) => {
+              const counts =
+                typeof p.used === "number" && typeof p.limit === "number"
+                  ? `${p.used}/${p.limit}`
+                  : "";
+              const rem = p.resetsAt ? fmtRemaining(p.resetsAt) : "";
+              return (
+                <div key={p.id} className="px-4 py-2">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm text-zinc-300">{p.name ?? p.id}</span>
+                    <span className="text-xs tabular-nums text-zinc-500">
+                      {p.usedPercent}%{counts && ` · ${counts}`}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
+                    <div
+                      className={`h-full rounded-full ${
+                        p.usedPercent >= 90 ? "bg-red-500" : "bg-blue-500"
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(0, p.usedPercent))}%` }}
+                    />
+                  </div>
+                  {rem && (
+                    <p className="mt-1 text-[11px] text-zinc-600">
+                      {t("quota.resetsIn", { time: rem })}
+                    </p>
+                  )}
+                </div>
+              );
+              })
+            )}
           </>
         )}
 

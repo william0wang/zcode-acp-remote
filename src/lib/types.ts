@@ -37,6 +37,19 @@ export interface ContextUsage {
   size: number;
 }
 
+// account/usage_stats plan entry (Proposal 0002): one per quota window.
+// usedPercent (0-100) is always present; used/limit only when the API
+// reports absolute counts; windowHours 5 (rolling) / 168 (weekly).
+export interface PlanUsage {
+  id: string;
+  name?: string;
+  usedPercent: number;
+  used?: number;
+  limit?: number;
+  windowHours?: number;
+  resetsAt?: number;
+}
+
 // ACP wire types. Deliberately permissive: unknown kinds/fields must be
 // ignored. The SessionUpdate union is discriminated by `sessionUpdate`
 // (per @agentclientprotocol schema), NOT by `kind`.

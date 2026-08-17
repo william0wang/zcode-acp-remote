@@ -9,7 +9,7 @@ import {
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
-import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type SessionUpdate } from "../lib/types";
+import { contentText, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type HubInstance, type PlanUsage, type SessionUpdate } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
@@ -66,6 +66,11 @@ interface AppState {
   configOptions: ConfigOption[];
   currentModeId: string | null;
   usage: ContextUsage | null;
+  // Account-level plan quota (account/usage_stats), pulled after connect.
+  planUsage: PlanUsage[] | null;
+  // Last quota fetch failed — keep the section header + Refresh visible so a
+  // long-lived connection can still retry (REMOTE-CLIENTS: hide data, retry later).
+  quotaUnavailable: boolean;
   loadingSession: boolean;
 
   init: () => void;
@@ -78,6 +83,7 @@ interface AppState {
   loadSession: (sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
+  refreshPlanUsage: () => Promise<void>;
   sendPrompt: (text: string) => Promise<void>;
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
@@ -383,6 +389,8 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        planUsage: null,
+        quotaUnavailable: false,
         loadingSession: false,
       });
       reconnectAttempt = 0;
@@ -457,6 +465,9 @@ export const useAppStore = create<AppState>((set, get) => {
     acp = conn;
     try {
       await conn.connect();
+      // Account quota is pull-only; fetch alongside (re)connect, not on
+      // every session switch — quota changes are slow.
+      void get().refreshPlanUsage();
       const active = get().activeSessionId;
       if (active) {
         // Replay is the catch-up mechanism after any disconnect.
@@ -489,6 +500,8 @@ export const useAppStore = create<AppState>((set, get) => {
     configOptions: [],
     currentModeId: null,
     usage: null,
+    planUsage: null,
+    quotaUnavailable: false,
     loadingSession: false,
 
     init: () => {
@@ -531,6 +544,8 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        planUsage: null,
+        quotaUnavailable: false,
         loadingSession: false,
       });
     },
@@ -577,6 +592,8 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        planUsage: null,
+        quotaUnavailable: false,
         loadingSession: false,
       });
       await openConnection(s.profile, instanceId);
@@ -725,6 +742,27 @@ export const useAppStore = create<AppState>((set, get) => {
         // to every client (editor included) — the store picks those up too.
       } catch (e) {
         set({ notice: `config change failed: ${(e as Error).message}` });
+      }
+    },
+
+    // Plan quota via account/usage_stats. Pull-only (no push); fetched after
+    // connect and on demand from the drawer. On failure just hide the
+    // section — the next attach or refresh retries.
+    refreshPlanUsage: async () => {
+      const conn = acp;
+      if (!conn || get().connState !== "open") return;
+      try {
+        const result = await conn.request("account/usage_stats", {});
+        if (acp !== conn) return; // superseded by a newer connection
+        const plans = (result as { plans?: PlanUsage[] } | null)?.plans;
+        set({
+          planUsage: Array.isArray(plans)
+            ? plans.filter((p) => p && typeof p.usedPercent === "number")
+            : null,
+          quotaUnavailable: false,
+        });
+      } catch {
+        if (acp === conn) set({ planUsage: null, quotaUnavailable: true });
       }
     },
 

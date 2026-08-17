@@ -37,6 +37,12 @@
     "mode": "模式",
     "thought": "思考"
   },
+  "quota": {
+    "title": "配额使用",
+    "refresh": "刷新",
+    "unavailable": "暂不可用，点刷新重试",
+    "resetsIn": "{{time}}后重置"
+  },
   "permission": {
     "title": "权限请求",
     "hint": "所有客户端中最先应答的生效"

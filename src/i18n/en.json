@@ -37,6 +37,12 @@
     "mode": "Mode",
     "thought": "Thought"
   },
+  "quota": {
+    "title": "Plan usage",
+    "refresh": "Refresh",
+    "unavailable": "Unavailable — tap Refresh to retry",
+    "resetsIn": "Resets in {{time}}"
+  },
   "permission": {
     "title": "Permission requested",
     "hint": "The first answer across all clients wins"
