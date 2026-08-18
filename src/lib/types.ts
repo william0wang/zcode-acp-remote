@@ -96,8 +96,46 @@ export interface AcpTextContent {
   text: string;
 }
 
+// Edit/Write results ship structured diffs (old/new line sets reconstructed
+// from the backend's patch — NOT a unified-diff string).
+export interface AcpDiffContent {
+  type: "diff";
+  path: string;
+  oldText: string | null;
+  newText: string;
+}
+
 function isTextContent(c: unknown): c is AcpTextContent {
-  return typeof c === "object" && c !== null && (c as { type?: string }).type === "text";
+  return (
+    typeof c === "object" &&
+    c !== null &&
+    (c as { type?: string }).type === "text"
+  );
+}
+
+// The bridge wraps plain results as {type:"content", content:{type:"text"}}
+// (Bash output, plan text, question text); unwrap those too.
+function unwrapText(c: unknown): string | null {
+  if (isTextContent(c)) return c.text;
+  if (
+    typeof c === "object" &&
+    c !== null &&
+    (c as { type?: string }).type === "content"
+  ) {
+    const inner = (c as { content?: unknown }).content;
+    if (isTextContent(inner)) return inner.text;
+  }
+  return null;
+}
+
+function isDiffContent(c: unknown): c is AcpDiffContent {
+  if (typeof c !== "object" || c === null) return false;
+  const d = c as Partial<AcpDiffContent>;
+  return (
+    d.type === "diff" &&
+    typeof d.newText === "string" &&
+    typeof d.path === "string"
+  );
 }
 
 // Chunk content is a SINGLE ContentBlock on the wire; tool_call_update
@@ -105,7 +143,16 @@ function isTextContent(c: unknown): c is AcpTextContent {
 export function contentText(content: unknown): string {
   if (!content) return "";
   const blocks: unknown[] = Array.isArray(content) ? content : [content];
-  return blocks.filter(isTextContent).map((c) => c.text).join("");
+  return blocks
+    .map(unwrapText)
+    .filter((t): t is string => t !== null)
+    .join("");
+}
+
+export function contentDiffBlocks(content: unknown): AcpDiffContent[] {
+  if (!content) return [];
+  const blocks: unknown[] = Array.isArray(content) ? content : [content];
+  return blocks.filter(isDiffContent);
 }
 
 // Internal chat model, converted to assistant-ui ThreadMessageLike at render time.
@@ -116,6 +163,13 @@ export interface ToolCallPart {
   toolName: string;
   detail: string;
   status: string;
+  // ACP tool kind (execute/edit/read/search/fetch/switch_mode/other…) for
+  // icon + colour mapping.
+  kind?: string;
+  // Raw backend tool name from `_meta.claudeCode.toolName` (e.g. "Bash"),
+  // distinct from `toolName` which holds the wire title "Bash: npm test".
+  rawName?: string;
+  diffs?: AcpDiffContent[];
 }
 
 export type ChatPart =

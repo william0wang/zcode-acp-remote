@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ActionBarPrimitive,
   AuiIf,
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -15,27 +16,40 @@ import {
   ThreadPrimitive,
   unstable_useComposerInput,
   useExternalStoreRuntime,
+  useThreadViewport,
+  useThreadViewportAutoScroll,
   groupPartByType,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import ReactDiffViewer from "react-diff-viewer-continued";
 import {
+  ArrowDown,
   ArrowUp,
   Bell,
   Brain,
+  Check,
   ChevronDown,
+  Copy,
+  FilePen,
+  FileText,
+  Globe,
+  ListChecks,
+  Search,
   Square,
+  Terminal,
   Wrench,
   X,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
 import { Spinner } from "../components/Spinner";
-import type { ChatMessage } from "../lib/types";
+import type { AcpDiffContent, ChatMessage } from "../lib/types";
 
 // ACP chat model -> assistant-ui message model (the ACP runtime adapter).
 
@@ -55,7 +69,14 @@ const convertMessage = (m: ChatMessage): ThreadMessageLike => ({
       type: "tool-call" as const,
       toolCallId: p.toolCallId,
       toolName: p.toolName,
-      args: { detail: p.detail },
+      // args must be JSON-clean: diffs ride as a serialized array.
+      args: {
+        detail: p.detail,
+        title: p.toolName,
+        ...(p.kind ? { kind: p.kind } : {}),
+        ...(p.rawName ? { rawName: p.rawName } : {}),
+        ...(p.diffs ? { diffs: JSON.stringify(p.diffs) } : {}),
+      },
       result: p.status === "completed" ? p.detail : p.status,
     };
   }),
@@ -80,20 +101,101 @@ function MarkdownText({ text }: { text: string }) {
   );
 }
 
+// Per-kind icon + accent colour (ADR 0004: rendering leans on libraries;
+// the mapping itself is ours).
+const TOOL_KIND_META: Record<string, { icon: LucideIcon; className: string }> =
+  {
+    execute: { icon: Terminal, className: "text-amber-400" },
+    edit: { icon: FilePen, className: "text-sky-400" },
+    read: { icon: FileText, className: "text-zinc-400" },
+    search: { icon: Search, className: "text-violet-400" },
+    fetch: { icon: Globe, className: "text-emerald-400" },
+    switch_mode: { icon: ListChecks, className: "text-cyan-400" },
+    other: { icon: Wrench, className: "text-faint" },
+  };
+
+interface ToolCardArgs {
+  detail?: string;
+  kind?: string;
+  rawName?: string;
+  title?: string;
+  diffs?: string;
+}
+
+function parseDiffs(raw: string | undefined): AcpDiffContent[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? (v as AcpDiffContent[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function DiffBlock({ diff }: { diff: AcpDiffContent }) {
+  return (
+    <div className="mt-2 overflow-hidden rounded-lg ring-1 ring-hairline">
+      {diff.path && (
+        <div className="truncate border-b border-hairline bg-white/[0.04] px-2 py-1 font-mono text-[11px] text-dim">
+          {diff.path}
+        </div>
+      )}
+      <ReactDiffViewer
+        oldValue={diff.oldText ?? ""}
+        newValue={diff.newText}
+        splitView={false}
+        useDarkTheme
+        hideLineNumbers
+        showDiffOnly={false}
+        styles={{
+          contentText: {
+            fontSize: "11px",
+            lineHeight: "1.5",
+            fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          },
+        }}
+      />
+    </div>
+  );
+}
+
 function ToolCard({ part }: { part: { toolName: string; args?: unknown } }) {
-  const detail = (part.args as { detail?: string } | undefined)?.detail ?? "";
+  const a = (part.args ?? {}) as ToolCardArgs;
+  const detail = a.detail ?? "";
+  const diffs = useMemo(() => parseDiffs(a.diffs), [a.diffs]);
+  const meta = TOOL_KIND_META[a.kind ?? ""] ?? TOOL_KIND_META.other;
+  const Icon = meta.icon;
+  // `toolName` holds the wire title "Bash: npm test"; prefer the raw backend
+  // name, else the segment before the first colon.
+  const name =
+    a.rawName ||
+    (a.title ?? part.toolName).split(":")[0]?.trim() ||
+    part.toolName;
   return (
     <details className="my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
       <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-dim">
-        <Wrench className="size-3.5 shrink-0 text-faint" />
-        <span className="shrink-0 font-medium">{part.toolName}</span>
+        <Icon className={`size-3.5 shrink-0 ${meta.className}`} />
+        <span className="shrink-0 font-medium">{name}</span>
         {detail && (
-          <span className="truncate text-faint">{detail.slice(0, 72)}</span>
+          <span className="truncate text-faint">{detail.slice(0, 120)}</span>
         )}
       </summary>
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 text-faint">
-        {detail || "…"}
-      </pre>
+      {diffs.length > 0 ? (
+        <div className="border-t border-hairline px-2 py-2">
+          {diffs.map((d, i) => (
+            <DiffBlock key={`${d.path}-${i}`} diff={d} />
+          ))}
+          {detail && (
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 text-faint">
+              {detail}
+            </pre>
+          )}
+        </div>
+      ) : (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 text-faint">
+          {detail || "…"}
+        </pre>
+      )}
     </details>
   );
 }
@@ -186,6 +288,19 @@ const UserMessage = memo(function UserMessage({
   notice?: { status: string; summary: string };
 }) {
   const { t } = useTranslation();
+  const notify = useAppStore((s) => s.notify);
+
+  // Long-press copy: the bubble is plain text, so the rendered text is the
+  // source (assistant-side copying uses ActionBarPrimitive on markdown source).
+  const copyFrom = (e: React.MouseEvent<HTMLElement>) => {
+    e.preventDefault();
+    const text = e.currentTarget.innerText.trim();
+    if (!text) return;
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => notify(t("chat.copied")))
+      .catch(() => notify(t("chat.copyFailed")));
+  };
   if (notice) {
     return (
       <MessagePrimitive.Root className="flex min-w-0 justify-center">
@@ -224,7 +339,10 @@ const UserMessage = memo(function UserMessage({
   }
   return (
     <MessagePrimitive.Root className="flex min-w-0 justify-end">
-      <div className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink">
+      <div
+        onContextMenu={copyFrom}
+        className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink select-none"
+      >
         <MessagePrimitive.Parts>
           {({ part }) => (part.type === "text" ? <>{part.text}</> : null)}
         </MessagePrimitive.Parts>
@@ -235,7 +353,10 @@ const UserMessage = memo(function UserMessage({
 
 // Assistant replies render full-width without a bubble — markdown (code,
 // lists) reads far better unconfined; only the user side gets a bubble.
+// A trailing copy action (library primitive, ADR 0004) copies the message's
+// markdown source.
 const AssistantMessage = memo(function AssistantMessage() {
+  const { t } = useTranslation();
   return (
     <MessagePrimitive.Root className="min-w-0">
       <div className="w-full text-[15px] leading-relaxed text-ink">
@@ -266,6 +387,15 @@ const AssistantMessage = memo(function AssistantMessage() {
           }}
         </MessagePrimitive.GroupedParts>
       </div>
+      <ActionBarPrimitive.Root className="mt-0.5 flex justify-end">
+        <ActionBarPrimitive.Copy
+          aria-label={t("chat.copy")}
+          className="flex size-7 items-center justify-center rounded-full text-faint active:bg-white/[0.06] group"
+        >
+          <Copy className="size-3 group-data-[copied]:hidden" />
+          <Check className="hidden size-3 text-emerald-400 group-data-[copied]:block" />
+        </ActionBarPrimitive.Copy>
+      </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
 });
@@ -482,10 +612,39 @@ function Thread({
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const loadingSession = useAppStore((s) => s.loadingSession);
+  const messages = useAppStore((s) => s.messages);
+
+  // Stick-to-bottom and the isAtBottom signal come from the library hook
+  // (ADR 0004); only the load-earlier anchoring stays hand-rolled below.
+  const autoScrollRef = useThreadViewportAutoScroll({ autoScroll: true });
+  const isAtBottom = useThreadViewport((s) => s.isAtBottom);
+
+  // Unread count: messages appended while the viewport is away from the
+  // bottom. Prepended history pages are not unread content.
+  const [unread, setUnread] = useState(0);
+  const lastLenRef = useRef(messages.length);
+  useEffect(() => {
+    const grew = messages.length - lastLenRef.current;
+    lastLenRef.current = messages.length;
+    if (isAtBottom) {
+      setUnread(0);
+      return;
+    }
+    if (grew > 0 && !loadingEarlier) setUnread((u) => u + grew);
+  }, [messages, isAtBottom, loadingEarlier]);
+
+  const composeRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      viewportRef.current = el;
+      autoScrollRef(el);
+    },
+    [viewportRef, autoScrollRef],
+  );
+
   return (
-    <ThreadPrimitive.Root className="flex h-full flex-col">
+    <ThreadPrimitive.Root className="relative flex h-full flex-col">
       <ThreadPrimitive.Viewport
-        ref={viewportRef}
+        ref={composeRef}
         onScroll={onScroll}
         className="flex flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-3.5 py-4"
       >
@@ -533,6 +692,23 @@ function Thread({
         <PendingPrompts />
         <Composer />
       </ThreadPrimitive.Viewport>
+      {!isAtBottom && messages.length > 0 && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-end px-4">
+          <div className="pointer-events-auto relative">
+            <ThreadPrimitive.ScrollToBottom
+              aria-label={t("chat.jumpToLatest")}
+              className="flex size-9 items-center justify-center rounded-full bg-raised text-dim shadow-lg ring-1 ring-hairline transition-transform active:scale-90"
+            >
+              <ArrowDown className="size-4" />
+            </ThreadPrimitive.ScrollToBottom>
+            {unread > 0 && (
+              <span className="absolute -right-1 -top-1 flex size-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-semibold text-white">
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </ThreadPrimitive.Root>
   );
 }
@@ -551,14 +727,11 @@ export function ChatView() {
     totalMessages != null ? Math.max(0, totalMessages - messages.length) : null;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const expandingRef = useRef(false);
-  // Stick-to-bottom: stays anchored while content grows (send, streaming),
-  // releases once the user scrolls away from the bottom.
-  const anchoredRef = useRef(true);
 
   // Older history arrives as PREPENDED pages (session/load_earlier). Anchor
   // the viewport: sample until the content height actually grew (network +
   // assistant-ui's async mount both take frames), then restore the exact
-  // visual position.
+  // visual position. (Live-stream stick-to-bottom is the library hook.)
   const expand = useCallback(() => {
     if (expandingRef.current) return;
     expandingRef.current = true;
@@ -583,27 +756,11 @@ export function ChatView() {
   const onScroll = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
-    anchoredRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (el.scrollTop < 60 && el.scrollHeight > el.clientHeight) expand();
   }, [expand]);
 
-  // Follow the stream: every messages write scrolls down while anchored. The
-  // rAF defers past React's commit so scrollHeight already includes the new
-  // content; expand()'s restore runs first and flips the anchor off.
-  useEffect(() => {
-    if (!anchoredRef.current) return;
-    const el = viewportRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
-    });
-  }, [messages]);
-
   const onNew = useCallback(
     async (message: ThreadMessageLike | string) => {
-      // A fresh send always follows its reply.
-      anchoredRef.current = true;
       await sendPrompt(messageText(message));
     },
     [sendPrompt],

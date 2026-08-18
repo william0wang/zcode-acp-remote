@@ -35,7 +35,16 @@
     "pending": "Pending",
     "sendNow": "Send now",
     "discard": "Discard",
-    "send": "Send"
+    "send": "Send",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "jumpToLatest": "Jump to latest",
+    "searchPlaceholder": "Search sessions",
+    "noMatches": "No matching sessions",
+    "activityAwaiting": "Waiting for you",
+    "activityRunning": "Running",
+    "activityFinished": "Done"
   },
   "panel": {
     "title": "Settings",
@@ -59,6 +68,9 @@
   },
   "permission": {
     "title": "Permission requested",
+    "planTitle": "Ready to code?",
+    "questionTitle": "Question for you",
+    "sessionLabel": "Session",
     "hint": "The first answer across all clients wins"
   },
   "notice": {

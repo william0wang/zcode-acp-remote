@@ -10,6 +10,7 @@ import {
   type Lang,
 } from "../lib/storage";
 import {
+  contentDiffBlocks,
   contentText,
   type AccountUsageStats,
   type ChatMessage,
@@ -24,6 +25,7 @@ import {
   type QuotaItem,
   type SessionUpdate,
   type SlashCommand,
+  type ToolCallPart,
 } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
@@ -95,10 +97,42 @@ export interface PermissionOption {
   name?: string;
 }
 
+// Context resolved for the approval card. The request params alone carry
+// almost nothing readable; the interesting text (plan, question) rides on the
+// tool_call the bridge emits right before the request (ADR 0003).
+export interface ApprovalContext {
+  toolCallId?: string;
+  toolName?: string;
+  kind?: string;
+  title?: string;
+  // Plan text (ExitPlanMode) or question text (AskUserQuestion), from the
+  // matched tool_call's content.
+  detail?: string;
+  plan?: string;
+  rawInputText?: string;
+}
+
 export interface PendingPermission {
   requestId: number;
   sessionId: string;
   options: PermissionOption[];
+  context?: ApprovalContext;
+}
+
+// Per-session display state for the session list. Bridge broadcasts fan out
+// across ALL sessions of the instance, so non-active sessions are tracked
+// too. Not persisted: after a reconnect other sessions read as idle until the
+// next broadcast event.
+export interface SessionActivity {
+  running: boolean;
+  awaitingPermission: boolean;
+  finishedAt?: number;
+}
+
+// One todo/plan entry; `status` is "pending" | "active" | "completed".
+export interface PlanEntry {
+  content: string;
+  status?: string;
 }
 
 interface AppState {
@@ -110,7 +144,7 @@ interface AppState {
   instanceId: string | null;
   activeSessionId: string | null;
   messages: ChatMessage[];
-  planText: string | null;
+  planEntries: PlanEntry[] | null;
   isRunning: boolean;
   // Follow-ups typed while a turn is running or a replay is still loading;
   // flushed in order the moment the prompt settles / the session attaches.
@@ -133,6 +167,8 @@ interface AppState {
   // Account-level quota (account/usage_stats): the combined GLM + Opencode
   // Go structure mirroring the zcode-quota CLI card, pulled after connect.
   usageStats: AccountUsageStats | null;
+  // Per-session running/permission state from bridge-wide broadcasts.
+  sessionStates: Record<string, SessionActivity>;
   // Last quota fetch failed — keep the section header + Refresh visible so a
   // long-lived connection can still retry (REMOTE-CLIENTS: hide data, retry later).
   quotaUnavailable: boolean;
@@ -163,6 +199,9 @@ interface AppState {
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
   dismissNotice: () => void;
+  // Ephemeral UI feedback (copy confirmations etc.); auto-clears with the
+  // existing notice banner.
+  notify: (text: string) => void;
 }
 
 // Module singletons: connection + timers live outside React state.
@@ -324,7 +363,7 @@ export const useAppStore = create<AppState>((set, get) => {
     meta?: unknown,
   ): {
     messages?: ChatMessage[];
-    planText?: string | null;
+    planEntries?: PlanEntry[] | null;
     configOptions?: ConfigOption[];
     currentModeId?: string;
     usage?: ContextUsage;
@@ -353,12 +392,25 @@ export const useAppStore = create<AppState>((set, get) => {
       };
     }
     if (kind === "tool_call") {
+      const meta = (
+        u._meta as { claudeCode?: { toolName?: unknown } } | undefined
+      )?.claudeCode;
+      // The bridge ships the plan/question text as the tool_call's initial
+      // content — keep it in detail so approval cards can show it.
       const part = {
         type: "tool-call" as const,
         toolCallId: String(u.toolCallId ?? ""),
         toolName: String(u.title ?? "tool"),
-        detail: "",
+        detail: contentText(u.content),
         status: String(u.status ?? "pending"),
+        ...(typeof u.kind === "string" ? { kind: u.kind } : {}),
+        ...(typeof meta?.toolName === "string"
+          ? { rawName: meta.toolName }
+          : {}),
+        ...(() => {
+          const diffs = contentDiffBlocks(u.content);
+          return diffs.length ? { diffs } : {};
+        })(),
       };
       const mid =
         typeof u.messageId === "string" && u.messageId ? u.messageId : null;
@@ -394,10 +446,15 @@ export const useAppStore = create<AppState>((set, get) => {
     if (kind === "tool_call_update") {
       const toolCallId = String(u.toolCallId ?? "");
       const chunk = contentText(u.content);
+      const diffBlocks = contentDiffBlocks(u.content);
+      // An update carrying content blocks REPLACES the whole collection
+      // (text and diffs); a status-only update leaves them untouched.
+      const hasContent =
+        u.content != null &&
+        (!Array.isArray(u.content) || u.content.length > 0);
       const status = typeof u.status === "string" ? u.status : null;
       // Search backwards: the tool call may live in an earlier assistant
-      // message when other clients' turns interleaved. Content on the wire
-      // REPLACES the collection, it does not append.
+      // message when other clients' turns interleaved.
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
         if (m.role !== "assistant") continue;
@@ -412,7 +469,14 @@ export const useAppStore = create<AppState>((set, get) => {
           ...m,
           parts: m.parts.map((p) =>
             p.type === "tool-call" && p.toolCallId === toolCallId
-              ? { ...p, detail: chunk || p.detail, status: status ?? p.status }
+              ? {
+                  ...p,
+                  detail: chunk || p.detail,
+                  status: status ?? p.status,
+                  ...(hasContent
+                    ? { diffs: diffBlocks.length ? diffBlocks : undefined }
+                    : {}),
+                }
               : p,
           ),
         };
@@ -425,20 +489,19 @@ export const useAppStore = create<AppState>((set, get) => {
     if (kind === "plan") {
       // Plan updates are full snapshots; render the latest one as a live
       // status area outside the message stream.
-      const entries = Array.isArray(u.entries) ? u.entries : [];
-      const lines = entries
+      const raw = Array.isArray(u.entries) ? u.entries : [];
+      const entries = raw
         .map((e) => {
           const entry = e as { content?: string; status?: string };
-          const mark =
-            entry.status === "completed"
-              ? "x"
-              : entry.status === "active"
-                ? ">"
-                : " ";
-          return `${mark} ${entry.content ?? ""}`;
+          return {
+            content: entry.content ?? "",
+            ...(typeof entry.status === "string"
+              ? { status: entry.status }
+              : {}),
+          } satisfies PlanEntry;
         })
-        .join("\n");
-      return { planText: lines || null };
+        .filter((e) => e.content);
+      return { planEntries: entries.length ? entries : null };
     }
     if (kind === "config_option_update") {
       const opts = Array.isArray(u.configOptions)
@@ -509,7 +572,7 @@ export const useAppStore = create<AppState>((set, get) => {
       updateQueue = [];
       set((state) => {
         let messages = state.messages;
-        let planText = state.planText;
+        let planEntries = state.planEntries;
         let configOptions = state.configOptions;
         let currentModeId = state.currentModeId;
         let usage = state.usage;
@@ -519,7 +582,7 @@ export const useAppStore = create<AppState>((set, get) => {
           const r = applyOne(messages, upd, meta);
           if (!r) continue;
           if (r.messages) messages = r.messages;
-          if (r.planText !== undefined) planText = r.planText;
+          if (r.planEntries !== undefined) planEntries = r.planEntries;
           if (r.configOptions) configOptions = r.configOptions;
           if (r.currentModeId !== undefined) currentModeId = r.currentModeId;
           if (r.usage) usage = r.usage;
@@ -527,7 +590,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return {
           messages,
-          planText,
+          planEntries,
           configOptions,
           currentModeId,
           usage,
@@ -538,6 +601,97 @@ export const useAppStore = create<AppState>((set, get) => {
   }
 
   // ---- connection lifecycle ----
+
+  // Bridge-wide broadcasts keep per-session activity for the session list
+  // (awaiting confirmation > running > just finished > idle).
+  function setActivity(
+    sessionId: string,
+    patch:
+      | Partial<SessionActivity>
+      | ((prev: SessionActivity) => Partial<SessionActivity>),
+  ): void {
+    set((state) => {
+      const prev: SessionActivity = state.sessionStates[sessionId] ?? {
+        running: false,
+        awaitingPermission: false,
+      };
+      const next = {
+        ...prev,
+        ...(typeof patch === "function" ? patch(prev) : patch),
+      };
+      if (
+        next.running === prev.running &&
+        next.awaitingPermission === prev.awaitingPermission &&
+        next.finishedAt === prev.finishedAt
+      ) {
+        return {};
+      }
+      return { sessionStates: { ...state.sessionStates, [sessionId]: next } };
+    });
+  }
+
+  // Locates the tool_call part the bridge emits right before an interaction
+  // request; its content holds the plan/question text (ADR 0003).
+  function findToolCallPart(
+    msgs: ChatMessage[],
+    toolCallId: string,
+  ): ToolCallPart | null {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant") continue;
+      for (let j = m.parts.length - 1; j >= 0; j--) {
+        const p = m.parts[j];
+        if (p.type === "tool-call" && p.toolCallId === toolCallId) return p;
+      }
+    }
+    return null;
+  }
+
+  function buildApprovalContext(
+    params: Record<string, unknown>,
+  ): ApprovalContext | undefined {
+    const tc = (params.toolCall ?? null) as {
+      toolCallId?: unknown;
+      rawInput?: unknown;
+    } | null;
+    if (!tc || typeof tc !== "object") return undefined;
+    const toolCallId =
+      typeof tc.toolCallId === "string" && tc.toolCallId
+        ? tc.toolCallId
+        : undefined;
+    const part = toolCallId
+      ? findToolCallPart(get().messages, toolCallId)
+      : null;
+    const rawInput = tc.rawInput;
+    const plan =
+      rawInput &&
+      typeof rawInput === "object" &&
+      typeof (rawInput as { plan?: unknown }).plan === "string"
+        ? (rawInput as { plan: string }).plan
+        : undefined;
+    let rawInputText: string | undefined;
+    if (rawInput != null) {
+      try {
+        rawInputText =
+          typeof rawInput === "string"
+            ? rawInput
+            : JSON.stringify(rawInput, null, 2);
+      } catch {
+        rawInputText = String(rawInput);
+      }
+    }
+    if (!toolCallId && rawInputText == null) return undefined;
+    return {
+      toolCallId,
+      // Part fields first (richer); title = the wire title stored in toolName.
+      toolName: part?.rawName ?? part?.toolName,
+      kind: part?.kind,
+      title: part?.toolName,
+      detail: part?.detail,
+      plan,
+      rawInputText,
+    };
+  }
 
   function scheduleReconnect(): void {
     const s = get();
@@ -575,7 +729,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         pendingPrompts: [],
-        planText: null,
+        planEntries: null,
         permission: null,
         notice: "notice.instanceGone",
         replayCursor: null,
@@ -587,6 +741,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         usageStats: null,
+        sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -609,13 +764,17 @@ export const useAppStore = create<AppState>((set, get) => {
         if (stale()) return;
         if (state === "open") {
           reconnectAttempt = 0;
-          set({ connState: "open" });
+          // Activity is broadcast-only: a fresh connection knows nothing
+          // until events arrive (active session's turnActive is restored by
+          // loadSession's replay).
+          set({ connState: "open", sessionStates: {} });
         } else if (state === "closed") {
           if (get().instanceId === instanceId) {
             // The pending permission request dies with the socket; don't
-            // leave a dead dialog that silently swallows taps.
+            // leave a dead dialog that silently swallows taps. Broadcast
+            // activity is equally untrustworthy now.
             pendingRespond = null;
-            set({ permission: null });
+            set({ permission: null, sessionStates: {} });
             scheduleReconnect();
           }
         }
@@ -630,6 +789,20 @@ export const useAppStore = create<AppState>((set, get) => {
       },
       onTurnState: (sessionId, running) => {
         if (stale()) return;
+        setActivity(
+          sessionId,
+          running
+            ? {
+                running: true,
+                awaitingPermission: false,
+                finishedAt: undefined,
+              }
+            : {
+                running: false,
+                awaitingPermission: false,
+                finishedAt: Date.now(),
+              },
+        );
         if (sessionId !== get().activeSessionId) return;
         if (running) {
           set({ isRunning: true });
@@ -650,11 +823,13 @@ export const useAppStore = create<AppState>((set, get) => {
           const options = Array.isArray(req.params.options)
             ? (req.params.options as PermissionOption[])
             : [];
+          setActivity(sessionId, { awaitingPermission: true });
           set({
             permission: {
               requestId: req.id,
               sessionId,
               options: options.filter((o) => typeof o.optionId === "string"),
+              context: buildApprovalContext(req.params),
             },
           });
           // respond is captured by answerPermission through the stored request id.
@@ -668,7 +843,9 @@ export const useAppStore = create<AppState>((set, get) => {
       },
       onCancelRequest: (id) => {
         // We lost the Permission Race; drop the dialog.
-        if (get().permission?.requestId === id) {
+        const lost = get().permission;
+        if (lost?.requestId === id) {
+          setActivity(lost.sessionId, { awaitingPermission: false });
           set({ permission: null });
           pendingRespond = null;
         }
@@ -705,7 +882,7 @@ export const useAppStore = create<AppState>((set, get) => {
     activeSessionId: null,
     messages: [],
     pendingPrompts: [],
-    planText: null,
+    planEntries: null,
     isRunning: false,
     permission: null,
     notice: null,
@@ -718,6 +895,7 @@ export const useAppStore = create<AppState>((set, get) => {
     usage: null,
     availableCommands: [],
     usageStats: null,
+    sessionStates: {},
     quotaUnavailable: false,
     loadingSession: false,
 
@@ -752,7 +930,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         pendingPrompts: [],
-        planText: null,
+        planEntries: null,
         permission: null,
         notice: null,
         replayCursor: null,
@@ -764,6 +942,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         usageStats: null,
+        sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -805,7 +984,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         pendingPrompts: [],
-        planText: null,
+        planEntries: null,
         permission: null,
         notice: null,
         replayCursor: null,
@@ -817,6 +996,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         usageStats: null,
+        sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
       });
@@ -860,7 +1040,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         pendingPrompts: [],
-        planText: null,
+        planEntries: null,
         permission: null,
         notice: null,
         replayCursor: null,
@@ -872,6 +1052,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         usageStats: null,
+        sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
         isRunning: false,
@@ -886,7 +1067,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: sessionId,
         messages: [],
         pendingPrompts: [],
-        planText: null,
+        planEntries: null,
         permission: null,
         replayCursor: null,
         hasMore: false,
@@ -927,6 +1108,7 @@ export const useAppStore = create<AppState>((set, get) => {
           // idle composer, which would let a prompt collide with the turn.
           isRunning: meta?.turnActive === true,
         });
+        setActivity(sessionId, { running: meta?.turnActive === true });
         // History is live: send whatever queued while the replay streamed
         // (flushPending no-ops while a restored turn is running — its
         // turnState end event does the flushing then).
@@ -1136,11 +1318,15 @@ export const useAppStore = create<AppState>((set, get) => {
     answerPermission: (requestId, optionId) => {
       const entry = pendingRespond;
       if (!entry || entry.id !== requestId) return;
+      const sid = get().permission?.sessionId;
       pendingRespond = null;
       entry.respond({ outcome: { outcome: "selected", optionId } });
+      if (sid) setActivity(sid, { awaitingPermission: false });
       set({ permission: null });
     },
 
     dismissNotice: () => set({ notice: null }),
+
+    notify: (text) => set({ notice: text }),
   };
 });

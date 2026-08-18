@@ -1,12 +1,19 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Menu, SlidersHorizontal } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Menu,
+  SlidersHorizontal,
+} from "lucide-react";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
 import { SessionPanel } from "../components/SessionPanel";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { Spinner } from "../components/Spinner";
-import { useAppStore } from "../store/appStore";
+import { useAppStore, type PlanEntry } from "../store/appStore";
 
 function baseName(path: string | undefined): string {
   if (!path) return "";
@@ -18,6 +25,43 @@ function fmtK(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
 }
 
+function PlanPanel({ entries }: { entries: PlanEntry[] }) {
+  const { t } = useTranslation();
+  const done = entries.filter((e) => e.status === "completed").length;
+  return (
+    <details className="border-b border-hairline bg-surface/60 px-4 py-2 text-xs text-dim">
+      <summary className="group flex cursor-pointer select-none items-center gap-1.5 text-dim [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="size-3.5 shrink-0 text-faint transition-transform group-open:rotate-180" />
+        <span>
+          {t("chat.plan")} · {done}/{entries.length}
+        </span>
+      </summary>
+      <ul className="mt-1.5 flex flex-col gap-1 pb-1">
+        {entries.map((e, i) => (
+          <li key={i} className="flex items-start gap-1.5">
+            {e.status === "completed" ? (
+              <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-400" />
+            ) : e.status === "active" ? (
+              <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-blue-400" />
+            ) : (
+              <Circle className="mt-0.5 size-3.5 shrink-0 text-faint" />
+            )}
+            <span
+              className={
+                e.status === "completed"
+                  ? "text-faint line-through"
+                  : "text-dim"
+              }
+            >
+              {e.content}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function ChatScreen() {
   const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -26,13 +70,15 @@ export function ChatScreen() {
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const connState = useAppStore((s) => s.connState);
-  const planText = useAppStore((s) => s.planText);
+  const planEntries = useAppStore((s) => s.planEntries);
   const notice = useAppStore((s) => s.notice);
   const usage = useAppStore((s) => s.usage);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
 
   const instance = instances.find((i) => i.id === instanceId);
-  const session = instance?.sessions?.find((s) => s.sessionId === activeSessionId);
+  const session = instance?.sessions?.find(
+    (s) => s.sessionId === activeSessionId,
+  );
   const workspace = baseName(instance?.workspace);
   const messages = useAppStore((s) => s.messages);
 
@@ -77,11 +123,16 @@ export function ChatScreen() {
           {workspace && (
             <div className="truncate text-[11px] text-faint">
               {workspace}
-              {usage && usage.size > 0 && ` · ${fmtK(usage.used)}/${fmtK(usage.size)}`}
+              {usage &&
+                usage.size > 0 &&
+                ` · ${fmtK(usage.used)}/${fmtK(usage.size)}`}
             </div>
           )}
         </div>
-        <span className={`mr-1.5 size-2 shrink-0 rounded-full ${statusDot}`} aria-label={connState} />
+        <span
+          className={`mr-1.5 size-2 shrink-0 rounded-full ${statusDot}`}
+          aria-label={connState}
+        />
         <button
           onClick={() => setPanelOpen(true)}
           aria-label={t("panel.session")}
@@ -93,7 +144,9 @@ export function ChatScreen() {
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/[0.06]">
             <div
               className="h-full bg-blue-500"
-              style={{ width: `${Math.min(100, (usage.used / usage.size) * 100)}%` }}
+              style={{
+                width: `${Math.min(100, (usage.used / usage.size) * 100)}%`,
+              }}
             />
           </div>
         )}
@@ -114,11 +167,8 @@ export function ChatScreen() {
         </div>
       )}
 
-      {planText && (
-        <details className="border-b border-hairline bg-surface/60 px-4 py-2 text-xs text-dim">
-          <summary className="cursor-pointer select-none text-dim">{t("chat.plan")}</summary>
-          <pre className="mt-1 whitespace-pre-wrap font-sans">{planText}</pre>
-        </details>
+      {planEntries && planEntries.length > 0 && (
+        <PlanPanel entries={planEntries} />
       )}
 
       <div className="min-h-0 flex-1">

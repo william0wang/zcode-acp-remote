@@ -35,7 +35,16 @@
     "pending": "待发送",
     "sendNow": "立即发送",
     "discard": "移除",
-    "send": "发送"
+    "send": "发送",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "jumpToLatest": "回到底部",
+    "searchPlaceholder": "搜索会话",
+    "noMatches": "没有匹配的会话",
+    "activityAwaiting": "等待确认",
+    "activityRunning": "运行中",
+    "activityFinished": "已完成"
   },
   "panel": {
     "title": "设置",
@@ -59,6 +68,9 @@
   },
   "permission": {
     "title": "权限请求",
+    "planTitle": "可以开始编码了吗？",
+    "questionTitle": "需要你回答",
+    "sessionLabel": "会话",
     "hint": "所有客户端中最先应答的生效"
   },
   "notice": {
