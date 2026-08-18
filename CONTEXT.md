@@ -31,3 +31,17 @@ _Avoid_: sync, history download
 First-response-wins semantics of interaction requests across clients; losing
 clients receive `$/cancel_request`.
 _Avoid_: permission conflict
+
+**Approval Card**:
+The single bottom-sheet surface rendering every `session/request_permission`
+request. Three shapes: Plan Approval (ExitPlanMode), Tool Permission, and
+Question (AskUserQuestion). Context shown on the card comes from the tool_call
+matched by `toolCallId`, never guessed from the options alone.
+_Avoid_: permission dialog, confirm popup
+
+**Session Activity**:
+The per-session display state in the session list: awaiting confirmation,
+running, just finished (60s window after a turn ends), or idle. Derived from
+bridge-wide broadcasts; not persisted and unknown for other sessions until the
+first broadcast after a reconnect.
+_Avoid_: session status, online status

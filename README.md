@@ -33,8 +33,10 @@ pnpm tauri android build --apk --debug
 # -> src-tauri/gen/android/app/build/outputs/apk/universal/debug/
 ```
 
-Identifier: `app.zcode.acp` (immutable once installed). The app icon is still
-the Tauri default; replace `src-tauri/icons/` when a real one exists.
+Identifier: `app.zcode.acp` (immutable once installed). The icon set is
+generated from `scripts/gen-icon.mjs` (SVG via `sharp` → 1024px source) —
+rerun `node scripts/gen-icon.mjs && pnpm tauri icon src-tauri/icons/app-icon.png`
+after changing the design.
 
 ## Standalone web deployment
 
