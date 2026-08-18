@@ -392,9 +392,20 @@ export const useAppStore = create<AppState>((set, get) => {
       };
     }
     if (kind === "tool_call") {
-      const meta = (
-        u._meta as { claudeCode?: { toolName?: unknown } } | undefined
-      )?.claudeCode;
+      const updateMeta = u._meta as
+        | {
+            claudeCode?: { toolName?: unknown };
+            zcode?: { collapsed?: unknown; kind?: unknown };
+          }
+        | undefined;
+      const meta = updateMeta?.claudeCode;
+      // Replay harness folds (server 0.6.0): handoff summaries and rewritten
+      // tool transcripts arrive as completed tool_calls flagged in _meta.zcode.
+      const fold =
+        updateMeta?.zcode?.collapsed === true &&
+        typeof updateMeta.zcode.kind === "string"
+          ? updateMeta.zcode.kind
+          : null;
       // The bridge ships the plan/question text as the tool_call's initial
       // content — keep it in detail so approval cards can show it.
       const part = {
@@ -404,6 +415,7 @@ export const useAppStore = create<AppState>((set, get) => {
         detail: contentText(u.content),
         status: String(u.status ?? "pending"),
         ...(typeof u.kind === "string" ? { kind: u.kind } : {}),
+        ...(fold ? { foldKind: fold } : {}),
         ...(typeof meta?.toolName === "string"
           ? { rawName: meta.toolName }
           : {}),

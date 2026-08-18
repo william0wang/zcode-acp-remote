@@ -169,6 +169,10 @@ export interface ToolCallPart {
   // Raw backend tool name from `_meta.claudeCode.toolName` (e.g. "Bash"),
   // distinct from `toolName` which holds the wire title "Bash: npm test".
   rawName?: string;
+  // Replay-only harness fold (`_meta.zcode.kind` on `histfold_` tool_calls,
+  // server 0.6.0): "context-handoff" | "tool-transcript". The full plumbing
+  // text rides `detail` behind the card's expand.
+  foldKind?: string;
   diffs?: AcpDiffContent[];
 }
 

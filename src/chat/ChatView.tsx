@@ -36,6 +36,8 @@ import {
   FilePen,
   FileText,
   Globe,
+  History,
+  Layers,
   ListChecks,
   Search,
   Square,
@@ -75,6 +77,7 @@ const convertMessage = (m: ChatMessage): ThreadMessageLike => ({
         title: p.toolName,
         ...(p.kind ? { kind: p.kind } : {}),
         ...(p.rawName ? { rawName: p.rawName } : {}),
+        ...(p.foldKind ? { foldKind: p.foldKind } : {}),
         ...(p.diffs ? { diffs: JSON.stringify(p.diffs) } : {}),
       },
       result: p.status === "completed" ? p.detail : p.status,
@@ -114,11 +117,20 @@ const TOOL_KIND_META: Record<string, { icon: LucideIcon; className: string }> =
     other: { icon: Wrench, className: "text-faint" },
   };
 
+// Replay harness folds (`_meta.zcode.kind`, server 0.6.0): collapsed-by-default
+// plumbing cards; the summary row shows the label only, full text behind expand.
+const TOOL_FOLD_META: Record<string, { icon: LucideIcon; className: string }> =
+  {
+    "context-handoff": { icon: Layers, className: "text-amber-400" },
+    "tool-transcript": { icon: History, className: "text-zinc-400" },
+  };
+
 interface ToolCardArgs {
   detail?: string;
   kind?: string;
   rawName?: string;
   title?: string;
+  foldKind?: string;
   diffs?: string;
 }
 
@@ -160,25 +172,33 @@ function DiffBlock({ diff }: { diff: AcpDiffContent }) {
 }
 
 function ToolCard({ part }: { part: { toolName: string; args?: unknown } }) {
+  const { t } = useTranslation();
   const a = (part.args ?? {}) as ToolCardArgs;
   const detail = a.detail ?? "";
   const diffs = useMemo(() => parseDiffs(a.diffs), [a.diffs]);
-  const meta = TOOL_KIND_META[a.kind ?? ""] ?? TOOL_KIND_META.other;
+  const foldKind = typeof a.foldKind === "string" ? a.foldKind : null;
+  const foldMeta = foldKind ? (TOOL_FOLD_META[foldKind] ?? null) : null;
+  const meta = foldMeta ?? TOOL_KIND_META[a.kind ?? ""] ?? TOOL_KIND_META.other;
   const Icon = meta.icon;
   // `toolName` holds the wire title "Bash: npm test"; prefer the raw backend
-  // name, else the segment before the first colon.
+  // name, else the segment before the first colon. Handoff folds use the
+  // localized label — the wire title is English-only plumbing.
   const name =
-    a.rawName ||
-    (a.title ?? part.toolName).split(":")[0]?.trim() ||
-    part.toolName;
+    foldKind === "context-handoff"
+      ? t("chat.contextHandoff")
+      : a.rawName ||
+        (a.title ?? part.toolName).split(":")[0]?.trim() ||
+        part.toolName;
   return (
-    <details className="my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
+    <details className="group my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
       <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-dim">
         <Icon className={`size-3.5 shrink-0 ${meta.className}`} />
-        <span className="shrink-0 font-medium">{name}</span>
-        {detail && (
+        <span className="min-w-0 truncate font-medium">{name}</span>
+        {/* Fold summaries stay clean: the body is harness plumbing text. */}
+        {!foldKind && detail && (
           <span className="truncate text-faint">{detail.slice(0, 120)}</span>
         )}
+        <ChevronDown className="ml-auto size-3.5 shrink-0 text-faint transition-transform duration-200 group-open:rotate-180" />
       </summary>
       {diffs.length > 0 ? (
         <div className="border-t border-hairline px-2 py-2">
