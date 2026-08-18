@@ -17,9 +17,19 @@
 }
 
 html,
-body,
+body {
+  height: 100%;
+  /* The document itself never scrolls — only inner viewports do. Without
+     this the Android WebView pans the whole page (header included) to
+     reveal the focused composer when the soft keyboard opens. */
+  overflow: hidden;
+}
+
 #root {
   height: 100%;
+  /* Keyboard height (injected by MainActivity as --android-inset-ime):
+     lifts the app above the IME so the composer stays visible. */
+  padding-bottom: var(--safe-ime, 0px);
 }
 
 /*
@@ -32,6 +42,7 @@ body,
   --safe-bottom: max(env(safe-area-inset-bottom), var(--android-inset-bottom, 0px));
   --safe-left: max(env(safe-area-inset-left), var(--android-inset-left, 0px));
   --safe-right: max(env(safe-area-inset-right), var(--android-inset-right, 0px));
+  --safe-ime: var(--android-inset-ime, 0px);
 }
 
 body {

@@ -15,12 +15,16 @@ class MainActivity : TauriActivity() {
 
     // Edge-to-edge draws the WebView under the system bars, but Android
     // WebView reports env(safe-area-inset-*) as 0. Forward the real insets
-    // into the page as CSS variables (consumed via max() in index.css).
+    // into the page as CSS variables (consumed via max() in index.css). The
+    // IME height rides along as --android-inset-ime so the page can pad the
+    // composer above the keyboard instead of letting the WebView pan the
+    // whole document (which scrolls the header away).
     val content = findViewById<View>(android.R.id.content)
     ViewCompat.setOnApplyWindowInsetsListener(content) { _, insets ->
       val bars = insets.getInsets(
         WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
       )
+      val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
       val density = resources.displayMetrics.density
       fun px(v: Int) = "${v / density}px"
       val js = buildString {
@@ -28,6 +32,7 @@ class MainActivity : TauriActivity() {
         append("document.documentElement.style.setProperty('--android-inset-bottom','").append(px(bars.bottom)).append("');")
         append("document.documentElement.style.setProperty('--android-inset-left','").append(px(bars.left)).append("');")
         append("document.documentElement.style.setProperty('--android-inset-right','").append(px(bars.right)).append("');")
+        append("document.documentElement.style.setProperty('--android-inset-ime','").append(px(ime.bottom)).append("');")
       }
       findWebView(content)?.evaluateJavascript(js, null)
       insets
