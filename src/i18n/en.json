@@ -11,7 +11,8 @@
     "title": "Sessions",
     "refresh": "Refresh",
     "connecting": "Connecting…",
-    "empty": "No sessions yet. Open your editor with the bridge running."
+    "empty": "No sessions yet. Open your editor with the bridge running.",
+    "hubOffline": "Hub offline — it starts together with your editor. Waiting…"
   },
   "chat": {
     "empty": "No messages yet",

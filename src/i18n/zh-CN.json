@@ -11,7 +11,8 @@
     "title": "会话",
     "refresh": "刷新",
     "connecting": "连接中…",
-    "empty": "暂无会话。请先在编辑器中启动桥接。"
+    "empty": "还没有会话。在编辑器中启动 bridge。",
+    "hubOffline": "Hub 未在线——它会随编辑器一起启动，等待中…"
   },
   "chat": {
     "empty": "还没有消息",

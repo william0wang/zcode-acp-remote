@@ -4,8 +4,10 @@ import { HubApiError, HubClient } from "../lib/hub";
 import {
   clearProfileStorage,
   loadLang,
+  loadPending,
   loadProfile,
   saveLang,
+  savePending,
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
@@ -140,6 +142,9 @@ interface AppState {
   lang: Lang;
   instances: HubInstance[];
   instancesError: string | null;
+  // Hub unreachable (editor exited — it re-spawns the hub on demand). Expected
+  // state, rendered as a calm hint; polling continues until it returns.
+  hubOffline: boolean;
   connState: ConnState;
   instanceId: string | null;
   activeSessionId: string | null;
@@ -148,7 +153,9 @@ interface AppState {
   isRunning: boolean;
   // Follow-ups typed while a turn is running or a replay is still loading;
   // flushed in order the moment the prompt settles / the session attaches.
-  pendingPrompts: string[];
+  // Keyed by sessionId and persisted — drafts survive session switches and
+  // app restarts.
+  pendingPrompts: Record<string, string[]>;
   permission: PendingPermission | null;
   notice: string | null;
   // Pagination state from the attach response's replayMeta.
@@ -240,10 +247,22 @@ export const useAppStore = create<AppState>((set, get) => {
     const s = get();
     if (s.connState !== "open" || !s.activeSessionId) return;
     if (s.loadingSession || s.isRunning) return;
-    const next = s.pendingPrompts[0];
+    const next = s.pendingPrompts[s.activeSessionId]?.[0];
     if (next == null) return;
-    set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
+    setQueue(s.activeSessionId, s.pendingPrompts[s.activeSessionId].slice(1));
     void get().runPrompt(next);
+  }
+
+  // Every queue mutation goes through here so state and localStorage stay in
+  // sync (drafts must survive switches/restarts). Empty queues drop the key.
+  function setQueue(sid: string, next: string[]): void {
+    set((state) => {
+      const map = { ...state.pendingPrompts };
+      if (next.length > 0) map[sid] = next;
+      else delete map[sid];
+      savePending(map);
+      return { pendingPrompts: map };
+    });
   }
 
   // The ACP schema marks cwd + mcpServers as REQUIRED on session/new and
@@ -751,7 +770,6 @@ export const useAppStore = create<AppState>((set, get) => {
         instanceId: null,
         activeSessionId: null,
         messages: [],
-        pendingPrompts: [],
         planEntries: null,
         permission: null,
         notice: "notice.instanceGone",
@@ -900,11 +918,12 @@ export const useAppStore = create<AppState>((set, get) => {
     lang: "en",
     instances: [],
     instancesError: null,
+    hubOffline: false,
     connState: "idle",
     instanceId: null,
     activeSessionId: null,
     messages: [],
-    pendingPrompts: [],
+    pendingPrompts: loadPending(),
     planEntries: null,
     isRunning: false,
     permission: null,
@@ -930,7 +949,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     connectToHub: (profile) => {
       persistProfile(profile);
-      set({ profile, instances: [], instancesError: null });
+      set({ profile, instances: [], instancesError: null, hubOffline: false });
       startPolling();
     },
 
@@ -944,15 +963,17 @@ export const useAppStore = create<AppState>((set, get) => {
       reconnectAttempt = 0;
       dropQueuedUpdates();
       clearProfileStorage();
+      savePending({});
       set({
         profile: null,
         instances: [],
         instancesError: null,
+        hubOffline: false,
         connState: "idle",
         instanceId: null,
         activeSessionId: null,
         messages: [],
-        pendingPrompts: [],
+        pendingPrompts: {},
         planEntries: null,
         permission: null,
         notice: null,
@@ -983,14 +1004,20 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const instances = await client.instances(opts?.probe === true);
         if (get().profile !== profile) return; // hub changed mid-flight
-        set({ instances, instancesError: null });
+        set({ instances, instancesError: null, hubOffline: false });
       } catch (e) {
         if (get().profile !== profile) return;
+        if (e instanceof HubApiError && e.network) {
+          // Hub unreachable is expected while no editor runs (bridges re-spawn
+          // it on demand) — a calm offline hint, not an error banner.
+          set({ instances: [], instancesError: null, hubOffline: true });
+          return;
+        }
         const msg =
           e instanceof HubApiError
             ? e.message
             : `discovery failed: ${(e as Error).message}`;
-        set({ instancesError: msg });
+        set({ instancesError: msg, hubOffline: false });
       }
     },
 
@@ -1006,7 +1033,6 @@ export const useAppStore = create<AppState>((set, get) => {
         connState: "connecting",
         activeSessionId: null,
         messages: [],
-        pendingPrompts: [],
         planEntries: null,
         permission: null,
         notice: null,
@@ -1062,7 +1088,6 @@ export const useAppStore = create<AppState>((set, get) => {
         instanceId: null,
         activeSessionId: null,
         messages: [],
-        pendingPrompts: [],
         planEntries: null,
         permission: null,
         notice: null,
@@ -1089,7 +1114,6 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         activeSessionId: sessionId,
         messages: [],
-        pendingPrompts: [],
         planEntries: null,
         permission: null,
         replayCursor: null,
@@ -1266,7 +1290,10 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       if (s.isRunning || s.loadingSession) {
-        set((state) => ({ pendingPrompts: [...state.pendingPrompts, text] }));
+        setQueue(s.activeSessionId, [
+          ...(s.pendingPrompts[s.activeSessionId] ?? []),
+          text,
+        ]);
         return;
       }
       await get().runPrompt(text);
@@ -1312,23 +1339,31 @@ export const useAppStore = create<AppState>((set, get) => {
 
     forceSendPending: () => {
       const s = get();
-      if (s.pendingPrompts.length === 0) return;
+      const sid = s.activeSessionId;
+      if (!sid) return;
+      const queue = s.pendingPrompts[sid] ?? [];
+      if (queue.length === 0) return;
       // During replay there is no turn to interrupt; the queue fires on load.
       if (s.loadingSession) return;
       if (s.isRunning) {
         // Cancelling settles the running prompt, which auto-flushes the queue.
         get().cancelTurn();
       } else {
-        const next = s.pendingPrompts[0];
-        set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
-        void get().runPrompt(next);
+        setQueue(sid, queue.slice(1));
+        void get().runPrompt(queue[0]);
       }
     },
 
     discardPending: (index) => {
-      set((state) => ({
-        pendingPrompts: state.pendingPrompts.filter((_, i) => i !== index),
-      }));
+      const s = get();
+      const sid = s.activeSessionId;
+      if (!sid) return;
+      const queue = s.pendingPrompts[sid] ?? [];
+      if (index < 0 || index >= queue.length) return;
+      setQueue(
+        sid,
+        queue.filter((_, i) => i !== index),
+      );
     },
 
     cancelTurn: () => {

@@ -379,7 +379,7 @@ const UserMessage = memo(function UserMessage({
     <MessagePrimitive.Root className="flex min-w-0 justify-end">
       <div
         onContextMenu={copyFrom}
-        className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink select-none"
+        className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-sm text-ink select-none"
       >
         <MessagePrimitive.Parts>
           {({ part }) => (part.type === "text" ? <>{part.text}</> : null)}
@@ -579,11 +579,16 @@ function Composer() {
 // attaches — or right away via force-send (which interrupts the current turn).
 function PendingPrompts() {
   const { t } = useTranslation();
-  const pendingPrompts = useAppStore((s) => s.pendingPrompts);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const pendingMap = useAppStore((s) => s.pendingPrompts);
   const forceSendPending = useAppStore((s) => s.forceSendPending);
   const discardPending = useAppStore((s) => s.discardPending);
   const loadingSession = useAppStore((s) => s.loadingSession);
   const lastRef = useRef<HTMLDivElement | null>(null);
+  // Per-session queue (persisted across switches/restarts) — show only the
+  // active session's drafts.
+  const pendingPrompts =
+    (activeSessionId != null ? pendingMap[activeSessionId] : undefined) ?? [];
 
   useEffect(() => {
     lastRef.current?.scrollIntoView({ block: "end" });
@@ -598,7 +603,7 @@ function PendingPrompts() {
           ref={i === pendingPrompts.length - 1 ? lastRef : undefined}
           className="flex min-w-0 justify-end opacity-60"
         >
-          <div className="flex max-w-[85%] min-w-0 flex-col break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink">
+          <div className="flex max-w-[85%] min-w-0 flex-col break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-sm text-ink">
             <span>{text}</span>
             <span className="mt-1 flex items-center justify-end gap-3 text-[11px]">
               <span className="text-faint">{t("chat.pending")}</span>

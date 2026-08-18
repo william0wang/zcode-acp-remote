@@ -12,6 +12,7 @@ export function InstancePicker() {
   const { t } = useTranslation();
   const instances = useAppStore((s) => s.instances);
   const instancesError = useAppStore((s) => s.instancesError);
+  const hubOffline = useAppStore((s) => s.hubOffline);
   const connState = useAppStore((s) => s.connState);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
@@ -36,7 +37,9 @@ export function InstancePicker() {
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
       <header className="flex shrink-0 items-center gap-1 px-3 pb-2 pt-[max(var(--safe-top),0.75rem)]">
-        <h1 className="flex-1 text-lg font-semibold tracking-tight">{t("picker.title")}</h1>
+        <h1 className="flex-1 text-lg font-semibold tracking-tight">
+          {t("picker.title")}
+        </h1>
         <button
           onClick={() => void refreshInstances({ probe: true })}
           aria-label={t("picker.refresh")}
@@ -56,6 +59,11 @@ export function InstancePicker() {
       {instancesError && (
         <p className="mx-4 mb-2 shrink-0 rounded-lg border border-amber-900 bg-amber-950 px-3 py-2 text-xs text-amber-300">
           {instancesError}
+        </p>
+      )}
+      {hubOffline && (
+        <p className="mx-4 mb-2 shrink-0 rounded-lg bg-surface px-3 py-2 text-xs text-faint ring-1 ring-hairline">
+          {t("picker.hubOffline")}
         </p>
       )}
       {connecting && (
