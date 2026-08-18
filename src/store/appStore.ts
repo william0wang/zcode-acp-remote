@@ -9,7 +9,22 @@ import {
   saveProfile as persistProfile,
   type Lang,
 } from "../lib/storage";
-import { contentText, type AccountUsageStats, type ChatMessage, type ChatPart, type ConfigOption, type ConnectionProfile, type ContextUsage, type GoUsageStats, type GoWindowEntry, type GlmUsageStats, type HubInstance, type QuotaItem, type SessionUpdate, type SlashCommand } from "../lib/types";
+import {
+  contentText,
+  type AccountUsageStats,
+  type ChatMessage,
+  type ChatPart,
+  type ConfigOption,
+  type ConnectionProfile,
+  type ContextUsage,
+  type GoUsageStats,
+  type GoWindowEntry,
+  type GlmUsageStats,
+  type HubInstance,
+  type QuotaItem,
+  type SessionUpdate,
+  type SlashCommand,
+} from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
@@ -23,12 +38,17 @@ interface ReplayMeta {
   cursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
+  // Bridge flag: a turn is still in flight for this session (someone else's
+  // prompt, or one that survived our reconnect) — restore the running UI.
+  turnActive?: boolean;
 }
 
 function readReplayMeta(result: unknown): ReplayMeta | null {
   if (typeof result !== "object" || result === null) return null;
   const meta = (result as { replayMeta?: unknown }).replayMeta;
-  return typeof meta === "object" && meta !== null ? (meta as ReplayMeta) : null;
+  return typeof meta === "object" && meta !== null
+    ? (meta as ReplayMeta)
+    : null;
 }
 
 // Validates an account/usage_stats result into the combined GLM + Opencode
@@ -50,9 +70,9 @@ function parseUsageStats(result: unknown): AccountUsageStats | null {
 
   return {
     glm: {
-      kind: (["success", "auth_error", "rate_limited", "unavailable"] as const).includes(
-        glm.kind as GlmUsageStats["kind"],
-      )
+      kind: (
+        ["success", "auth_error", "rate_limited", "unavailable"] as const
+      ).includes(glm.kind as GlmUsageStats["kind"])
         ? (glm.kind as GlmUsageStats["kind"])
         : "unavailable",
       ...(typeof glm.level === "string" ? { level: glm.level } : {}),
@@ -92,8 +112,8 @@ interface AppState {
   messages: ChatMessage[];
   planText: string | null;
   isRunning: boolean;
-  // Follow-ups typed while a turn is running; flushed in order the moment
-  // the current prompt settles (or immediately via forceSendPending).
+  // Follow-ups typed while a turn is running or a replay is still loading;
+  // flushed in order the moment the prompt settles / the session attaches.
   pendingPrompts: string[];
   permission: PendingPermission | null;
   notice: string | null;
@@ -123,7 +143,10 @@ interface AppState {
   forgetHub: () => void;
   setLang: (lang: Lang) => void;
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
-  connectInstance: (instanceId: string, attachSessionId?: string) => Promise<void>;
+  connectInstance: (
+    instanceId: string,
+    attachSessionId?: string,
+  ) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Detaches from the instance and returns to the session list; unlike
   // forgetHub the saved hub profile (and instance polling) stays alive.
@@ -163,6 +186,25 @@ export const useAppStore = create<AppState>((set, get) => {
   function hub(): HubClient | null {
     const p = get().profile;
     return p ? new HubClient(p.hubUrl, p.token) : null;
+  }
+
+  // True while a session/prompt WE sent is in flight. Turn-end notifications
+  // ($/zcode/turnState) arrive before the prompt response; those turns flush
+  // their queue in runPrompt's finally, so the notification path must not
+  // double-flush (it only handles restored/foreign turns).
+  let localPromptActive = false;
+
+  // Single flush point for the pending queue: after a local turn settles,
+  // after a restored (bridged) turn ends, and when an attach lands. The
+  // check-then-run is synchronous, so concurrent callers stay safe.
+  function flushPending(): void {
+    const s = get();
+    if (s.connState !== "open" || !s.activeSessionId) return;
+    if (s.loadingSession || s.isRunning) return;
+    const next = s.pendingPrompts[0];
+    if (next == null) return;
+    set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
+    void get().runPrompt(next);
   }
 
   // The ACP schema marks cwd + mcpServers as REQUIRED on session/new and
@@ -216,7 +258,10 @@ export const useAppStore = create<AppState>((set, get) => {
       ];
       return { ...message, parts };
     }
-    return { ...message, parts: [...message.parts, { type: partType, text } as ChatPart] };
+    return {
+      ...message,
+      parts: [...message.parts, { type: partType, text } as ChatPart],
+    };
   }
 
   // With a messageId, chunks group into that exact message (backend ids are
@@ -230,13 +275,20 @@ export const useAppStore = create<AppState>((set, get) => {
     text: string,
     partType: "text" | "thought",
   ): ChatMessage[] {
-    const mid = typeof u.messageId === "string" && u.messageId ? u.messageId : null;
+    const mid =
+      typeof u.messageId === "string" && u.messageId ? u.messageId : null;
     if (mid) {
       const i = msgs.findIndex((m) => m.id === mid);
-      if (i >= 0) return patchMessage(msgs, i, appendTextPart(msgs[i], text, partType));
+      if (i >= 0)
+        return patchMessage(msgs, i, appendTextPart(msgs[i], text, partType));
       return [
         ...msgs,
-        { id: mid, role, parts: [{ type: partType, text } as ChatPart], createdAt: Date.now() },
+        {
+          id: mid,
+          role,
+          parts: [{ type: partType, text } as ChatPart],
+          createdAt: Date.now(),
+        },
       ];
     }
     const ensured = ensureMessage(msgs, role);
@@ -245,8 +297,22 @@ export const useAppStore = create<AppState>((set, get) => {
     );
   }
 
-  function patchMessage(msgs: ChatMessage[], i: number, m: ChatMessage): ChatMessage[] {
+  function patchMessage(
+    msgs: ChatMessage[],
+    i: number,
+    m: ChatMessage,
+  ): ChatMessage[] {
     return msgs.slice(0, i).concat(m, msgs.slice(i + 1));
+  }
+
+  // `_meta.zcode.collapsed` on a replayed user chunk (context handoff and
+  // similar harness blocks) — the UI renders those behind an expand control.
+  function isCollapsedMeta(meta: unknown): boolean {
+    if (typeof meta !== "object" || meta === null) return false;
+    const zcode = (meta as { zcode?: { collapsed?: unknown } }).zcode;
+    return (
+      typeof zcode === "object" && zcode !== null && zcode.collapsed === true
+    );
   }
 
   // Applies one update; returns a partial state patch, or null when nothing
@@ -255,6 +321,7 @@ export const useAppStore = create<AppState>((set, get) => {
   function applyOne(
     msgs: ChatMessage[],
     u: SessionUpdate,
+    meta?: unknown,
   ): {
     messages?: ChatMessage[];
     planText?: string | null;
@@ -269,12 +336,21 @@ export const useAppStore = create<AppState>((set, get) => {
       const role = kind === "user_message_chunk" ? "user" : "assistant";
       const text = contentText(u.content);
       if (!text) return null;
-      return { messages: appendChunkMessage(msgs, u, role, text, "text") };
+      let next = appendChunkMessage(msgs, u, role, text, "text");
+      if (role === "user" && isCollapsedMeta(meta)) {
+        const mid = typeof u.messageId === "string" ? u.messageId : "";
+        const i = next.findIndex((m) => m.id === mid && !m.collapsed);
+        if (i >= 0)
+          next = patchMessage(next, i, { ...next[i], collapsed: true });
+      }
+      return { messages: next };
     }
     if (kind === "agent_thought_chunk") {
       const text = contentText(u.content);
       if (!text) return null;
-      return { messages: appendChunkMessage(msgs, u, "assistant", text, "thought") };
+      return {
+        messages: appendChunkMessage(msgs, u, "assistant", text, "thought"),
+      };
     }
     if (kind === "tool_call") {
       const part = {
@@ -284,14 +360,28 @@ export const useAppStore = create<AppState>((set, get) => {
         detail: "",
         status: String(u.status ?? "pending"),
       };
-      const mid = typeof u.messageId === "string" && u.messageId ? u.messageId : null;
+      const mid =
+        typeof u.messageId === "string" && u.messageId ? u.messageId : null;
       if (mid) {
         const i = msgs.findIndex((m) => m.id === mid);
         if (i >= 0) {
-          return { messages: patchMessage(msgs, i, { ...msgs[i], parts: [...msgs[i].parts, part] }) };
+          return {
+            messages: patchMessage(msgs, i, {
+              ...msgs[i],
+              parts: [...msgs[i].parts, part],
+            }),
+          };
         }
         return {
-          messages: [...msgs, { id: mid, role: "assistant", parts: [part], createdAt: Date.now() }],
+          messages: [
+            ...msgs,
+            {
+              id: mid,
+              role: "assistant",
+              parts: [part],
+              createdAt: Date.now(),
+            },
+          ],
         };
       }
       const ensured = ensureMessage(msgs, "assistant");
@@ -311,7 +401,11 @@ export const useAppStore = create<AppState>((set, get) => {
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
         if (m.role !== "assistant") continue;
-        if (!m.parts.some((p) => p.type === "tool-call" && p.toolCallId === toolCallId)) {
+        if (
+          !m.parts.some(
+            (p) => p.type === "tool-call" && p.toolCallId === toolCallId,
+          )
+        ) {
           continue;
         }
         const patched = {
@@ -322,7 +416,9 @@ export const useAppStore = create<AppState>((set, get) => {
               : p,
           ),
         };
-        return { messages: msgs.slice(0, i).concat(patched, msgs.slice(i + 1)) };
+        return {
+          messages: msgs.slice(0, i).concat(patched, msgs.slice(i + 1)),
+        };
       }
       return null;
     }
@@ -333,18 +429,27 @@ export const useAppStore = create<AppState>((set, get) => {
       const lines = entries
         .map((e) => {
           const entry = e as { content?: string; status?: string };
-          const mark = entry.status === "completed" ? "x" : entry.status === "active" ? ">" : " ";
+          const mark =
+            entry.status === "completed"
+              ? "x"
+              : entry.status === "active"
+                ? ">"
+                : " ";
           return `${mark} ${entry.content ?? ""}`;
         })
         .join("\n");
       return { planText: lines || null };
     }
     if (kind === "config_option_update") {
-      const opts = Array.isArray(u.configOptions) ? (u.configOptions as ConfigOption[]) : null;
+      const opts = Array.isArray(u.configOptions)
+        ? (u.configOptions as ConfigOption[])
+        : null;
       return opts ? { configOptions: opts } : null;
     }
     if (kind === "current_mode_update") {
-      return typeof u.currentModeId === "string" ? { currentModeId: u.currentModeId } : null;
+      return typeof u.currentModeId === "string"
+        ? { currentModeId: u.currentModeId }
+        : null;
     }
     if (kind === "usage_update") {
       const used = typeof u.used === "number" ? u.used : null;
@@ -354,11 +459,15 @@ export const useAppStore = create<AppState>((set, get) => {
     if (kind === "available_commands_update") {
       // Full snapshot, overwrite semantics — the bridge re-sends it after
       // each session/load, so keep the latest list.
-      const list = Array.isArray(u.availableCommands) ? u.availableCommands : null;
+      const list = Array.isArray(u.availableCommands)
+        ? u.availableCommands
+        : null;
       if (!list) return null;
       const commands = list.filter(
         (c): c is SlashCommand =>
-          typeof c === "object" && c !== null && typeof (c as SlashCommand).name === "string",
+          typeof c === "object" &&
+          c !== null &&
+          typeof (c as SlashCommand).name === "string",
       );
       return { availableCommands: commands };
     }
@@ -368,12 +477,14 @@ export const useAppStore = create<AppState>((set, get) => {
 
   // Replay bursts hundreds of updates in one go; batching them into a single
   // store write keeps render cost O(bursts) instead of O(chunks).
-  let updateQueue: { sessionId: string; u: SessionUpdate }[] = [];
+  let updateQueue: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
+    [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   // While a session/load_earlier request is in flight its updates must be
   // PREPENDED, not appended — buffer them until the request resolves.
   let collectingEarlier = false;
-  let earlierBuffer: { sessionId: string; u: SessionUpdate }[] = [];
+  let earlierBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
+    [];
 
   function dropQueuedUpdates(): void {
     updateQueue = [];
@@ -385,8 +496,12 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
-  function applyUpdate(sessionId: string, u: SessionUpdate): void {
-    updateQueue.push({ sessionId, u });
+  function applyUpdate(
+    sessionId: string,
+    u: SessionUpdate,
+    meta?: unknown,
+  ): void {
+    updateQueue.push({ sessionId, u, meta });
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
@@ -399,9 +514,9 @@ export const useAppStore = create<AppState>((set, get) => {
         let currentModeId = state.currentModeId;
         let usage = state.usage;
         let availableCommands = state.availableCommands;
-        for (const { sessionId: sid, u: upd } of batch) {
+        for (const { sessionId: sid, u: upd, meta } of batch) {
           if (state.activeSessionId !== sid) continue;
-          const r = applyOne(messages, upd);
+          const r = applyOne(messages, upd, meta);
           if (!r) continue;
           if (r.messages) messages = r.messages;
           if (r.planText !== undefined) planText = r.planText;
@@ -410,7 +525,14 @@ export const useAppStore = create<AppState>((set, get) => {
           if (r.usage) usage = r.usage;
           if (r.availableCommands) availableCommands = r.availableCommands;
         }
-        return { messages, planText, configOptions, currentModeId, usage, availableCommands };
+        return {
+          messages,
+          planText,
+          configOptions,
+          currentModeId,
+          usage,
+          availableCommands,
+        };
       });
     }, 120);
   }
@@ -434,7 +556,12 @@ export const useAppStore = create<AppState>((set, get) => {
     await s.refreshInstances({ probe: true });
     // Re-read after the await: the hub/instance may have changed meanwhile.
     const cur = get();
-    if (!cur.profile || cur.profile !== s.profile || cur.instanceId !== s.instanceId) return;
+    if (
+      !cur.profile ||
+      cur.profile !== s.profile ||
+      cur.instanceId !== s.instanceId
+    )
+      return;
     const still = cur.instances.some((i) => i.id === s.instanceId);
     if (!still) {
       // Instance gone: its sessions are gone too (contract).
@@ -493,13 +620,28 @@ export const useAppStore = create<AppState>((set, get) => {
           }
         }
       },
-      onUpdate: (sessionId, update) => {
+      onUpdate: (sessionId, update, meta) => {
         if (stale()) return;
         if (collectingEarlier && sessionId === get().activeSessionId) {
-          earlierBuffer.push({ sessionId, u: update });
+          earlierBuffer.push({ sessionId, u: update, meta });
           return;
         }
-        applyUpdate(sessionId, update);
+        applyUpdate(sessionId, update, meta);
+      },
+      onTurnState: (sessionId, running) => {
+        if (stale()) return;
+        if (sessionId !== get().activeSessionId) return;
+        if (running) {
+          set({ isRunning: true });
+          return;
+        }
+        // End-of-turn arrives BEFORE the prompt response for locally sent
+        // turns (the bridge notifies in its finally, responds on return) —
+        // those own their state in runPrompt's finally. Restored/foreign
+        // turns have no local prompt in flight: settle here and flush.
+        if (localPromptActive) return;
+        set({ isRunning: false });
+        flushPending();
       },
       onServerRequest: (req, respond) => {
         if (stale()) return;
@@ -548,7 +690,10 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
-  let pendingRespond: { id: number; respond: (result: unknown) => void } | null = null;
+  let pendingRespond: {
+    id: number;
+    respond: (result: unknown) => void;
+  } | null = null;
 
   return {
     profile: null,
@@ -639,7 +784,10 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ instances, instancesError: null });
       } catch (e) {
         if (get().profile !== profile) return;
-        const msg = e instanceof HubApiError ? e.message : `discovery failed: ${(e as Error).message}`;
+        const msg =
+          e instanceof HubApiError
+            ? e.message
+            : `discovery failed: ${(e as Error).message}`;
         set({ instancesError: msg });
       }
     },
@@ -760,19 +908,34 @@ export const useAppStore = create<AppState>((set, get) => {
           _meta: { zcode: { limit: REPLAY_TAIL_LIMIT } },
         });
         const meta = readReplayMeta(result);
-        const res = result as
-          | { modes?: { currentModeId?: string }; configOptions?: ConfigOption[] }
-          | null;
+        const res = result as {
+          modes?: { currentModeId?: string };
+          configOptions?: ConfigOption[];
+        } | null;
         set({
           replayCursor: meta?.cursor ?? null,
           hasMore: meta?.hasMore ?? false,
-          totalMessages: typeof meta?.totalMessages === "number" ? meta.totalMessages : null,
-          configOptions: Array.isArray(res?.configOptions) ? res!.configOptions! : [],
+          totalMessages:
+            typeof meta?.totalMessages === "number" ? meta.totalMessages : null,
+          configOptions: Array.isArray(res?.configOptions)
+            ? res!.configOptions!
+            : [],
           currentModeId: res?.modes?.currentModeId ?? null,
           loadingSession: false,
+          // A turn that survived the reconnect is still running on the bridge
+          // (replayMeta.turnActive): restore the running UI instead of the
+          // idle composer, which would let a prompt collide with the turn.
+          isRunning: meta?.turnActive === true,
         });
+        // History is live: send whatever queued while the replay streamed
+        // (flushPending no-ops while a restored turn is running — its
+        // turnState end event does the flushing then).
+        flushPending();
       } catch (e) {
-        set({ notice: `session/load failed: ${(e as Error).message}`, loadingSession: false });
+        set({
+          notice: `session/load failed: ${(e as Error).message}`,
+          loadingSession: false,
+        });
       }
     },
 
@@ -781,7 +944,13 @@ export const useAppStore = create<AppState>((set, get) => {
     loadEarlier: async () => {
       const s = get();
       if (!acp || s.connState !== "open") return false;
-      if (!s.activeSessionId || !s.replayCursor || !s.hasMore || s.loadingEarlier) return false;
+      if (
+        !s.activeSessionId ||
+        !s.replayCursor ||
+        !s.hasMore ||
+        s.loadingEarlier
+      )
+        return false;
       const sessionId = s.activeSessionId;
       set({ loadingEarlier: true });
       collectingEarlier = true;
@@ -799,18 +968,25 @@ export const useAppStore = create<AppState>((set, get) => {
         set((state) => {
           if (state.activeSessionId !== sessionId) return state;
           let segment: ChatMessage[] = [];
-          for (const { sessionId: sid, u } of page) {
+          for (const { sessionId: sid, u, meta } of page) {
             if (sid !== sessionId) continue;
-            const r = applyOne(segment, u);
+            const r = applyOne(segment, u, meta);
             if (r?.messages) segment = r.messages;
             // plan/config/usage in old pages are stale: take messages only
           }
           let rest = state.messages;
-          if (segment.length && rest.length && segment[segment.length - 1].id === rest[0].id) {
+          if (
+            segment.length &&
+            rest.length &&
+            segment[segment.length - 1].id === rest[0].id
+          ) {
             // Seam dedupe: the same message split across pages.
             const seam = segment[segment.length - 1];
             segment = segment.slice(0, -1);
-            rest = [{ ...seam, parts: [...seam.parts, ...rest[0].parts] }, ...rest.slice(1)];
+            rest = [
+              { ...seam, parts: [...seam.parts, ...rest[0].parts] },
+              ...rest.slice(1),
+            ];
           }
           const meta = readReplayMeta(result);
           return {
@@ -846,7 +1022,8 @@ export const useAppStore = create<AppState>((set, get) => {
           configId,
           value,
         });
-        const opts = (result as { configOptions?: ConfigOption[] } | null)?.configOptions;
+        const opts = (result as { configOptions?: ConfigOption[] } | null)
+          ?.configOptions;
         if (Array.isArray(opts)) set({ configOptions: opts });
         // The bridge also broadcasts config_option_update / current_mode_update
         // to every client (editor included) — the store picks those up too.
@@ -873,8 +1050,9 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     // Attach-only client: sessions are created in the editor, never here.
-    // ACP allows one prompt at a time: while a turn is running, new text
-    // queues as pending instead — it goes out the moment the turn settles.
+    // ACP allows one prompt at a time: while a turn is running or history is
+    // still replaying, new text queues as pending instead — a prompt sent
+    // mid-replay never reaches the session, so it must wait for the attach.
     sendPrompt: async (text) => {
       const s = get();
       if (!acp || s.connState !== "open") return;
@@ -882,7 +1060,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ notice: "notice.noSession" });
         return;
       }
-      if (s.isRunning) {
+      if (s.isRunning || s.loadingSession) {
         set((state) => ({ pendingPrompts: [...state.pendingPrompts, text] }));
         return;
       }
@@ -891,7 +1069,13 @@ export const useAppStore = create<AppState>((set, get) => {
 
     runPrompt: async (text) => {
       const s = get();
-      if (!acp || s.connState !== "open" || !s.activeSessionId) return;
+      if (
+        !acp ||
+        s.connState !== "open" ||
+        !s.activeSessionId ||
+        s.loadingSession
+      )
+        return;
       // Live turns never echo the user's message back (only replay does), so
       // insert it optimistically; replay replaces the whole history anyway.
       set((state) => {
@@ -904,6 +1088,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       const sessionId = s.activeSessionId;
       set({ isRunning: true });
+      localPromptActive = true;
       try {
         await acp.request("session/prompt", {
           sessionId,
@@ -912,20 +1097,19 @@ export const useAppStore = create<AppState>((set, get) => {
       } catch (e) {
         set({ notice: `prompt failed: ${(e as Error).message}` });
       } finally {
+        localPromptActive = false;
         set({ isRunning: false });
         // Auto-flush: the queue is FIFO, and each settled turn sends the next.
-        const stillOpen = get().connState === "open" && get().activeSessionId === sessionId;
-        const next = stillOpen ? get().pendingPrompts[0] : undefined;
-        if (next != null) {
-          set((state) => ({ pendingPrompts: state.pendingPrompts.slice(1) }));
-          await get().runPrompt(next);
-        }
+        // A concurrent re-attach defers to loadSession's own flush instead.
+        flushPending();
       }
     },
 
     forceSendPending: () => {
       const s = get();
       if (s.pendingPrompts.length === 0) return;
+      // During replay there is no turn to interrupt; the queue fires on load.
+      if (s.loadingSession) return;
       if (s.isRunning) {
         // Cancelling settles the running prompt, which auto-flushes the queue.
         get().cancelTurn();
@@ -937,7 +1121,9 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     discardPending: (index) => {
-      set((state) => ({ pendingPrompts: state.pendingPrompts.filter((_, i) => i !== index) }));
+      set((state) => ({
+        pendingPrompts: state.pendingPrompts.filter((_, i) => i !== index),
+      }));
     },
 
     cancelTurn: () => {

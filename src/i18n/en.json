@@ -30,6 +30,8 @@
     "untitled": "Untitled session",
     "thinking": "Thinking…",
     "thought": "Thought",
+    "contextHandoff": "Previous context summary",
+    "taskNotice": "Task notification",
     "pending": "Pending",
     "sendNow": "Send now",
     "discard": "Discard",

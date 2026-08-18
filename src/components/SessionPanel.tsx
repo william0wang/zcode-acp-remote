@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../store/appStore";
-import type { GoWindowEntry, QuotaItem } from "../lib/types";
+import type { GoWindowEntry } from "../lib/types";
 import { ConfigSheet } from "./ConfigSheet";
 import { PanelShell } from "./SidePanel";
 
@@ -31,18 +31,17 @@ const GO_STATUS: Record<string, string> = {
 };
 
 // One bar line — CLI layout: label, bar, then `NN% · reset · count` trailing.
+// The per-item MCP breakdown is deliberately dropped; the totals suffice.
 function QuotaRow({
   label,
   percent,
   resetMs,
   count,
-  detail,
 }: {
   label: string;
   percent: number;
   resetMs?: number;
   count?: number;
-  detail?: QuotaItem["detail"];
 }) {
   const clamped = Math.min(100, Math.max(0, percent));
   return (
@@ -61,11 +60,6 @@ function QuotaRow({
           style={{ width: `${clamped}%` }}
         />
       </div>
-      {detail?.map((d) => (
-        <p key={d.modelCode} className="mt-0.5 pl-1 font-mono text-[11px] text-faint">
-          {d.modelCode} {d.usage}
-        </p>
-      ))}
     </div>
   );
 }
@@ -151,7 +145,6 @@ export function SessionPanel({ onClose }: { onClose: () => void }) {
                       percent={it.usedPercent}
                       resetMs={it.nextResetTime}
                       count={it.usedCount}
-                      detail={it.detail}
                     />
                   ))
                 ) : (

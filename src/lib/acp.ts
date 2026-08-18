@@ -10,9 +10,17 @@ export interface ServerRequest {
 
 export interface AcpHandlers {
   onState: (state: AcpConnectionState) => void;
-  onUpdate: (sessionId: string, update: SessionUpdate) => void;
-  onServerRequest: (req: ServerRequest, respond: (result: unknown) => void) => void;
+  // `meta` is the notification-level `_meta` (replay flags like
+  // zcode.collapsed ride there, not inside the update).
+  onUpdate: (sessionId: string, update: SessionUpdate, meta?: unknown) => void;
+  onServerRequest: (
+    req: ServerRequest,
+    respond: (result: unknown) => void,
+  ) => void;
   onCancelRequest: (id: number) => void;
+  // Bridge extension `$/zcode/turnState`: a turn started/ended somewhere the
+  // client can't infer (another client's prompt, restored after re-attach).
+  onTurnState?: (sessionId: string, running: boolean) => void;
 }
 
 interface PendingEntry {
@@ -84,7 +92,10 @@ export class AcpConnection {
     });
   }
 
-  request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  request(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("connection not open"));
@@ -136,6 +147,7 @@ export class AcpConnection {
       params?: Record<string, unknown>;
       result?: unknown;
       error?: { message: string };
+      _meta?: unknown;
     };
     try {
       msg = JSON.parse(data);
@@ -151,9 +163,23 @@ export class AcpConnection {
           (result) => this.respondServerRequest(msg.id as number, result),
         );
       } else if (msg.method === "session/update") {
-        const p = msg.params as { sessionId?: string; update?: SessionUpdate } | undefined;
+        // The replay `_meta` (zcode.collapsed etc.) is TOP-LEVEL on the
+        // notification per the wire contract; params-level is a fallback.
+        const p = msg.params as
+          | { sessionId?: string; update?: SessionUpdate; _meta?: unknown }
+          | undefined;
         if (p && typeof p.sessionId === "string" && p.update) {
-          this.handlers.onUpdate(p.sessionId, p.update);
+          this.handlers.onUpdate(p.sessionId, p.update, msg._meta ?? p._meta);
+        }
+      } else if (msg.method === "$/zcode/turnState") {
+        const p = msg.params as
+          { sessionId?: string; running?: boolean } | undefined;
+        if (
+          p &&
+          typeof p.sessionId === "string" &&
+          typeof p.running === "boolean"
+        ) {
+          this.handlers.onTurnState?.(p.sessionId, p.running);
         }
       } else if (msg.method === "$/cancel_request") {
         const id = (msg.params as { id?: number } | undefined)?.id;
@@ -166,7 +192,8 @@ export class AcpConnection {
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
-      if (msg.error) entry.reject(new Error(msg.error.message ?? "JSON-RPC error"));
+      if (msg.error)
+        entry.reject(new Error(msg.error.message ?? "JSON-RPC error"));
       else entry.resolve(msg.result);
     }
   }

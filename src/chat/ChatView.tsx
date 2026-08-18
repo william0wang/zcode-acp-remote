@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AuiIf,
   AssistantRuntimeProvider,
@@ -13,7 +21,16 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Brain, ChevronDown, Square, Wrench, X, Zap } from "lucide-react";
+import {
+  ArrowUp,
+  Bell,
+  Brain,
+  ChevronDown,
+  Square,
+  Wrench,
+  X,
+  Zap,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
@@ -63,18 +80,16 @@ function MarkdownText({ text }: { text: string }) {
   );
 }
 
-function ToolCard({
-  part,
-}: {
-  part: { toolName: string; args?: unknown };
-}) {
+function ToolCard({ part }: { part: { toolName: string; args?: unknown } }) {
   const detail = (part.args as { detail?: string } | undefined)?.detail ?? "";
   return (
     <details className="my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
       <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-dim">
         <Wrench className="size-3.5 shrink-0 text-faint" />
         <span className="shrink-0 font-medium">{part.toolName}</span>
-        {detail && <span className="truncate text-faint">{detail.slice(0, 72)}</span>}
+        {detail && (
+          <span className="truncate text-faint">{detail.slice(0, 72)}</span>
+        )}
       </summary>
       <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 text-faint">
         {detail || "…"}
@@ -87,7 +102,13 @@ function ToolCard({
 // auto-status: it holds the block open (bottom-pinned on the newest tokens)
 // while the model thinks, collapses once the answer starts, and defers to the
 // first manual toggle permanently afterwards.
-function ThoughtCard({ streaming, children }: { streaming: boolean; children: ReactNode }) {
+function ThoughtCard({
+  streaming,
+  children,
+}: {
+  streaming: boolean;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -115,7 +136,9 @@ function ThoughtCard({ streaming, children }: { streaming: boolean; children: Re
         }}
         className="flex w-full items-center gap-1.5 px-3 py-2 text-left"
       >
-        <Brain className={`size-3.5 shrink-0 ${streaming ? "animate-pulse text-dim" : "text-faint"}`} />
+        <Brain
+          className={`size-3.5 shrink-0 ${streaming ? "animate-pulse text-dim" : "text-faint"}`}
+        />
         <span className="text-xs font-medium text-dim">
           {streaming ? t("chat.thinking") : t("chat.thought")}
         </span>
@@ -137,11 +160,68 @@ function ThoughtCard({ streaming, children }: { streaming: boolean; children: Re
   );
 }
 
+// Harness task lifecycle notices arrive as user-role XML blocks; they are
+// system plumbing, not user speech — rendered as a centered system chip.
+const TASK_NOTIFICATION = /^<task-notification>[\s\S]*<\/task-notification>$/;
+
+function parseTaskNotification(
+  text: string,
+): { status: string; summary: string } | null {
+  const t = text.trim();
+  if (!TASK_NOTIFICATION.test(t)) return null;
+  const status = /<status>\s*([^<]*?)\s*<\/status>/.exec(t)?.[1] ?? "";
+  const summary = /<summary>\s*([^<]*?)\s*<\/summary>/.exec(t)?.[1] ?? "";
+  return { status, summary };
+}
+
 // memo: during replay every store write re-renders the list; unchanged
 // messages skip re-parsing their markdown. Store-driven updates (streaming
 // into the last message) still propagate via MessagePrimitive's own
 // subscriptions.
-const UserMessage = memo(function UserMessage() {
+const UserMessage = memo(function UserMessage({
+  collapsed,
+  notice,
+}: {
+  collapsed?: boolean;
+  notice?: { status: string; summary: string };
+}) {
+  const { t } = useTranslation();
+  if (notice) {
+    return (
+      <MessagePrimitive.Root className="flex min-w-0 justify-center">
+        <div className="flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1 text-[11px] text-faint">
+          <Bell className="size-3 shrink-0" />
+          <span className="truncate">
+            {notice.summary || t("chat.taskNotice")}
+          </span>
+          {notice.status && (
+            <span className="shrink-0 uppercase tracking-wide">
+              · {notice.status}
+            </span>
+          )}
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+  if (collapsed) {
+    // Replay-only flag: harness-injected context handoffs render as a
+    // one-line summary behind an expand control, not a wall of user text.
+    return (
+      <MessagePrimitive.Root className="flex min-w-0 justify-end">
+        <details className="group max-w-[85%] min-w-0 rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[13px] text-dim">
+          <summary className="flex cursor-pointer select-none list-none items-center gap-1 text-xs text-faint [&::-webkit-details-marker]:hidden">
+            <ChevronDown className="size-3.5 shrink-0 transition-transform group-open:rotate-180" />
+            {t("chat.contextHandoff")}
+          </summary>
+          <div className="mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            <MessagePrimitive.Parts>
+              {({ part }) => (part.type === "text" ? <>{part.text}</> : null)}
+            </MessagePrimitive.Parts>
+          </div>
+        </details>
+      </MessagePrimitive.Root>
+    );
+  }
   return (
     <MessagePrimitive.Root className="flex min-w-0 justify-end">
       <div className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-[15px] text-ink">
@@ -159,13 +239,21 @@ const AssistantMessage = memo(function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="min-w-0">
       <div className="w-full text-[15px] leading-relaxed text-ink">
-        <MessagePrimitive.GroupedParts groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}>
+        <MessagePrimitive.GroupedParts
+          groupBy={groupPartByType({ reasoning: ["group-reasoning"] })}
+        >
           {({ part, children }) => {
             switch (part.type) {
               case "group-reasoning":
-                return <ThoughtCard streaming={part.status.type === "running"}>{children}</ThoughtCard>;
+                return (
+                  <ThoughtCard streaming={part.status.type === "running"}>
+                    {children}
+                  </ThoughtCard>
+                );
               case "reasoning":
-                return part.text ? <p className="whitespace-pre-wrap">{part.text}</p> : null;
+                return part.text ? (
+                  <p className="whitespace-pre-wrap">{part.text}</p>
+                ) : null;
               case "text":
                 return part.text ? <MarkdownText text={part.text} /> : null;
               case "tool-call":
@@ -205,7 +293,8 @@ function Composer() {
   }, [token, commands]);
 
   // Still typing the command token (no space yet) and not dismissed.
-  const open = matches.length > 0 && !/\s/.test(value) && dismissedToken !== token;
+  const open =
+    matches.length > 0 && !/\s/.test(value) && dismissedToken !== token;
   const idx = Math.min(highlight, matches.length - 1);
 
   useEffect(() => {
@@ -265,7 +354,9 @@ function Composer() {
                 i === idx ? "bg-white/[0.06]" : "active:bg-white/[0.06]"
               }`}
             >
-              <span className="shrink-0 font-mono text-sm text-dim">/{c.name}</span>
+              <span className="shrink-0 font-mono text-sm text-dim">
+                /{c.name}
+              </span>
               <span className="min-w-0 truncate text-xs text-faint">
                 {c.description}
                 {c.input?.hint ? ` — ${c.input.hint}` : ""}
@@ -315,14 +406,15 @@ function Composer() {
   );
 }
 
-// Queued follow-ups while a turn runs: dimmed user bubbles that go out by
-// themselves when the turn settles — or right away via force-send (which
-// interrupts the current turn).
+// Queued follow-ups while a turn runs or a replay is still loading: dimmed
+// user bubbles that go out by themselves when the turn settles / the session
+// attaches — or right away via force-send (which interrupts the current turn).
 function PendingPrompts() {
   const { t } = useTranslation();
   const pendingPrompts = useAppStore((s) => s.pendingPrompts);
   const forceSendPending = useAppStore((s) => s.forceSendPending);
   const discardPending = useAppStore((s) => s.discardPending);
+  const loadingSession = useAppStore((s) => s.loadingSession);
   const lastRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -342,13 +434,17 @@ function PendingPrompts() {
             <span>{text}</span>
             <span className="mt-1 flex items-center justify-end gap-3 text-[11px]">
               <span className="text-faint">{t("chat.pending")}</span>
-              <button
-                onClick={forceSendPending}
-                className="flex items-center gap-1 font-medium text-dim active:text-ink"
-              >
-                <Zap className="size-3" />
-                {t("chat.sendNow")}
-              </button>
+              {/* No force-send while replaying: there is no turn to interrupt
+                  and the queue fires on its own once the attach lands. */}
+              {!loadingSession && (
+                <button
+                  onClick={forceSendPending}
+                  className="flex items-center gap-1 font-medium text-dim active:text-ink"
+                >
+                  <Zap className="size-3" />
+                  {t("chat.sendNow")}
+                </button>
+              )}
               <button
                 onClick={() => discardPending(i)}
                 aria-label={t("chat.discard")}
@@ -371,6 +467,8 @@ function Thread({
   remaining,
   loadingEarlier,
   onExpand,
+  collapsedIds,
+  taskNotices,
 }: {
   viewportRef: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
@@ -378,6 +476,8 @@ function Thread({
   remaining: number | null;
   loadingEarlier: boolean;
   onExpand: () => void;
+  collapsedIds: ReadonlySet<string>;
+  taskNotices: ReadonlyMap<string, { status: string; summary: string }>;
 }) {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -391,15 +491,15 @@ function Thread({
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
           <div className="mt-[22vh] flex flex-col items-center gap-3 text-center">
-            <h1 className="text-2xl font-semibold tracking-tight text-ink">ZCode</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">
+              ZCode
+            </h1>
             <p className="max-w-64 text-sm text-faint">
-              {loadingSession ? (
-                t("chat.loadingSession")
-              ) : activeSessionId ? (
-                t("chat.empty")
-              ) : (
-                t("chat.noSession")
-              )}
+              {loadingSession
+                ? t("chat.loadingSession")
+                : activeSessionId
+                  ? t("chat.empty")
+                  : t("chat.noSession")}
             </p>
             {loadingSession && <Spinner className="size-5" />}
           </div>
@@ -419,7 +519,15 @@ function Thread({
         )}
         <ThreadPrimitive.Messages>
           {({ message }) =>
-            message.role === "user" ? <UserMessage /> : <AssistantMessage />
+            message.role === "user" ? (
+              <UserMessage
+                key={message.id}
+                collapsed={collapsedIds.has(message.id)}
+                notice={taskNotices.get(message.id)}
+              />
+            ) : (
+              <AssistantMessage key={message.id} />
+            )
           }
         </ThreadPrimitive.Messages>
         <PendingPrompts />
@@ -475,7 +583,8 @@ export function ChatView() {
   const onScroll = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
-    anchoredRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    anchoredRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     if (el.scrollTop < 60 && el.scrollHeight > el.clientHeight) expand();
   }, [expand]);
 
@@ -503,6 +612,28 @@ export function ChatView() {
     cancelTurn();
   }, [cancelTurn]);
 
+  // Collapsed (context-handoff) message ids, resolved once per store write so
+  // the message components keep stable boolean props and stay memoized.
+  const collapsedIds = useMemo(
+    () => new Set(messages.filter((m) => m.collapsed).map((m) => m.id)),
+    [messages],
+  );
+
+  // Task-notification ids parsed the same way — one pass per store write,
+  // stable object identity keeps UserMessage memoization intact.
+  const taskNotices = useMemo(() => {
+    const map = new Map<string, { status: string; summary: string }>();
+    for (const m of messages) {
+      if (m.role !== "user") continue;
+      const text = m.parts
+        .map((p) => (p.type === "text" ? p.text : ""))
+        .join("");
+      const notice = parseTaskNotification(text);
+      if (notice) map.set(m.id, notice);
+    }
+    return map;
+  }, [messages]);
+
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage,
@@ -520,6 +651,8 @@ export function ChatView() {
         remaining={remaining}
         loadingEarlier={loadingEarlier}
         onExpand={expand}
+        collapsedIds={collapsedIds}
+        taskNotices={taskNotices}
       />
     </AssistantRuntimeProvider>
   );

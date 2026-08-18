@@ -128,4 +128,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   parts: ChatPart[];
   createdAt: number;
+  // Replay-only: harness-injected context handoff rendered collapsed instead
+  // of as a wall of user text (`_meta.zcode.collapsed` on the update).
+  collapsed?: boolean;
 }

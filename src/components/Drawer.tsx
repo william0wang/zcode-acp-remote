@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
+import { List, RefreshCw } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 
 function baseName(path: string | undefined): string {
@@ -17,6 +17,7 @@ export function Drawer({ onClose }: { onClose: () => void }) {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
+  const closeSession = useAppStore((s) => s.closeSession);
 
   const sessions = instances
     .flatMap((i) =>
@@ -71,6 +72,19 @@ export function Drawer({ onClose }: { onClose: () => void }) {
             </button>
           );
         })}
+
+        {/* Full-screen list entry: leaving the session belongs here, not in
+            the chat header. */}
+        <button
+          onClick={() => {
+            onClose();
+            closeSession();
+          }}
+          className="sticky bottom-0 mt-auto flex items-center gap-2 border-t border-hairline bg-surface px-4 py-3 text-left active:bg-white/[0.05]"
+        >
+          <List className="size-4 shrink-0 text-faint" />
+          <span className="text-sm text-dim">{t("chat.backToSessions")}</span>
+        </button>
       </aside>
     </div>
   );
