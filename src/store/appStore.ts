@@ -445,6 +445,21 @@ export const useAppStore = create<AppState>((set, get) => {
       };
       const mid =
         typeof u.messageId === "string" && u.messageId ? u.messageId : null;
+      // Dedupe on every insert (REPLAY-GUIDE contract): a reannounced
+      // interaction (e.g. a still-pending plan approval) reuses its
+      // toolCallId, and replay can deliver the same historical call again —
+      // assistant-ui keys parts by toolCallId and throws on duplicates.
+      // Replace the existing part in place instead of appending a second.
+      const dupAt = findToolCallPartIndex(msgs, part.toolCallId);
+      if (dupAt) {
+        const { mi, pi } = dupAt;
+        return {
+          messages: patchMessage(msgs, mi, {
+            ...msgs[mi],
+            parts: msgs[mi].parts.map((p, j) => (j === pi ? part : p)),
+          }),
+        };
+      }
       if (mid) {
         const i = msgs.findIndex((m) => m.id === mid);
         if (i >= 0) {
@@ -684,6 +699,25 @@ export const useAppStore = create<AppState>((set, get) => {
       for (let j = m.parts.length - 1; j >= 0; j--) {
         const p = m.parts[j];
         if (p.type === "tool-call" && p.toolCallId === toolCallId) return p;
+      }
+    }
+    return null;
+  }
+
+  // Same lookup, but returns message/part indices so the caller can replace
+  // the part in place (tool_call dedup on insert).
+  function findToolCallPartIndex(
+    msgs: ChatMessage[],
+    toolCallId: string,
+  ): { mi: number; pi: number } | null {
+    if (!toolCallId) return null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant") continue;
+      for (let j = m.parts.length - 1; j >= 0; j--) {
+        const p = m.parts[j];
+        if (p.type === "tool-call" && p.toolCallId === toolCallId)
+          return { mi: i, pi: j };
       }
     }
     return null;
