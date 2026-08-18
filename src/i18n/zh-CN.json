@@ -44,7 +44,8 @@
     "noMatches": "没有匹配的会话",
     "activityAwaiting": "等待确认",
     "activityRunning": "运行中",
-    "activityFinished": "已完成"
+    "activityFinished": "已完成",
+    "diffTruncated": "差异较大——仅显示前 2 万字符"
   },
   "panel": {
     "title": "设置",
@@ -81,5 +82,11 @@
   "common": {
     "cancel": "取消",
     "close": "关闭"
+  },
+  "error": {
+    "title": "出错了",
+    "copy": "复制详情",
+    "copied": "已复制",
+    "reload": "重新加载"
   }
 }

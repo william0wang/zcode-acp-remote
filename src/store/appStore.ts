@@ -459,6 +459,15 @@ export const useAppStore = create<AppState>((set, get) => {
       const toolCallId = String(u.toolCallId ?? "");
       const chunk = contentText(u.content);
       const diffBlocks = contentDiffBlocks(u.content);
+      // Terminal-channel Bash (enabled while an editor client is attached):
+      // output streams as _meta.terminal_output.data deltas — append them so
+      // the card keeps its output; the terminal_exit update then only closes.
+      const termData = (
+        u._meta as { terminal_output?: { data?: unknown } } | undefined
+      )?.terminal_output?.data;
+      const termText = typeof termData === "string" ? termData : null;
+      // Non-terminal tools may carry a rawOutput string without content blocks.
+      const rawOut = typeof u.rawOutput === "string" ? u.rawOutput : null;
       // An update carrying content blocks REPLACES the whole collection
       // (text and diffs); a status-only update leaves them untouched.
       const hasContent =
@@ -483,7 +492,9 @@ export const useAppStore = create<AppState>((set, get) => {
             p.type === "tool-call" && p.toolCallId === toolCallId
               ? {
                   ...p,
-                  detail: chunk || p.detail,
+                  detail: termText
+                    ? p.detail + termText
+                    : chunk || rawOut || p.detail,
                   status: status ?? p.status,
                   ...(hasContent
                     ? { diffs: diffBlocks.length ? diffBlocks : undefined }

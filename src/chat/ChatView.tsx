@@ -144,7 +144,14 @@ function parseDiffs(raw: string | undefined): AcpDiffContent[] {
   }
 }
 
+// jsdiff (inside ReactDiffViewer) on whole-file old/new texts can freeze the
+// WebView for seconds or kill it on memory — cap what we hand it and say so.
+const MAX_DIFF_CHARS = 20000;
+
 function DiffBlock({ diff }: { diff: AcpDiffContent }) {
+  const { t } = useTranslation();
+  const truncOld = (diff.oldText ?? "").length > MAX_DIFF_CHARS;
+  const truncNew = diff.newText.length > MAX_DIFF_CHARS;
   return (
     <div className="mt-2 overflow-hidden rounded-lg ring-1 ring-hairline">
       {diff.path && (
@@ -152,9 +159,20 @@ function DiffBlock({ diff }: { diff: AcpDiffContent }) {
           {diff.path}
         </div>
       )}
+      {(truncOld || truncNew) && (
+        <div className="border-b border-hairline bg-amber-950/40 px-2 py-1 text-[10px] text-amber-300">
+          {t("chat.diffTruncated")}
+        </div>
+      )}
       <ReactDiffViewer
-        oldValue={diff.oldText ?? ""}
-        newValue={diff.newText}
+        oldValue={
+          truncOld
+            ? diff.oldText!.slice(0, MAX_DIFF_CHARS)
+            : (diff.oldText ?? "")
+        }
+        newValue={
+          truncNew ? diff.newText.slice(0, MAX_DIFF_CHARS) : diff.newText
+        }
         splitView={false}
         useDarkTheme
         hideLineNumbers

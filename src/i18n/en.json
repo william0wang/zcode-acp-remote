@@ -44,7 +44,8 @@
     "noMatches": "No matching sessions",
     "activityAwaiting": "Waiting for you",
     "activityRunning": "Running",
-    "activityFinished": "Done"
+    "activityFinished": "Done",
+    "diffTruncated": "Large diff — showing the first 20k characters"
   },
   "panel": {
     "title": "Settings",
@@ -81,5 +82,11 @@
   "common": {
     "cancel": "Cancel",
     "close": "Close"
+  },
+  "error": {
+    "title": "Something broke",
+    "copy": "Copy details",
+    "copied": "Copied",
+    "reload": "Reload"
   }
 }
