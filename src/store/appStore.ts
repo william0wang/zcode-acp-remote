@@ -191,8 +191,10 @@ interface AppState {
     attachSessionId?: string,
   ) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
-  // Detaches from the instance and returns to the session list; unlike
-  // forgetHub the saved hub profile (and instance polling) stays alive.
+  // Returns to the session list. The instance connection stays open so
+  // bridge broadcasts keep the list's activity badges live (running state
+  // is broadcast-only — the hub's REST discovery carries no such field);
+  // re-entering a session on the same instance reuses the socket.
   closeSession: () => void;
   loadSession: (sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
@@ -792,6 +794,14 @@ export const useAppStore = create<AppState>((set, get) => {
       cur.instanceId !== s.instanceId
     )
       return;
+    // Hub unreachable or discovery failed (phone just woke, network not yet
+    // ready): instance liveness is UNKNOWN, not "gone" — retry in place
+    // instead of bouncing the user out of the session. Only a successful
+    // listing that lacks the instance proves it gone.
+    if (cur.hubOffline || cur.instancesError) {
+      scheduleReconnect();
+      return;
+    }
     const still = cur.instances.some((i) => i.id === s.instanceId);
     if (!still) {
       // Instance gone: its sessions are gone too (contract).
@@ -819,6 +829,7 @@ export const useAppStore = create<AppState>((set, get) => {
         sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
+        isRunning: false,
       });
       reconnectAttempt = 0;
       return;
@@ -1110,16 +1121,15 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     closeSession: () => {
-      stopReconnect();
-      connSeq++; // invalidate any in-flight connection events
-      acp?.close();
-      acp = null;
+      // Leave the open session but KEEP the instance connection: the list
+      // screen renders live activity badges from sessionStates, which only
+      // flow over the instance WS (broadcast-only, not in hub discovery).
+      // Connection-level teardown (instance gone, forget hub) lives
+      // elsewhere; this only resets session-scoped state. openSession's
+      // fast path reuses the still-open socket.
       pendingRespond = null;
-      reconnectAttempt = 0;
       dropQueuedUpdates();
       set({
-        connState: "idle",
-        instanceId: null,
         activeSessionId: null,
         messages: [],
         planEntries: null,
@@ -1133,9 +1143,6 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        usageStats: null,
-        sessionStates: {},
-        quotaUnavailable: false,
         loadingSession: false,
         isRunning: false,
       });

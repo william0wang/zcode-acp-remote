@@ -4,6 +4,7 @@ import { RefreshCw, SlidersHorizontal } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { SettingsPanel } from "../components/SidePanel";
 import { SessionList } from "../components/SessionList";
+import { PermissionDialog } from "../components/PermissionDialog";
 
 // Entry screen = the same flat session list the left drawer shows: sessions
 // across every bridge instance, newest first. Tapping one connects its
@@ -71,6 +72,11 @@ export function InstancePicker() {
           {t("picker.connecting")}
         </p>
       )}
+      {connState === "reconnecting" && (
+        <p className="mx-4 mb-2 shrink-0 rounded-lg bg-amber-950 px-3 py-2 text-xs text-amber-300 ring-1 ring-amber-900">
+          {t("chat.reconnecting")}
+        </p>
+      )}
 
       <SessionList
         sessions={sessions}
@@ -83,6 +89,9 @@ export function InstancePicker() {
       />
 
       {panelOpen && <SettingsPanel onClose={() => setPanelOpen(false)} />}
+      {/* The instance connection stays alive on this screen — a turn's
+          permission request can arrive while no session is open. */}
+      <PermissionDialog />
     </div>
   );
 }
