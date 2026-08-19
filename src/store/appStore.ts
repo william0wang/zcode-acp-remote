@@ -189,6 +189,9 @@ interface AppState {
   connectInstance: (
     instanceId: string,
     attachSessionId?: string,
+    // { attach: false } connects WITHOUT attaching a session — the list
+    // screen's background connection (quota + activity broadcasts).
+    opts?: { attach?: boolean },
   ) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Returns to the session list. The instance connection stays open so
@@ -286,6 +289,24 @@ export const useAppStore = create<AppState>((set, get) => {
       clearInterval(pollTimer);
       pollTimer = null;
     }
+  }
+
+  // Cold start (or hub recovery) on the list screen: quietly connect the
+  // freshest instance WITHOUT attaching a session, so account quota loads
+  // and broadcast activity reaches the list before the user opens anything.
+  // No-op once any instance is connected or a connect is already running.
+  function autoConnectInstance(): void {
+    const s = get();
+    if (!s.profile || s.instanceId || s.connState !== "idle") return;
+    const withSessions = s.instances.filter((i) => (i.sessions ?? []).length);
+    const inst =
+      withSessions.sort(
+        (a, b) =>
+          Math.max(0, ...(b.sessions ?? []).map((x) => x.updatedAt ?? 0)) -
+          Math.max(0, ...(a.sessions ?? []).map((x) => x.updatedAt ?? 0)),
+      )[0] ?? s.instances[0];
+    if (!inst) return;
+    void get().connectInstance(inst.id, undefined, { attach: false });
   }
 
   // ---- session/update -> chat model ----
@@ -1050,6 +1071,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const instances = await client.instances(opts?.probe === true);
         if (get().profile !== profile) return; // hub changed mid-flight
         set({ instances, instancesError: null, hubOffline: false });
+        autoConnectInstance();
       } catch (e) {
         if (get().profile !== profile) return;
         if (e instanceof HubApiError && e.network) {
@@ -1066,7 +1088,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    connectInstance: async (instanceId, attachSessionId) => {
+    connectInstance: async (instanceId, attachSessionId, opts) => {
       const s = get();
       if (!s.profile) return;
       stopReconnect();
@@ -1095,6 +1117,8 @@ export const useAppStore = create<AppState>((set, get) => {
         loadingSession: false,
       });
       await openConnection(s.profile, instanceId);
+      // Background connection for the list screen: quota + broadcasts only.
+      if (opts?.attach === false) return;
       // Attach to the requested session, else the most recently updated one.
       if (get().connState === "open" && !get().activeSessionId) {
         const inst = get().instances.find((i) => i.id === instanceId);
