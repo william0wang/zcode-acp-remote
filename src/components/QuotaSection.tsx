@@ -30,6 +30,22 @@ const GO_STATUS: Record<string, string> = {
 
 // One bar line — CLI layout: label, bar, then `NN% · reset · count` trailing.
 // The per-item MCP breakdown is deliberately dropped; the totals suffice.
+// CLI-parity heat color (zcode-quota's heatColor): green → yellow → red,
+// piecewise-linear at 0/50/100% — Tailwind green-500 / yellow-500 / red-500.
+function heatColor(pct: number): string {
+  const p = Math.max(0, Math.min(100, pct));
+  const lerp = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
+  const [r, g, b] =
+    p < 50
+      ? [lerp(34, 234, p / 50), lerp(197, 179, p / 50), lerp(94, 8, p / 50)]
+      : [
+          lerp(234, 239, (p - 50) / 50),
+          lerp(179, 68, (p - 50) / 50),
+          lerp(8, 68, (p - 50) / 50),
+        ];
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function QuotaRow({
   label,
   percent,
@@ -53,8 +69,8 @@ function QuotaRow({
       </div>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/[0.08]">
         <div
-          className={`h-full rounded-full ${clamped >= 90 ? "bg-red-500" : "bg-blue-500"}`}
-          style={{ width: `${clamped}%` }}
+          className="h-full rounded-full"
+          style={{ width: `${clamped}%`, backgroundColor: heatColor(clamped) }}
         />
       </div>
     </div>
