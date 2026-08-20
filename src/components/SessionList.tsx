@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -84,23 +84,70 @@ function baseName(path: string | undefined): string {
   return parts[parts.length - 1] || path;
 }
 
+// Long-press (H5-friendly retire gesture, ADR-0006): a pointerdown timer
+// cancelled by movement (scroll intent) or release. Spread onto the row.
+// The trailing click after a fired long-press is swallowed, else releasing
+// the finger would also open the session.
+function useLongPress(onLongPress: () => void, ms = 500) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const origin = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => clear, []);
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      fired.current = false;
+      origin.current = { x: e.clientX, y: e.clientY };
+      clear();
+      timer.current = setTimeout(() => {
+        fired.current = true;
+        onLongPress();
+      }, ms);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const o = origin.current;
+      if (!o || !timer.current) return;
+      if (Math.abs(e.clientX - o.x) > 10 || Math.abs(e.clientY - o.y) > 10)
+        clear();
+    },
+    onPointerUp: clear,
+    onPointerLeave: clear,
+    onPointerCancel: clear,
+    onClickCapture: (e: React.MouseEvent) => {
+      if (!fired.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fired.current = false;
+    },
+    // Suppress the WebView's own long-press menu alongside ours.
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+  };
+}
+
 function SessionRow({
   item,
   active,
   disabled,
   onSelect,
+  onLongPress,
 }: {
   item: SessionRowItem;
   active: boolean;
   disabled?: boolean;
   onSelect: () => void;
+  onLongPress: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const press = useLongPress(onLongPress);
   return (
     <button
       onClick={onSelect}
       disabled={disabled}
-      className={`flex w-full flex-col px-4 py-3 text-left disabled:opacity-50 ${
+      {...press}
+      className={`flex w-full flex-col px-4 py-3 text-left select-none [-webkit-touch-callout:none] disabled:opacity-50 ${
         active ? "bg-white/[0.07]" : "active:bg-white/[0.05]"
       }`}
     >
@@ -142,6 +189,8 @@ export function SessionList({
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [retireTarget, setRetireTarget] = useState<SessionRowItem | null>(null);
+  const closeRemoteSession = useAppStore((s) => s.closeRemoteSession);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -181,9 +230,49 @@ export function SessionList({
             active={activeKey === `${s.instanceId}:${s.sessionId}`}
             disabled={connecting}
             onSelect={() => onSelect(s.instanceId, s.sessionId)}
+            onLongPress={() => setRetireTarget(s)}
           />
         ))}
       </div>
+
+      {retireTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]"
+          onClick={() => setRetireTarget(null)}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-hairline bg-surface"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 pt-4">
+              <h2 className="text-sm font-semibold text-ink">
+                {retireTarget.title || t("chat.untitled")}
+              </h2>
+              <p className="mt-1 text-xs text-faint">
+                {t("chat.closeSessionHint")}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
+              <button
+                onClick={() => {
+                  const { instanceId, sessionId } = retireTarget;
+                  setRetireTarget(null);
+                  void closeRemoteSession(instanceId, sessionId);
+                }}
+                className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+              >
+                {t("chat.closeSession")}
+              </button>
+              <button
+                onClick={() => setRetireTarget(null)}
+                className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

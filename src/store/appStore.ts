@@ -197,6 +197,11 @@ interface AppState {
   // re-entering a session on the same instance reuses the socket.
   closeSession: () => void;
   loadSession: (sessionId: string) => Promise<void>;
+  // Retires a session from remote discovery via the hub's HTTP close
+  // endpoint (ADR-0006). Close, not delete — editor-side-still-open
+  // conversations self-heal back on their next use. Refused (409 notice)
+  // while a turn runs.
+  closeRemoteSession: (instanceId: string, sessionId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   refreshUsageStats: () => Promise<void>;
@@ -1121,6 +1126,47 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       await get().connectInstance(instanceId, sessionId);
+    },
+
+    closeRemoteSession: async (instanceId, sessionId) => {
+      const client = hub();
+      if (!client) return;
+      try {
+        await client.closeSession(instanceId, sessionId);
+      } catch (e) {
+        if (e instanceof HubApiError && e.status === 409) {
+          set({ notice: "notice.sessionRunning" });
+        } else {
+          set({
+            notice: `close session failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          });
+        }
+        return;
+      }
+      // Drop the row locally; the heartbeat list aligns within ~10s.
+      set((state) => ({
+        instances: state.instances.map((i) =>
+          i.id === instanceId
+            ? {
+                ...i,
+                sessions: (i.sessions ?? []).filter(
+                  (s) => s.sessionId !== sessionId,
+                ),
+              }
+            : i,
+        ),
+      }));
+      // Closing the conversation we're looking at returns to the list
+      // (connection stays, closeSession handles the session-scoped reset).
+      if (
+        get().instanceId === instanceId &&
+        get().activeSessionId === sessionId
+      ) {
+        get().closeSession();
+      }
+      set({ notice: "notice.sessionClosed" });
     },
 
     closeSession: () => {

@@ -43,6 +43,8 @@
     "jumpToLatest": "Jump to latest",
     "searchPlaceholder": "Search sessions",
     "noMatches": "No matching sessions",
+    "closeSession": "Close session",
+    "closeSessionHint": "Removes it from this list. A conversation still open in the editor reappears on its next use.",
     "activityAwaiting": "Waiting for you",
     "activityRunning": "Running",
     "activityFinished": "Done",
@@ -78,7 +80,9 @@
   "notice": {
     "unsupported": "This interaction must be answered in your editor",
     "instanceGone": "Instance went away — pick another one",
-    "noSession": "Pick a session first (from the menu)"
+    "noSession": "Pick a session first (from the menu)",
+    "sessionRunning": "Session is running — cancel the turn first",
+    "sessionClosed": "Session closed"
   },
   "common": {
     "cancel": "Cancel",

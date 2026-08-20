@@ -15,6 +15,8 @@ export function InstancePicker() {
   const instancesError = useAppStore((s) => s.instancesError);
   const hubOffline = useAppStore((s) => s.hubOffline);
   const connState = useAppStore((s) => s.connState);
+  const notice = useAppStore((s) => s.notice);
+  const dismissNotice = useAppStore((s) => s.dismissNotice);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -76,6 +78,16 @@ export function InstancePicker() {
         <p className="mx-4 mb-2 shrink-0 rounded-lg bg-amber-950 px-3 py-2 text-xs text-amber-300 ring-1 ring-amber-900">
           {t("chat.reconnecting")}
         </p>
+      )}
+      {notice && (
+        <div className="mx-4 mb-2 flex shrink-0 items-center justify-between gap-2 rounded-lg bg-white/[0.05] px-3 py-2 text-xs text-dim">
+          <span className="truncate">
+            {notice.startsWith("notice.") ? t(notice) : notice}
+          </span>
+          <button onClick={dismissNotice} className="shrink-0 text-faint">
+            ✕
+          </button>
+        </div>
       )}
 
       <SessionList

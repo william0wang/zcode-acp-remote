@@ -43,6 +43,8 @@
     "jumpToLatest": "回到底部",
     "searchPlaceholder": "搜索会话",
     "noMatches": "没有匹配的会话",
+    "closeSession": "关闭会话",
+    "closeSessionHint": "从列表中移除；编辑器中仍打开的会话会在下次使用时重新出现",
     "activityAwaiting": "等待确认",
     "activityRunning": "运行中",
     "activityFinished": "已完成",
@@ -78,7 +80,9 @@
   "notice": {
     "unsupported": "此交互请在编辑器中应答",
     "instanceGone": "实例已离线——请选择其他实例",
-    "noSession": "请先选择一个会话（从菜单）"
+    "noSession": "请先选择一个会话（从菜单）",
+    "sessionRunning": "会话正在运行，请先取消",
+    "sessionClosed": "会话已关闭"
   },
   "common": {
     "cancel": "取消",

@@ -23,10 +23,14 @@ export class HubClient {
     return this.hubUrl.replace(/\/+$/, "") + path;
   }
 
-  private async fetch(path: string): Promise<Response> {
+  private async fetch(
+    path: string,
+    method: "GET" | "POST" = "GET",
+  ): Promise<Response> {
     let res: Response;
     try {
       res = await fetch(this.url(path), {
+        method,
         headers: { Authorization: `Bearer ${this.token}` },
       });
     } catch (e) {
@@ -69,5 +73,18 @@ export class HubClient {
   async quota(): Promise<unknown> {
     const res = await this.fetch("/api/quota");
     return res.json();
+  }
+
+  /**
+   * Retires a session from remote discovery (ADR-0006). Close, not delete —
+   * backend store and editor storage are untouched; an editor-side-still-open
+   * conversation self-heals back into discovery on its next use. Refused with
+   * 409 while a turn is running.
+   */
+  async closeSession(instanceId: string, sessionId: string): Promise<void> {
+    await this.fetch(
+      `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/close`,
+      "POST",
+    );
   }
 }
