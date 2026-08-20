@@ -1,4 +1,4 @@
-# zcode-acp-app
+# zcode-acp-remote
 
 ZCode ACP: mobile Remote Client for zcode-acp-server. A Tauri 2 + React app
 that attaches to a Hub over WebSocket and drives the same agent sessions as

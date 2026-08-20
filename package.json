@@ -1,7 +1,13 @@
 {
-  "name": "zcode-acp-app",
+  "name": "zcode-acp-remote",
   "private": true,
   "version": "0.2.15",
+  "license": "MIT",
+  "packageManager": "pnpm@10.34.3",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/william0wang/zcode-acp-remote.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +15,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:android": "bash scripts/build-android.sh",
-    "build:android:debug": "bash scripts/build-android.sh --debug"
+    "build:android:debug": "bash scripts/build-android.sh --debug",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.14",

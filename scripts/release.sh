@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# One-shot release flow: bump version -> build APK -> commit + tag -> push -> GitHub Release.
+# Usage: scripts/release.sh <version>   (e.g. scripts/release.sh 0.2.16)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VERSION="${1:?usage: scripts/release.sh <version> (e.g. 0.2.16)}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: '$VERSION' is not X.Y.Z" >&2; exit 1; }
+
+# Preconditions: releases are cut from a clean main, tag must be fresh, gh must work.
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: working tree is dirty; commit or stash first" >&2
+  git status --short >&2
+  exit 1
+fi
+[[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "error: not on main" >&2; exit 1; }
+command -v gh >/dev/null || { echo "error: gh CLI not installed" >&2; exit 1; }
+TAG="v${VERSION}"
+git fetch --tags origin 2>/dev/null || true
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "error: tag ${TAG} already exists" >&2
+  exit 1
+fi
+
+# Bump the 4 version carriers: package.json, tauri.conf.json, Cargo.toml, Cargo.lock.
+# Regex, not JSON rewrite, keeps the files byte-identical apart from the version.
+node - "$VERSION" <<'EOF'
+const fs = require("fs");
+const v = process.argv[2];
+const bump = (path, pattern) => {
+  const text = fs.readFileSync(path, "utf8");
+  const out = text.replace(pattern, `$1"${v}"`);
+  if (out === text) throw new Error(`no version found in ${path}`);
+  fs.writeFileSync(path, out);
+};
+bump("package.json", /("version"\s*:\s*)"[^"]*"/);
+bump("src-tauri/tauri.conf.json", /("version"\s*:\s*)"[^"]*"/);
+bump("src-tauri/Cargo.toml", /(^version\s*=\s*)"[^"]*"/m);
+bump("src-tauri/Cargo.lock", /(name = "app"\nversion = )"[^"]*"/);
+EOF
+
+# Build before any commit/tag lands: a failed build reverts the bump and aborts.
+APK="dist/ZCode-ACP-v${VERSION}-release.apk"
+if ! pnpm build:android; then
+  git checkout -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+  echo "error: build failed; version bump reverted" >&2
+  exit 1
+fi
+
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "chore: bump version to ${VERSION}"
+git tag "${TAG}"
+git push origin main "${TAG}"
+gh release create "${TAG}" "${APK}" --title "${TAG}" --generate-notes
+echo "==> released ${TAG}: ${APK}"
