@@ -60,4 +60,14 @@ export class HubClient {
       throw new HubApiError("unexpected /api/instances payload");
     return data as HubInstance[];
   }
+
+  /**
+   * Account quota (bridge 0.8.0, ADR-0005): same payload as the ACP
+   * `account/usage_stats` method but no instance connection needed. The hub
+   * caches ~30s server-side; 502 = upstream query failed (retry later).
+   */
+  async quota(): Promise<unknown> {
+    const res = await this.fetch("/api/quota");
+    return res.json();
+  }
 }

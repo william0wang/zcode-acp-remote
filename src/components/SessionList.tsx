@@ -13,11 +13,22 @@ export interface SessionRowItem {
   title?: string;
   updatedAt?: number;
   workspace?: string;
+  // Coarse "running" | "idle" from the hub heartbeat (REST) — used when no
+  // instance connection exists to feed the live broadcast-based activity.
+  status?: string;
 }
 
 // Session Activity (CONTEXT.md): awaiting confirmation > running > just
 // finished (60s window) > idle. Broadcast-only, so idle is the default.
-function ActivityBadge({ sessionId }: { sessionId: string }) {
+// `restRunning` is the heartbeat fallback (ADR-0005) for list rows seen
+// without any instance connection — coarse and up to ~10s stale.
+function ActivityBadge({
+  sessionId,
+  restRunning,
+}: {
+  sessionId: string;
+  restRunning?: boolean;
+}) {
   const { t } = useTranslation();
   const activity = useAppStore((s) => s.sessionStates[sessionId]);
   // Re-render once the just-finished window lapses (no store event for it).
@@ -30,7 +41,17 @@ function ActivityBadge({ sessionId }: { sessionId: string }) {
     return () => clearTimeout(id);
   }, [activity?.finishedAt]);
 
-  if (!activity) return null;
+  if (!activity) {
+    if (restRunning) {
+      return (
+        <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-blue-400">
+          <span className="size-1.5 animate-pulse rounded-full bg-blue-400" />
+          {t("chat.activityRunning")}
+        </span>
+      );
+    }
+    return null;
+  }
   if (activity.awaitingPermission) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-amber-400">
@@ -89,7 +110,10 @@ function SessionRow({
         >
           {item.title || t("chat.untitled")}
         </span>
-        <ActivityBadge sessionId={item.sessionId} />
+        <ActivityBadge
+          sessionId={item.sessionId}
+          restRunning={item.status === "running"}
+        />
       </span>
       <span className="mt-0.5 flex items-center justify-between gap-2 text-xs text-faint">
         <span className="min-w-0 truncate">{baseName(item.workspace)}</span>

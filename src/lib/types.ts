@@ -4,6 +4,10 @@ export interface HubSessionInfo {
   sessionId: string;
   title?: string;
   updatedAt?: number;
+  // Coarse heartbeat indicator (bridge 0.8.0, ADR-0005): "running" | "idle",
+  // up to ~10s stale. The live WS broadcast (sessionStates) wins when a
+  // connection exists; this is the no-connection fallback for the list.
+  status?: string;
 }
 
 export interface HubInstance {

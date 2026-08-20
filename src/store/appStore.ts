@@ -189,9 +189,6 @@ interface AppState {
   connectInstance: (
     instanceId: string,
     attachSessionId?: string,
-    // { attach: false } connects WITHOUT attaching a session — the list
-    // screen's background connection (quota + activity broadcasts).
-    opts?: { attach?: boolean },
   ) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Returns to the session list. The instance connection stays open so
@@ -289,24 +286,6 @@ export const useAppStore = create<AppState>((set, get) => {
       clearInterval(pollTimer);
       pollTimer = null;
     }
-  }
-
-  // Cold start (or hub recovery) on the list screen: quietly connect the
-  // freshest instance WITHOUT attaching a session, so account quota loads
-  // and broadcast activity reaches the list before the user opens anything.
-  // No-op once any instance is connected or a connect is already running.
-  function autoConnectInstance(): void {
-    const s = get();
-    if (!s.profile || s.instanceId || s.connState !== "idle") return;
-    const withSessions = s.instances.filter((i) => (i.sessions ?? []).length);
-    const inst =
-      withSessions.sort(
-        (a, b) =>
-          Math.max(0, ...(b.sessions ?? []).map((x) => x.updatedAt ?? 0)) -
-          Math.max(0, ...(a.sessions ?? []).map((x) => x.updatedAt ?? 0)),
-      )[0] ?? s.instances[0];
-    if (!inst) return;
-    void get().connectInstance(inst.id, undefined, { attach: false });
   }
 
   // ---- session/update -> chat model ----
@@ -961,9 +940,6 @@ export const useAppStore = create<AppState>((set, get) => {
     acp = conn;
     try {
       await conn.connect();
-      // Account quota is pull-only; fetch alongside (re)connect, not on
-      // every session switch — quota changes are slow.
-      void get().refreshUsageStats();
       const active = get().activeSessionId;
       if (active) {
         // Replay is the catch-up mechanism after any disconnect.
@@ -1010,13 +986,18 @@ export const useAppStore = create<AppState>((set, get) => {
     init: () => {
       const profile = loadProfile();
       set({ profile, lang: loadLang() });
-      if (profile) startPolling();
+      if (profile) {
+        startPolling();
+        // Plain HTTP (no instance connection needed); slow-moving data.
+        void get().refreshUsageStats();
+      }
     },
 
     connectToHub: (profile) => {
       persistProfile(profile);
       set({ profile, instances: [], instancesError: null, hubOffline: false });
       startPolling();
+      void get().refreshUsageStats();
     },
 
     forgetHub: () => {
@@ -1071,7 +1052,6 @@ export const useAppStore = create<AppState>((set, get) => {
         const instances = await client.instances(opts?.probe === true);
         if (get().profile !== profile) return; // hub changed mid-flight
         set({ instances, instancesError: null, hubOffline: false });
-        autoConnectInstance();
       } catch (e) {
         if (get().profile !== profile) return;
         if (e instanceof HubApiError && e.network) {
@@ -1088,7 +1068,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    connectInstance: async (instanceId, attachSessionId, opts) => {
+    connectInstance: async (instanceId, attachSessionId) => {
       const s = get();
       if (!s.profile) return;
       stopReconnect();
@@ -1117,8 +1097,6 @@ export const useAppStore = create<AppState>((set, get) => {
         loadingSession: false,
       });
       await openConnection(s.profile, instanceId);
-      // Background connection for the list screen: quota + broadcasts only.
-      if (opts?.attach === false) return;
       // Attach to the requested session, else the most recently updated one.
       if (get().connState === "open" && !get().activeSessionId) {
         const inst = get().instances.find((i) => i.id === instanceId);
@@ -1326,20 +1304,23 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    // Combined quota via account/usage_stats (GLM + Opencode Go), mirroring
-    // the zcode-quota CLI card. Pull-only; fetched after connect and on
-    // demand from the drawer. On failure just hide the section — the next
-    // attach or refresh retries. Per-provider failures arrive as section
+    // Combined quota via the hub's /api/quota (bridge 0.8.0, ADR-0005) — the
+    // same payload the ACP account/usage_stats method returns, but plain
+    // HTTP: no instance connection needed. Pull-only; fetched on hub connect
+    // and on demand from the panels. 502/network failures land in the catch
+    // (hide data, retry later). Per-provider failures arrive as section
     // `kind` strings (rendered like the CLI's status lines), not rejections.
     refreshUsageStats: async () => {
-      const conn = acp;
-      if (!conn || get().connState !== "open") return;
+      const client = hub();
+      const profile = get().profile;
+      if (!client || !profile) return;
       try {
-        const result = await conn.request("account/usage_stats", {});
-        if (acp !== conn) return; // superseded by a newer connection
+        const result = await client.quota();
+        if (get().profile !== profile) return; // hub changed mid-flight
         set({ usageStats: parseUsageStats(result), quotaUnavailable: false });
       } catch {
-        if (acp === conn) set({ usageStats: null, quotaUnavailable: true });
+        if (get().profile === profile)
+          set({ usageStats: null, quotaUnavailable: true });
       }
     },
 
