@@ -51,5 +51,9 @@ git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Ca
 git commit -m "chore: bump version to ${VERSION}"
 git tag "${TAG}"
 git push origin main "${TAG}"
+# A GITHUB_TOKEN/GH_TOKEN env var overrides gh's keyring login; if that PAT
+# lacks this repo the release call dies with "Could not resolve to a
+# Repository". Drop it so the interactive `gh auth` credentials win.
+unset GITHUB_TOKEN GH_TOKEN
 gh release create "${TAG}" "${APK}" --title "${TAG}" --generate-notes
 echo "==> released ${TAG}: ${APK}"
