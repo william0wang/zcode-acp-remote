@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -78,15 +79,19 @@ export function SectionLabel({
   );
 }
 
-// Account-level quota card (account/usage_stats over the instance WS).
-// Session-independent: rendered by both the chat-side SessionPanel and the
-// global SettingsPanel — wherever it opens, data is already in the store
-// (fetched after connect; the list screen keeps the connection alive).
+// Account-level quota card (hub REST /api/quota, ADR-0005). Session-
+// independent: rendered by both the chat-side SessionPanel and the global
+// SettingsPanel. Mounting the card (a panel just opened) refreshes the data
+// so it is current without a manual tap.
 export function QuotaSection() {
   const { t } = useTranslation();
   const usageStats = useAppStore((s) => s.usageStats);
   const quotaUnavailable = useAppStore((s) => s.quotaUnavailable);
   const refreshUsageStats = useAppStore((s) => s.refreshUsageStats);
+
+  useEffect(() => {
+    void refreshUsageStats();
+  }, [refreshUsageStats]);
 
   if (!quotaUnavailable && !usageStats) return null;
 

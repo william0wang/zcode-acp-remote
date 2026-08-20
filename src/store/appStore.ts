@@ -227,6 +227,22 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let msgCounter = 0;
+// Consecutive network-level discovery failures. A phone's network stack
+// takes a moment after launch — the first failed poll means "not yet",
+// not "hub down"; only DISCOVERY_FAIL_THRESHOLD in a row earn the banner.
+let discoveryFailures = 0;
+const DISCOVERY_FAIL_THRESHOLD = 3;
+
+// Connection-level failures are transient by design: the reconnect loop
+// (and its banner) own that story, and a successful reconnect replays the
+// session back to freshness. Only settled failures deserve a notice.
+function isTransientConnError(e: unknown): boolean {
+  if (e instanceof HubApiError) return e.network;
+  const msg = e instanceof Error ? e.message : String(e);
+  return (
+    msg.includes("connection closed") || msg.includes("connection not open")
+  );
+}
 
 function stopReconnect(): void {
   if (reconnectTimer) {
@@ -858,8 +874,10 @@ export const useAppStore = create<AppState>((set, get) => {
           reconnectAttempt = 0;
           // Activity is broadcast-only: a fresh connection knows nothing
           // until events arrive (active session's turnActive is restored by
-          // loadSession's replay).
-          set({ connState: "open", sessionStates: {} });
+          // loadSession's replay). Stale notices (e.g. from the dropped
+          // connection's failed requests) die with it — the replay has
+          // already superseded whatever they complained about.
+          set({ connState: "open", sessionStates: {}, notice: null });
         } else if (state === "closed") {
           if (get().instanceId === instanceId) {
             // The pending permission request dies with the socket; don't
@@ -1001,6 +1019,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     connectToHub: (profile) => {
       persistProfile(profile);
+      discoveryFailures = 0;
       set({ profile, instances: [], instancesError: null, hubOffline: false });
       startPolling();
       void get().refreshUsageStats();
@@ -1057,13 +1076,19 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const instances = await client.instances(opts?.probe === true);
         if (get().profile !== profile) return; // hub changed mid-flight
+        discoveryFailures = 0;
         set({ instances, instancesError: null, hubOffline: false });
       } catch (e) {
         if (get().profile !== profile) return;
         if (e instanceof HubApiError && e.network) {
-          // Hub unreachable is expected while no editor runs (bridges re-spawn
-          // it on demand) — a calm offline hint, not an error banner.
-          set({ instances: [], instancesError: null, hubOffline: true });
+          // Hub unreachable is expected while no editor runs (bridges
+          // re-spawn it on demand) — but only say so once it has STAYED
+          // unreachable: early polls race the phone's network stack, and a
+          // transient blip must not flash the banner (or blank the list).
+          discoveryFailures++;
+          if (discoveryFailures >= DISCOVERY_FAIL_THRESHOLD) {
+            set({ instances: [], instancesError: null, hubOffline: true });
+          }
           return;
         }
         const msg =
@@ -1252,7 +1277,11 @@ export const useAppStore = create<AppState>((set, get) => {
         flushPending();
       } catch (e) {
         set({
-          notice: `session/load failed: ${(e as Error).message}`,
+          // Transient connection failures stay quiet: the reconnect banner
+          // owns them, and the post-reconnect replay supersedes this error.
+          ...(isTransientConnError(e)
+            ? null
+            : { notice: `session/load failed: ${(e as Error).message}` }),
           loadingSession: false,
         });
       }
@@ -1324,7 +1353,7 @@ export const useAppStore = create<AppState>((set, get) => {
         if (msg.includes("cursor expired")) {
           // History shrank (compaction): rebuild from a fresh tail attach.
           await get().loadSession(sessionId);
-        } else {
+        } else if (!isTransientConnError(e)) {
           set({ notice: `load_earlier failed: ${msg}` });
         }
         return false;
@@ -1347,7 +1376,8 @@ export const useAppStore = create<AppState>((set, get) => {
         // The bridge also broadcasts config_option_update / current_mode_update
         // to every client (editor included) — the store picks those up too.
       } catch (e) {
-        set({ notice: `config change failed: ${(e as Error).message}` });
+        if (!isTransientConnError(e))
+          set({ notice: `config change failed: ${(e as Error).message}` });
       }
     },
 
@@ -1420,7 +1450,10 @@ export const useAppStore = create<AppState>((set, get) => {
           prompt: [{ type: "text", text }],
         });
       } catch (e) {
-        set({ notice: `prompt failed: ${(e as Error).message}` });
+        // A dropped connection kills the in-flight prompt, but the reconnect
+        // replay rebuilds the truth — stay quiet and let the banner speak.
+        if (!isTransientConnError(e))
+          set({ notice: `prompt failed: ${(e as Error).message}` });
       } finally {
         localPromptActive = false;
         set({ isRunning: false });
