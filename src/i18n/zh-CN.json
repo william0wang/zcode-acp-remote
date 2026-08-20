@@ -75,7 +75,8 @@
     "planTitle": "可以开始编码了吗？",
     "questionTitle": "需要你回答",
     "sessionLabel": "会话",
-    "hint": "所有客户端中最先应答的生效"
+    "hint": "所有客户端中最先应答的生效",
+    "submit": "提交"
   },
   "notice": {
     "unsupported": "此交互请在编辑器中应答",

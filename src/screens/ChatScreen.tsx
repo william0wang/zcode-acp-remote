@@ -12,6 +12,7 @@ import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
 import { SessionPanel } from "../components/SessionPanel";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { ElicitationDialog } from "../components/ElicitationDialog";
 import { Spinner } from "../components/Spinner";
 import { useAppStore, type PlanEntry } from "../store/appStore";
 
@@ -178,6 +179,7 @@ export function ChatScreen() {
       {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
       {panelOpen && <SessionPanel onClose={() => setPanelOpen(false)} />}
       <PermissionDialog />
+      <ElicitationDialog />
 
       {connState === "connecting" && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-canvas/90">

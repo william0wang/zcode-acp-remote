@@ -5,6 +5,7 @@ import { useAppStore } from "../store/appStore";
 import { SettingsPanel } from "../components/SidePanel";
 import { SessionList } from "../components/SessionList";
 import { PermissionDialog } from "../components/PermissionDialog";
+import { ElicitationDialog } from "../components/ElicitationDialog";
 
 // Entry screen = the same flat session list the left drawer shows: sessions
 // across every bridge instance, newest first. Tapping one connects its
@@ -104,6 +105,7 @@ export function InstancePicker() {
       {/* The instance connection stays alive on this screen — a turn's
           permission request can arrive while no session is open. */}
       <PermissionDialog />
+      <ElicitationDialog />
     </div>
   );
 }

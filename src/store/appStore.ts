@@ -121,6 +121,24 @@ export interface PendingPermission {
   context?: ApprovalContext;
 }
 
+// One AskUserQuestion field parsed out of an elicitation/create form
+// (bridge builds the schema: `q_<i>` enum/array + `q_<i>_other` free text).
+export interface ElicitField {
+  // Field key in requestedSchema (q_0, q_1, …) and its free-text companion.
+  key: string;
+  otherKey: string | null;
+  question: string;
+  multi: boolean;
+  options: { value: string; label: string }[];
+}
+
+export interface PendingElicitation {
+  requestId: number;
+  sessionId: string;
+  message: string;
+  fields: ElicitField[];
+}
+
 // Per-session display state for the session list. Bridge broadcasts fan out
 // across ALL sessions of the instance, so non-active sessions are tracked
 // too. Not persisted: after a reconnect other sessions read as idle until the
@@ -157,6 +175,9 @@ interface AppState {
   // app restarts.
   pendingPrompts: Record<string, string[]>;
   permission: PendingPermission | null;
+  // AskUserQuestion via elicitation/create (the bridge's preferred channel
+  // once ANY client advertises elicitation.form — capabilities OR-merge).
+  elicitation: PendingElicitation | null;
   notice: string | null;
   // Pagination state from the attach response's replayMeta.
   replayCursor: string | null;
@@ -212,6 +233,12 @@ interface AppState {
   discardPending: (index: number) => void;
   cancelTurn: () => void;
   answerPermission: (requestId: number, optionId: string) => void;
+  // Resolves a pending elicitation form: content answers it (accept), null
+  // declines. Same first-response-wins race as permissions.
+  answerElicitation: (
+    requestId: number,
+    content: Record<string, string | string[]> | null,
+  ) => void;
   dismissNotice: () => void;
   // Ephemeral UI feedback (copy confirmations etc.); auto-clears with the
   // existing notice banner.
@@ -792,6 +819,58 @@ export const useAppStore = create<AppState>((set, get) => {
     };
   }
 
+  // Parses an elicitation/create form (bridge's buildAskUserElicitationForm
+  // shape) into renderable fields: `q_<i>` enum/array + `q_<i>_other`
+  // free-text companion. The skip sentinel option is dropped — an unanswered
+  // field IS the skip (the bridge's parser treats absent as skipped).
+  function parseElicitationForm(params: Record<string, unknown>): {
+    sessionId: string;
+    message: string;
+    fields: ElicitField[];
+  } | null {
+    const sessionId = String(params.sessionId ?? "");
+    const message = typeof params.message === "string" ? params.message : "";
+    const schema = params.requestedSchema as
+      { properties?: Record<string, unknown> } | undefined;
+    const props = schema?.properties;
+    if (!sessionId || typeof props !== "object" || props === null) return null;
+    const fields: ElicitField[] = [];
+    for (const key of Object.keys(props)) {
+      if (key.endsWith("_other")) continue;
+      const prop = props[key] as
+        | {
+            type?: unknown;
+            title?: unknown;
+            oneOf?: Array<{ const?: unknown; title?: unknown }>;
+            items?: { anyOf?: Array<{ const?: unknown; title?: unknown }> };
+          }
+        | undefined;
+      if (!prop || typeof prop !== "object") continue;
+      const variants = Array.isArray(prop.oneOf)
+        ? prop.oneOf
+        : Array.isArray(prop.items?.anyOf)
+          ? (prop.items!.anyOf as Array<{ const?: unknown; title?: unknown }>)
+          : null;
+      if (!variants) continue; // not a question field (additive schema)
+      const options = variants
+        .filter((v) => typeof v.const === "string" && v.const !== "__skip__")
+        .map((v) => ({
+          value: v.const as string,
+          label: typeof v.title === "string" ? v.title : (v.const as string),
+        }));
+      fields.push({
+        key,
+        otherKey:
+          typeof props[`${key}_other`] === "object" ? `${key}_other` : null,
+        question: typeof prop.title === "string" ? prop.title : key,
+        multi: prop.type === "array",
+        options,
+      });
+    }
+    if (fields.length === 0) return null;
+    return { sessionId, message, fields };
+  }
+
   function scheduleReconnect(): void {
     const s = get();
     if (!s.profile || !s.instanceId) return;
@@ -837,6 +916,7 @@ export const useAppStore = create<AppState>((set, get) => {
         messages: [],
         planEntries: null,
         permission: null,
+        elicitation: null,
         notice: "notice.instanceGone",
         replayCursor: null,
         hasMore: false,
@@ -880,11 +960,16 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ connState: "open", sessionStates: {}, notice: null });
         } else if (state === "closed") {
           if (get().instanceId === instanceId) {
-            // The pending permission request dies with the socket; don't
-            // leave a dead dialog that silently swallows taps. Broadcast
-            // activity is equally untrustworthy now.
+            // The pending permission/elicitation requests die with the
+            // socket; don't leave dead dialogs that silently swallow taps.
+            // Broadcast activity is equally untrustworthy now.
             pendingRespond = null;
-            set({ permission: null, sessionStates: {} });
+            pendingElicitRespond = null;
+            set({
+              permission: null,
+              elicitation: null,
+              sessionStates: {},
+            });
             scheduleReconnect();
           }
         }
@@ -944,20 +1029,40 @@ export const useAppStore = create<AppState>((set, get) => {
           });
           // respond is captured by answerPermission through the stored request id.
           pendingRespond = { id: req.id, respond };
+        } else if (req.method === "elicitation/create") {
+          // AskUserQuestion form (the bridge's preferred channel once any
+          // client advertises elicitation.form — capabilities OR-merge, so
+          // Zed's declaration routes OUR questions here too).
+          const parsed = parseElicitationForm(req.params);
+          if (parsed) {
+            setActivity(parsed.sessionId, { awaitingPermission: true });
+            set({ elicitation: { requestId: req.id, ...parsed } });
+            pendingElicitRespond = { id: req.id, respond };
+          } else {
+            // Unparseable schema: decline rather than leave the request
+            // dangling (first-response-wins; Zed may still answer).
+            respond({ action: "decline" });
+          }
         } else {
-          // Unsupported interaction (e.g. elicitation). Deliberately NOT
-          // answered: first-response-wins, and the primary editor client is
-          // always attached (bridge lifetime = editor lifetime).
+          // Other unsupported interaction. Deliberately NOT answered:
+          // first-response-wins, and the primary editor client is always
+          // attached (bridge lifetime = editor lifetime).
           set({ notice: "notice.unsupported" });
         }
       },
       onCancelRequest: (id) => {
-        // We lost the Permission Race; drop the dialog.
+        // We lost the Permission Race; drop the dialog(s).
         const lost = get().permission;
         if (lost?.requestId === id) {
           setActivity(lost.sessionId, { awaitingPermission: false });
           set({ permission: null });
           pendingRespond = null;
+        }
+        const lostForm = get().elicitation;
+        if (lostForm?.requestId === id) {
+          setActivity(lostForm.sessionId, { awaitingPermission: false });
+          set({ elicitation: null });
+          pendingElicitRespond = null;
         }
       },
     });
@@ -978,6 +1083,10 @@ export const useAppStore = create<AppState>((set, get) => {
     id: number;
     respond: (result: unknown) => void;
   } | null = null;
+  let pendingElicitRespond: {
+    id: number;
+    respond: (result: unknown) => void;
+  } | null = null;
 
   return {
     profile: null,
@@ -993,6 +1102,7 @@ export const useAppStore = create<AppState>((set, get) => {
     planEntries: null,
     isRunning: false,
     permission: null,
+    elicitation: null,
     notice: null,
     replayCursor: null,
     hasMore: false,
@@ -1048,6 +1158,7 @@ export const useAppStore = create<AppState>((set, get) => {
         pendingPrompts: {},
         planEntries: null,
         permission: null,
+        elicitation: null,
         notice: null,
         replayCursor: null,
         hasMore: false,
@@ -1105,6 +1216,7 @@ export const useAppStore = create<AppState>((set, get) => {
       stopReconnect();
       reconnectAttempt = 0;
       pendingRespond = null;
+      pendingElicitRespond = null;
       dropQueuedUpdates();
       set({
         instanceId,
@@ -1113,6 +1225,7 @@ export const useAppStore = create<AppState>((set, get) => {
         messages: [],
         planEntries: null,
         permission: null,
+        elicitation: null,
         notice: null,
         replayCursor: null,
         hasMore: false,
@@ -1202,12 +1315,14 @@ export const useAppStore = create<AppState>((set, get) => {
       // elsewhere; this only resets session-scoped state. openSession's
       // fast path reuses the still-open socket.
       pendingRespond = null;
+      pendingElicitRespond = null;
       dropQueuedUpdates();
       set({
         activeSessionId: null,
         messages: [],
         planEntries: null,
         permission: null,
+        elicitation: null,
         notice: null,
         replayCursor: null,
         hasMore: false,
@@ -1231,6 +1346,7 @@ export const useAppStore = create<AppState>((set, get) => {
         messages: [],
         planEntries: null,
         permission: null,
+        elicitation: null,
         replayCursor: null,
         hasMore: false,
         totalMessages: null,
@@ -1507,6 +1623,20 @@ export const useAppStore = create<AppState>((set, get) => {
       entry.respond({ outcome: { outcome: "selected", optionId } });
       if (sid) setActivity(sid, { awaitingPermission: false });
       set({ permission: null });
+    },
+
+    answerElicitation: (requestId, content) => {
+      const entry = pendingElicitRespond;
+      if (!entry || entry.id !== requestId) return;
+      const sid = get().elicitation?.sessionId;
+      pendingElicitRespond = null;
+      // Wire shape (elicitation/create): accept carries the form content,
+      // anything else declines. Absent fields = skipped questions.
+      entry.respond(
+        content ? { action: "accept", content } : { action: "decline" },
+      );
+      if (sid) setActivity(sid, { awaitingPermission: false });
+      set({ elicitation: null });
     },
 
     dismissNotice: () => set({ notice: null }),

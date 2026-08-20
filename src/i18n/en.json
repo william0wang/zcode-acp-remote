@@ -75,7 +75,8 @@
     "planTitle": "Ready to code?",
     "questionTitle": "Question for you",
     "sessionLabel": "Session",
-    "hint": "The first answer across all clients wins"
+    "hint": "The first answer across all clients wins",
+    "submit": "Submit"
   },
   "notice": {
     "unsupported": "This interaction must be answered in your editor",
