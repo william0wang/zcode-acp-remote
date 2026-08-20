@@ -83,8 +83,15 @@ Release 构建使用 `.signing/` 目录下的密钥签名（已 gitignore；请�
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/william0wang/zcode-acp-remote)
 
-**Cloudflare Pages** —— fork 仓库后，在 Pages 控制台连接该仓库，构建命令
-`pnpm build`，输出目录 `dist`，环境变量 `NODE_VERSION=22`。
+**Cloudflare Pages** —— 两种方式：
+
+- Git 集成：fork 仓库后，在 Pages 控制台连接该仓库，构建命令
+  `pnpm build`，输出目录 `dist`，环境变量 `NODE_VERSION=22`。
+- 本机直传：`pnpm deploy:web` 构建 `dist/` 并直接推送到**你自己**
+  Cloudflare 账号的 Pages 项目，无需 Git 集成。复制
+  `.env.local.example` 为 `.env.local`（已 gitignore）填入 API 令牌和
+  项目名；不配令牌则走 wrangler 自己的登录流程
+  （`pnpm dlx wrangler login`）。
 
 **任意静态服务器** —— 仓库自带 `netlify.toml`；Vercel 会自动识别 Vite 构建；
 也可以本地构建后上传：

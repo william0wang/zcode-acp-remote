@@ -16,6 +16,7 @@
     "tauri": "tauri",
     "build:android": "bash scripts/build-android.sh",
     "build:android:debug": "bash scripts/build-android.sh --debug",
+    "deploy:web": "bash scripts/deploy-web.sh",
     "release": "bash scripts/release.sh"
   },
   "dependencies": {

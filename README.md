@@ -90,9 +90,16 @@ builds it for you:
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/william0wang/zcode-acp-remote)
 
-**Cloudflare Pages** — fork the repo, then in the Pages dashboard connect it
-with build command `pnpm build`, output directory `dist`, and environment
-variable `NODE_VERSION=22`.
+**Cloudflare Pages** — two ways:
+
+- Git integration: fork the repo, then in the Pages dashboard connect it
+  with build command `pnpm build`, output directory `dist`, and environment
+  variable `NODE_VERSION=22`.
+- Direct upload from your machine: `pnpm deploy:web` builds `dist/` and
+  pushes it to a Pages project in **your own** Cloudflare account — no Git
+  integration needed. Copy `.env.local.example` to `.env.local` (gitignored)
+  to set the API token and project name; without a token, wrangler's own
+  login flow (`pnpm dlx wrangler login`) is used instead.
 
 **Any static host** — the Netlify config ships in `netlify.toml`; Vercel
 detects the Vite build automatically; or build locally and upload:
