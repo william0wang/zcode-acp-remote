@@ -825,9 +825,10 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        usageStats: null,
+        // usageStats stays (hub-level quota, not instance-scoped) — nothing
+        // re-fetches it here, so clearing would blank the card until the
+        // next app start.
         sessionStates: {},
-        quotaUnavailable: false,
         loadingSession: false,
         isRunning: false,
       });
@@ -1091,9 +1092,9 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
-        usageStats: null,
+        // usageStats stays: quota is hub-level (/api/quota), not tied to the
+        // instance connection — switching instances must not blank the card.
         sessionStates: {},
-        quotaUnavailable: false,
         loadingSession: false,
       });
       await openConnection(s.profile, instanceId);
