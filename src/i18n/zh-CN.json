@@ -94,5 +94,25 @@
     "copy": "复制详情",
     "copied": "已复制",
     "reload": "重新加载"
+  },
+  "files": {
+    "title": "文件",
+    "root": "根目录",
+    "back": "返回",
+    "showHidden": "切换隐藏项",
+    "empty": "空目录",
+    "truncated": "仅显示前 2000 项",
+    "loadError": "加载失败",
+    "retry": "重试"
+  },
+  "viewer": {
+    "share": "分享 / 保存",
+    "copyLink": "复制链接",
+    "shareFailed": "分享失败",
+    "linkCopied": "链接已复制",
+    "openAsText": "作为文本打开",
+    "loadMore": "加载更多",
+    "lines": "{{count}} 行",
+    "loadedAll": "已到文件末尾"
   }
 }

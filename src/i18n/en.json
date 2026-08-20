@@ -94,5 +94,25 @@
     "copy": "Copy details",
     "copied": "Copied",
     "reload": "Reload"
+  },
+  "files": {
+    "title": "Files",
+    "root": "Root",
+    "back": "Back",
+    "showHidden": "Toggle hidden files",
+    "empty": "Empty directory",
+    "truncated": "Showing the first 2000 entries",
+    "loadError": "Failed to load",
+    "retry": "Retry"
+  },
+  "viewer": {
+    "share": "Share / Save",
+    "copyLink": "Copy link",
+    "shareFailed": "Share failed",
+    "linkCopied": "Link copied",
+    "openAsText": "Open as text",
+    "loadMore": "Load more",
+    "lines": "{{count}} lines",
+    "loadedAll": "End of file"
   }
 }

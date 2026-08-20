@@ -20,6 +20,7 @@ import {
   type ConfigOption,
   type ConnectionProfile,
   type ContextUsage,
+  type FsListing,
   type GoUsageStats,
   type GoWindowEntry,
   type GlmUsageStats,
@@ -200,6 +201,9 @@ interface AppState {
   // Last quota fetch failed — keep the section header + Refresh visible so a
   // long-lived connection can still retry (REMOTE-CLIENTS: hide data, retry later).
   quotaUnavailable: boolean;
+  // Bridge advertised session file access (initialize agentCapabilities
+  // `_meta.zcode.fs`, server 0.7.0+); gates the file browser entry (ADR-0005).
+  fsCapable: boolean;
   loadingSession: boolean;
 
   init: () => void;
@@ -226,6 +230,15 @@ interface AppState {
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   refreshUsageStats: () => Promise<void>;
+  // Session Files (ADR-0005): read-only browse/view over hub REST, scoped to
+  // the active instance + session. Null = not connected / request failed.
+  fsList: (path: string) => Promise<FsListing | null>;
+  fsFileText: (
+    path: string,
+    line: number,
+    limit: number,
+  ) => Promise<{ firstLine: number; text: string } | null>;
+  fsFileUrl: (path: string) => string | null;
   sendPrompt: (text: string) => Promise<void>;
   runPrompt: (text: string) => Promise<void>;
   // Interrupts the running turn so the queued follow-up goes out immediately.
@@ -918,6 +931,7 @@ export const useAppStore = create<AppState>((set, get) => {
         permission: null,
         elicitation: null,
         notice: "notice.instanceGone",
+        fsCapable: false,
         replayCursor: null,
         hasMore: false,
         totalMessages: null,
@@ -1068,7 +1082,9 @@ export const useAppStore = create<AppState>((set, get) => {
     });
     acp = conn;
     try {
-      await conn.connect();
+      const init = await conn.connect();
+      if (stale()) return;
+      set({ fsCapable: init.agentCapabilities?._meta?.zcode?.fs === true });
       const active = get().activeSessionId;
       if (active) {
         // Replay is the catch-up mechanism after any disconnect.
@@ -1115,6 +1131,7 @@ export const useAppStore = create<AppState>((set, get) => {
     usageStats: null,
     sessionStates: {},
     quotaUnavailable: false,
+    fsCapable: false,
     loadingSession: false,
 
     init: () => {
@@ -1235,6 +1252,7 @@ export const useAppStore = create<AppState>((set, get) => {
         currentModeId: null,
         usage: null,
         availableCommands: [],
+        fsCapable: false,
         // usageStats stays: quota is hub-level (/api/quota), not tied to the
         // instance connection — switching instances must not blank the card.
         sessionStates: {},
@@ -1515,6 +1533,43 @@ export const useAppStore = create<AppState>((set, get) => {
         if (get().profile === profile)
           set({ usageStats: null, quotaUnavailable: true });
       }
+    },
+
+    // ---- Session Files (ADR-0005) ----
+
+    fsList: async (path) => {
+      const client = hub();
+      const s = get();
+      if (!client || !s.instanceId || !s.activeSessionId) return null;
+      try {
+        return await client.fsList(s.instanceId, s.activeSessionId, path);
+      } catch {
+        return null;
+      }
+    },
+
+    fsFileText: async (path, line, limit) => {
+      const client = hub();
+      const s = get();
+      if (!client || !s.instanceId || !s.activeSessionId) return null;
+      try {
+        return await client.fsFileText(
+          s.instanceId,
+          s.activeSessionId,
+          path,
+          line,
+          limit,
+        );
+      } catch {
+        return null;
+      }
+    },
+
+    fsFileUrl: (path) => {
+      const client = hub();
+      const s = get();
+      if (!client || !s.instanceId || !s.activeSessionId) return null;
+      return client.fsFileUrl(s.instanceId, s.activeSessionId, path);
     },
 
     // Attach-only client: sessions are created in the editor, never here.

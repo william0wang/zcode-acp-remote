@@ -5,12 +5,14 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  FolderOpen,
   Menu,
   SlidersHorizontal,
 } from "lucide-react";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
 import { SessionPanel } from "../components/SessionPanel";
+import { FileBrowser } from "../components/FileBrowser";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { ElicitationDialog } from "../components/ElicitationDialog";
 import { Spinner } from "../components/Spinner";
@@ -67,6 +69,7 @@ export function ChatScreen() {
   const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const instances = useAppStore((s) => s.instances);
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -74,6 +77,7 @@ export function ChatScreen() {
   const planEntries = useAppStore((s) => s.planEntries);
   const notice = useAppStore((s) => s.notice);
   const usage = useAppStore((s) => s.usage);
+  const fsCapable = useAppStore((s) => s.fsCapable);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
 
   const instance = instances.find((i) => i.id === instanceId);
@@ -134,6 +138,15 @@ export function ChatScreen() {
           className={`mr-1.5 size-2 shrink-0 rounded-full ${statusDot}`}
           aria-label={connState}
         />
+        {fsCapable && (
+          <button
+            onClick={() => setFilesOpen(true)}
+            aria-label={t("files.title")}
+            className="mr-1 flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <FolderOpen className="size-5" />
+          </button>
+        )}
         <button
           onClick={() => setPanelOpen(true)}
           aria-label={t("panel.session")}
@@ -178,6 +191,7 @@ export function ChatScreen() {
 
       {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
       {panelOpen && <SessionPanel onClose={() => setPanelOpen(false)} />}
+      {filesOpen && <FileBrowser onClose={() => setFilesOpen(false)} />}
       <PermissionDialog />
       <ElicitationDialog />
 

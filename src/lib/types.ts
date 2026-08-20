@@ -25,6 +25,21 @@ export interface ConnectionProfile {
   token: string;
 }
 
+// Session Files (bridge 0.7.0, ADR-0005): one directory level per call;
+// entries sort dirs-first in byte order server-side.
+export interface FsEntry {
+  name: string;
+  kind: "file" | "dir" | "symlink";
+  size: number;
+  mtime?: number;
+}
+
+export interface FsListing {
+  root: string;
+  entries: FsEntry[];
+  truncated: boolean;
+}
+
 // Session config (session/load result + config_option_update). Shape matches
 // the bridge's buildConfigOptions output (id: model | mode | thought).
 export interface ConfigOption {

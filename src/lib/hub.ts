@@ -1,4 +1,4 @@
-import type { HubInstance } from "./types";
+import type { FsListing, HubInstance } from "./types";
 
 export class HubApiError extends Error {
   // `network` = the fetch itself failed (hub unreachable): the hub lives and
@@ -86,5 +86,70 @@ export class HubClient {
       `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/close`,
       "POST",
     );
+  }
+
+  /**
+   * Session Files (ADR-0005). A 404 right after a bridge upgrade is the hub
+   * self-learning the fs route — retried once transparently.
+   */
+  private async fetchFs(path: string): Promise<Response> {
+    try {
+      return await this.fetch(path);
+    } catch (e) {
+      if (e instanceof HubApiError && e.status === 404) {
+        await new Promise((r) => setTimeout(r, 400));
+        return await this.fetch(path);
+      }
+      throw e;
+    }
+  }
+
+  /** One directory level; dotfiles included (filter client-side). */
+  async fsList(
+    instanceId: string,
+    sessionId: string,
+    path: string,
+  ): Promise<FsListing> {
+    const q = new URLSearchParams({ sessionId, path });
+    const res = await this.fetchFs(`/api/instances/${instanceId}/fs/list?${q}`);
+    return (await res.json()) as FsListing;
+  }
+
+  /**
+   * Text line window (default 200, cap 5000). `firstLine` comes from the
+   * X-Zcode-First-Line header — always trust it over the request's `line`.
+   */
+  async fsFileText(
+    instanceId: string,
+    sessionId: string,
+    path: string,
+    line: number,
+    limit: number,
+  ): Promise<{ firstLine: number; text: string }> {
+    const q = new URLSearchParams({
+      sessionId,
+      path,
+      line: String(line),
+      limit: String(limit),
+    });
+    const res = await this.fetchFs(`/api/instances/${instanceId}/fs/file?${q}`);
+    const firstLine = Number(res.headers.get("X-Zcode-First-Line")) || line;
+    const raw = await res.text();
+    // The line window always ends with a trailing "\n" (server emits
+    // lines.join("\n") + "\n"); strip it so line counts and window stitching
+    // in the viewer stay exact.
+    return {
+      firstLine,
+      text: raw.endsWith("\n") ? raw.slice(0, -1) : raw,
+    };
+  }
+
+  /**
+   * Absolute fs/file URL with the token in the query string — for `<img src>`
+   * and download links, which cannot carry an Authorization header.
+   */
+  fsFileUrl(instanceId: string, sessionId: string, path: string): string {
+    const q = new URLSearchParams({ sessionId, path, token: this.token });
+    return this.url(`/api/instances/${instanceId}/fs/file?${q}`);
   }
 }

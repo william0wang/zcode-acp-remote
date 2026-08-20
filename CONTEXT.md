@@ -45,3 +45,20 @@ running, just finished (60s window after a turn ends), or idle. Derived from
 bridge-wide broadcasts; not persisted and unknown for other sessions until the
 first broadcast after a reconnect.
 _Avoid_: session status, online status
+
+**Session Root**:
+The directory a session was created or loaded with; the anchor every
+session-file path resolves against. Absolute paths must land inside it;
+escapes are rejected server-side.
+_Avoid_: workspace, project folder
+
+**Session Files**:
+The read-only, hub-proxied view of the active session's files. Breadcrumb
+navigation over single-level listings; dotfiles hidden by default with a
+toggle. Requires the bridge to advertise the fs capability.
+_Avoid_: file manager, explorer
+
+**File Viewer**:
+The full-screen reader for one session file: syntax-highlighted text loaded
+in line windows, image preview, or a download fallback for other kinds.
+_Avoid_: file preview dialog

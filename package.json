@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.14",
+    "@tanstack/react-virtual": "^3.14.10",
     "dayjs": "^1.11.23",
     "highlight.js": "^11.12.0",
     "i18next": "^26.3.6",
@@ -32,6 +33,7 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
+    "yet-another-react-lightbox": "^3.32.2",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

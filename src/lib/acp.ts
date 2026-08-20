@@ -28,6 +28,16 @@ interface PendingEntry {
   reject: (err: Error) => void;
 }
 
+// initialize result — only the capability probe we consume is typed; the
+// zcode extension rides in agentCapabilities._meta (REMOTE-CLIENTS.md).
+export interface AcpInitializeResult {
+  agentCapabilities?: {
+    _meta?: { zcode?: { fs?: boolean } };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 // One AcpConnection owns one WebSocket, bound to one bridge instance for its
 // whole lifetime (REMOTE-CLIENTS.md). Reconnection means building a new one.
 export class AcpConnection {
@@ -44,8 +54,9 @@ export class AcpConnection {
   ) {}
 
   // Resolves once the socket is open and `initialize` (protocolVersion MUST be
-  // the number 1) has completed. Any non-open outcome rejects.
-  connect(): Promise<void> {
+  // the number 1) has completed; the result carries agentCapabilities for
+  // feature gating (e.g. zcode fs). Any non-open outcome rejects.
+  connect(): Promise<AcpInitializeResult> {
     return new Promise((resolve, reject) => {
       let settled = false;
       this.handlers.onState("connecting");
@@ -57,10 +68,10 @@ export class AcpConnection {
           protocolVersion: 1,
           clientCapabilities: {},
         }).then(
-          () => {
+          (result) => {
             settled = true;
             this.handlers.onState("open");
-            resolve();
+            resolve(result as AcpInitializeResult);
           },
           (err: Error) => {
             if (!settled) {
