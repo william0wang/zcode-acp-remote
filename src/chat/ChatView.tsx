@@ -456,8 +456,13 @@ function Composer() {
   const token = value.split(/\s/, 1)[0] ?? "";
   const matches = useMemo(() => {
     if (!token.startsWith("/")) return [];
-    const q = token.slice(1).toLowerCase();
-    return commands.filter((c) => c.name.toLowerCase().startsWith(q));
+    // Skill commands ride a "$" visual-grouping prefix (e.g. "$tdd"); the
+    // wire form is "/$name", but users naturally type "/td" — strip the
+    // marker on BOTH sides so either spelling matches. Insertion keeps the
+    // real name (the bridge passes "/$name" through verbatim).
+    const strip = (s: string) => s.replace(/^\$/, "");
+    const q = strip(token.slice(1).toLowerCase());
+    return commands.filter((c) => strip(c.name.toLowerCase()).startsWith(q));
   }, [token, commands]);
 
   // Still typing the command token (no space yet) and not dismissed.
