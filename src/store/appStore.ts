@@ -198,6 +198,9 @@ interface AppState {
   // Account-level quota (account/usage_stats): the combined GLM + Opencode
   // Go structure mirroring the zcode-quota CLI card, pulled after connect.
   usageStats: AccountUsageStats | null;
+  // Epoch ms of the last successful quota fetch — shown so the user can tell
+  // whether a refresh actually landed.
+  usageStatsAt: number | null;
   // Per-session running/permission state from bridge-wide broadcasts.
   sessionStates: Record<string, SessionActivity>;
   // Last quota fetch failed — keep the section header + Refresh visible so a
@@ -1138,6 +1141,7 @@ export const useAppStore = create<AppState>((set, get) => {
     usage: null,
     availableCommands: [],
     usageStats: null,
+    usageStatsAt: null,
     sessionStates: {},
     quotaUnavailable: false,
     fsCapable: false,
@@ -1195,6 +1199,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         usageStats: null,
+        usageStatsAt: null,
         sessionStates: {},
         quotaUnavailable: false,
         loadingSession: false,
@@ -1540,7 +1545,11 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const result = await client.quota();
         if (get().profile !== profile) return; // hub changed mid-flight
-        set({ usageStats: parseUsageStats(result), quotaUnavailable: false });
+        set({
+          usageStats: parseUsageStats(result),
+          quotaUnavailable: false,
+          usageStatsAt: Date.now(),
+        });
       } catch {
         if (get().profile === profile)
           set({ usageStats: null, quotaUnavailable: true });
