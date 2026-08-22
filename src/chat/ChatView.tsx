@@ -16,7 +16,6 @@ import {
   ThreadPrimitive,
   unstable_useComposerInput,
   useExternalStoreRuntime,
-  useThreadViewport,
   useThreadViewportAutoScroll,
   groupPartByType,
   type ThreadMessageLike,
@@ -211,10 +210,14 @@ function ToolCard({ part }: { part: { toolName: string; args?: unknown } }) {
     <details className="group my-2 max-w-full overflow-hidden rounded-xl bg-white/[0.04] text-xs">
       <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-dim">
         <Icon className={`size-3.5 shrink-0 ${meta.className}`} />
-        <span className="min-w-0 truncate font-medium">{name}</span>
+        {/* shrink-0 keeps the tool name readable — an unprotected flex child
+            gets squeezed to one letter by the long detail preview next to it. */}
+        <span className="min-w-0 shrink-0 truncate font-medium">{name}</span>
         {/* Fold summaries stay clean: the body is harness plumbing text. */}
         {!foldKind && detail && (
-          <span className="truncate text-faint">{detail.slice(0, 120)}</span>
+          <span className="min-w-0 flex-1 truncate text-faint">
+            {detail.slice(0, 120)}
+          </span>
         )}
         <ChevronDown className="ml-auto size-3.5 shrink-0 text-faint transition-transform duration-200 group-open:rotate-180" />
       </summary>
@@ -638,6 +641,10 @@ function PendingPrompts() {
   );
 }
 
+// Distance from the scroll bottom within which the viewport counts as
+// "at the bottom" for the jump button and unread reset.
+const NEAR_BOTTOM_PX = 64;
+
 function Thread({
   viewportRef,
   onScroll,
@@ -662,10 +669,35 @@ function Thread({
   const loadingSession = useAppStore((s) => s.loadingSession);
   const messages = useAppStore((s) => s.messages);
 
-  // Stick-to-bottom and the isAtBottom signal come from the library hook
-  // (ADR 0004); only the load-earlier anchoring stays hand-rolled below.
+  // Stick-to-bottom comes from the library hook (ADR 0004); only the
+  // load-earlier anchoring stays hand-rolled below. The library's
+  // isAtBottom signal only flips within 1px of the exact bottom — mobile
+  // flings routinely rest a few px short, which would leave the jump
+  // button stuck over the last message. Measure locally with a tolerant
+  // threshold instead.
   const autoScrollRef = useThreadViewportAutoScroll({ autoScroll: true });
-  const isAtBottom = useThreadViewport((s) => s.isAtBottom);
+  const [atBottom, setAtBottom] = useState(true);
+  const measure = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAtBottom(
+      distance <= NEAR_BOTTOM_PX || el.scrollHeight <= el.clientHeight,
+    );
+  }, [viewportRef]);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => el.removeEventListener("scroll", measure);
+  }, [viewportRef, measure]);
+  // Session switches swap content without firing a scroll event —
+  // re-measure a frame after the write so the library's own
+  // bottom-restore (ResizeObserver, same frame) has landed first.
+  useEffect(() => {
+    const id = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(id);
+  }, [messages, measure]);
 
   // Unread count: messages appended while the viewport is away from the
   // bottom. Prepended history pages are not unread content.
@@ -674,12 +706,12 @@ function Thread({
   useEffect(() => {
     const grew = messages.length - lastLenRef.current;
     lastLenRef.current = messages.length;
-    if (isAtBottom) {
+    if (atBottom) {
       setUnread(0);
       return;
     }
     if (grew > 0 && !loadingEarlier) setUnread((u) => u + grew);
-  }, [messages, isAtBottom, loadingEarlier]);
+  }, [messages, atBottom, loadingEarlier]);
 
   const composeRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -740,7 +772,7 @@ function Thread({
         <PendingPrompts />
         <Composer />
       </ThreadPrimitive.Viewport>
-      {!isAtBottom && messages.length > 0 && (
+      {!atBottom && messages.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-end px-4">
           <div className="pointer-events-auto relative">
             <ThreadPrimitive.ScrollToBottom
