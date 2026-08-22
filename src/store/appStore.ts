@@ -330,12 +330,19 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   }
 
-  // The ACP schema marks cwd + mcpServers as REQUIRED on session/new and
-  // session/load; the instance workspace is the natural cwd.
-  function instanceWorkspace(): string {
+  /**
+   * The instance's workspace label from the hub list, or undefined when the
+   * list is stale/missing this instance. NEVER falls back to "/" — the bridge
+   * records the load's cwd as the session's file root, and a "/" here hijacks
+   * the file browser to the filesystem root (and the instance's advertised
+   * workspace with it). Omitting cwd lets the bridge keep the root it
+   * already recorded for the session.
+   */
+  function instanceWorkspace(): string | undefined {
     const s = get();
     const inst = s.instances.find((i) => i.id === s.instanceId);
-    return inst?.workspace ?? "/";
+    const ws = inst?.workspace;
+    return ws && ws !== "/" ? ws : undefined;
   }
 
   function startPolling(): void {
@@ -1378,9 +1385,12 @@ export const useAppStore = create<AppState>((set, get) => {
         loadingSession: true,
       });
       try {
+        const ws = instanceWorkspace();
         const result = await acp.request("session/load", {
           sessionId,
-          cwd: instanceWorkspace(),
+          // cwd only when the hub list actually knows this instance — see
+          // instanceWorkspace(): a bogus cwd becomes the session's file root.
+          ...(ws ? { cwd: ws } : {}),
           mcpServers: [],
           // Tail replay: the limit rides in _meta (top-level unknown keys are
           // stripped by the SDK schema). Counts messages, turn-aligned.
