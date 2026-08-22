@@ -15,6 +15,7 @@ import {
   contentDiffBlocks,
   contentText,
   type AccountUsageStats,
+  type AttachmentDraft,
   type ChatMessage,
   type ChatPart,
   type ConfigOption,
@@ -25,6 +26,7 @@ import {
   type GoWindowEntry,
   type GlmUsageStats,
   type HubInstance,
+  type PromptDraft,
   type QuotaItem,
   type SessionUpdate,
   type SlashCommand,
@@ -174,7 +176,7 @@ interface AppState {
   // flushed in order the moment the prompt settles / the session attaches.
   // Keyed by sessionId and persisted — drafts survive session switches and
   // app restarts.
-  pendingPrompts: Record<string, string[]>;
+  pendingPrompts: Record<string, PromptDraft[]>;
   permission: PendingPermission | null;
   // AskUserQuestion via elicitation/create (the bridge's preferred channel
   // once ANY client advertises elicitation.form — capabilities OR-merge).
@@ -239,8 +241,8 @@ interface AppState {
     limit: number,
   ) => Promise<{ firstLine: number; text: string } | null>;
   fsFileUrl: (path: string) => string | null;
-  sendPrompt: (text: string) => Promise<void>;
-  runPrompt: (text: string) => Promise<void>;
+  sendPrompt: (text: string, images?: AttachmentDraft[]) => Promise<void>;
+  runPrompt: (draft: PromptDraft) => Promise<void>;
   // Interrupts the running turn so the queued follow-up goes out immediately.
   forceSendPending: () => void;
   discardPending: (index: number) => void;
@@ -318,7 +320,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
   // Every queue mutation goes through here so state and localStorage stay in
   // sync (drafts must survive switches/restarts). Empty queues drop the key.
-  function setQueue(sid: string, next: string[]): void {
+  function setQueue(sid: string, next: PromptDraft[]): void {
     set((state) => {
       const map = { ...state.pendingPrompts };
       if (next.length > 0) map[sid] = next;
@@ -1576,24 +1578,25 @@ export const useAppStore = create<AppState>((set, get) => {
     // ACP allows one prompt at a time: while a turn is running or history is
     // still replaying, new text queues as pending instead — a prompt sent
     // mid-replay never reaches the session, so it must wait for the attach.
-    sendPrompt: async (text) => {
+    sendPrompt: async (text, images) => {
       const s = get();
       if (!acp || s.connState !== "open") return;
       if (!s.activeSessionId) {
         set({ notice: "notice.noSession" });
         return;
       }
+      const draft: PromptDraft = { text, images: images ?? [] };
       if (s.isRunning || s.loadingSession) {
         setQueue(s.activeSessionId, [
           ...(s.pendingPrompts[s.activeSessionId] ?? []),
-          text,
+          draft,
         ]);
         return;
       }
-      await get().runPrompt(text);
+      await get().runPrompt(draft);
     },
 
-    runPrompt: async (text) => {
+    runPrompt: async (draft) => {
       const s = get();
       if (
         !acp ||
@@ -1607,9 +1610,25 @@ export const useAppStore = create<AppState>((set, get) => {
       set((state) => {
         const ensured = ensureMessage(state.messages, "user");
         return {
-          messages: ensured.messages.map((m) =>
-            m.id === ensured.message.id ? appendTextPart(m, text, "text") : m,
-          ),
+          messages: ensured.messages.map((m) => {
+            if (m.id !== ensured.message.id) return m;
+            let msg = m;
+            if (draft.text) msg = appendTextPart(msg, draft.text, "text");
+            for (const img of draft.images) {
+              // Display form is the data URL; the wire block stays base64.
+              msg = {
+                ...msg,
+                parts: [
+                  ...msg.parts,
+                  {
+                    type: "image",
+                    image: `data:${img.mimeType};base64,${img.data}`,
+                  } as ChatPart,
+                ],
+              };
+            }
+            return msg;
+          }),
         };
       });
       const sessionId = s.activeSessionId;
@@ -1618,7 +1637,14 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         await acp.request("session/prompt", {
           sessionId,
-          prompt: [{ type: "text", text }],
+          prompt: [
+            ...(draft.text ? [{ type: "text", text: draft.text }] : []),
+            ...draft.images.map((img) => ({
+              type: "image",
+              data: img.data,
+              mimeType: img.mimeType,
+            })),
+          ],
         });
       } catch (e) {
         // A dropped connection kills the in-flight prompt, but the reconnect

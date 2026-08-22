@@ -62,3 +62,9 @@ _Avoid_: file manager, explorer
 The full-screen reader for one session file: syntax-highlighted text loaded
 in line windows, image preview, or a download fallback for other kinds.
 _Avoid_: file preview dialog
+
+**Attachment**:
+A user-supplied image riding a prompt into the session (gallery pick, camera
+shot, or web paste). Travels in-band as an ACP image block, unlike Session
+Files which the agent reads and writes in the Session Root.
+_Avoid_: upload, media message

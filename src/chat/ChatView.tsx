@@ -24,11 +24,15 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import ReactDiffViewer from "react-diff-viewer-continued";
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import "yet-another-react-lightbox/styles.css";
 import {
   ArrowDown,
   ArrowUp,
   Bell,
   Brain,
+  Camera,
   Check,
   ChevronDown,
   Copy,
@@ -36,6 +40,7 @@ import {
   FileText,
   Globe,
   History,
+  ImagePlus,
   Layers,
   ListChecks,
   Search,
@@ -50,7 +55,12 @@ import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
 import { Spinner } from "../components/Spinner";
-import type { AcpDiffContent, ChatMessage } from "../lib/types";
+import { MAX_IMAGES, attachmentDataUrl, prepareImage } from "../lib/image";
+import type {
+  AcpDiffContent,
+  AttachmentDraft,
+  ChatMessage,
+} from "../lib/types";
 
 // ACP chat model -> assistant-ui message model (the ACP runtime adapter).
 
@@ -65,6 +75,9 @@ const convertMessage = (m: ChatMessage): ThreadMessageLike => ({
     // streaming message "running", which drives expand/collapse).
     if (p.type === "thought") {
       return { type: "reasoning" as const, text: p.text };
+    }
+    if (p.type === "image") {
+      return { type: "image" as const, image: p.image };
     }
     return {
       type: "tool-call" as const,
@@ -324,12 +337,16 @@ function parseTaskNotification(
 const UserMessage = memo(function UserMessage({
   collapsed,
   notice,
+  images,
 }: {
   collapsed?: boolean;
   notice?: { status: string; summary: string };
+  /** Attachment echo data URLs (resolved per store write in ChatView). */
+  images?: string[];
 }) {
   const { t } = useTranslation();
   const notify = useAppStore((s) => s.notify);
+  const [zoom, setZoom] = useState<number | null>(null);
 
   // Long-press copy: the bubble is plain text, so the rendered text is the
   // source (assistant-side copying uses ActionBarPrimitive on markdown source).
@@ -387,7 +404,41 @@ const UserMessage = memo(function UserMessage({
         <MessagePrimitive.Parts>
           {({ part }) => (part.type === "text" ? <>{part.text}</> : null)}
         </MessagePrimitive.Parts>
+        {images && images.length > 0 && (
+          <div
+            className={`mt-1.5 grid gap-1 ${images.length > 1 ? "grid-cols-2" : ""}`}
+          >
+            {images.map((src, i) => (
+              <button
+                key={i}
+                onClick={() => setZoom(i)}
+                className="overflow-hidden rounded-xl active:opacity-80"
+              >
+                <img
+                  src={src}
+                  alt=""
+                  loading="lazy"
+                  className={
+                    images.length > 1
+                      ? "h-28 w-full object-cover"
+                      : "max-h-64 max-w-full object-contain"
+                  }
+                />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+      {zoom != null && images && (
+        <Lightbox
+          open
+          index={zoom}
+          close={() => setZoom(null)}
+          slides={images.map((src) => ({ src }))}
+          plugins={[Zoom]}
+          zoom={{ maxZoomPixelRatio: 5 }}
+        />
+      )}
     </MessagePrimitive.Root>
   );
 });
@@ -451,10 +502,16 @@ function Composer() {
   const commands = useAppStore((s) => s.availableCommands);
   const isRunning = useAppStore((s) => s.isRunning);
   const sendPrompt = useAppStore((s) => s.sendPrompt);
+  const notify = useAppStore((s) => s.notify);
   const { value, setText } = unstable_useComposerInput();
   const [highlight, setHighlight] = useState(0);
   const [dismissedToken, setDismissedToken] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // Staged attachments (ADR 0007): compressed base64 + mime, rendered from
+  // data URLs. Reset on send; ride the prompt (or the queue while running).
+  const [images, setImages] = useState<AttachmentDraft[]>([]);
+  const galleryRef = useRef<HTMLInputElement | null>(null);
+  const cameraRef = useRef<HTMLInputElement | null>(null);
 
   const token = value.split(/\s/, 1)[0] ?? "";
   const matches = useMemo(() => {
@@ -491,7 +548,25 @@ function Composer() {
   );
 
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
-    if (!open || e.nativeEvent.isComposing) return;
+    if (e.nativeEvent.isComposing) return;
+    if (!open) {
+      // Enter-to-send is intercepted in the capture phase (beats the
+      // library's composer submit) so staged attachments ride along — the
+      // library's submit path only sees text and would drop them.
+      if (
+        e.key === "Enter" &&
+        !e.shiftKey &&
+        (value.trim() || images.length > 0)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = value.trim();
+        setText("");
+        setImages([]);
+        void sendPrompt(text, images.length > 0 ? images : undefined);
+      }
+      return;
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       e.stopPropagation();
@@ -506,6 +581,43 @@ function Composer() {
       select(matches[idx].name);
     } else if (e.key === "Escape") {
       setDismissedToken(token);
+    }
+  };
+
+  const addFiles = async (files: FileList | File[]) => {
+    const picked: AttachmentDraft[] = [];
+    for (const f of Array.from(files)) {
+      if (images.length + picked.length >= MAX_IMAGES) {
+        notify(t("chat.attachLimit"));
+        break;
+      }
+      if (!f.type.startsWith("image/")) continue;
+      const res = await prepareImage(f);
+      if (!res.ok) {
+        notify(
+          t(
+            res.reason === "tooLarge"
+              ? "chat.imageTooLarge"
+              : "chat.attachFailed",
+          ),
+        );
+        continue;
+      }
+      picked.push(res.image);
+    }
+    if (picked.length > 0) {
+      setImages((prev) => [...prev, ...picked].slice(0, MAX_IMAGES));
+    }
+  };
+
+  // Desktop-web convenience: pasted screenshots ride the same pipeline.
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
     }
   };
 
@@ -541,13 +653,78 @@ function Composer() {
           ))}
         </div>
       )}
+      {images.length > 0 && (
+        <div className="mb-2 flex gap-2 overflow-x-auto">
+          {images.map((img, i) => (
+            <div key={i} className="relative shrink-0">
+              <img
+                src={attachmentDataUrl(img)}
+                alt=""
+                className="size-16 rounded-xl object-cover ring-1 ring-hairline"
+              />
+              <button
+                onClick={() =>
+                  setImages((prev) => prev.filter((_, j) => j !== i))
+                }
+                aria-label={t("chat.remove")}
+                className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-white text-black shadow"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <ComposerPrimitive.Root
         onKeyDownCapture={onKeyDownCapture}
         className="flex items-end gap-1.5 rounded-[26px] bg-raised p-1.5 pl-4 ring-1 ring-inset ring-hairline"
       >
+        <input
+          ref={galleryRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void addFiles(e.target.files ?? []);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            void addFiles(e.target.files ?? []);
+            e.target.value = "";
+          }}
+        />
+        {/* type="button" — inside the composer <form>, an untyped button
+            defaults to submit and would fire the draft off on tap. */}
+        <button
+          type="button"
+          onClick={() => galleryRef.current?.click()}
+          aria-label={t("chat.attach")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+        >
+          <ImagePlus className="size-5" />
+        </button>
+        {/* Camera capture only makes sense on touch devices; hidden on
+            desktop-web where the gallery button + paste cover it. */}
+        <button
+          type="button"
+          onClick={() => cameraRef.current?.click()}
+          aria-label={t("chat.camera")}
+          className="hidden size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06] [@media(pointer:coarse)]:flex"
+        >
+          <Camera className="size-5" />
+        </button>
         <ComposerPrimitive.Input
           rows={1}
           placeholder={t("chat.inputPlaceholder")}
+          onPaste={onPaste}
           className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] text-ink placeholder:text-faint focus:outline-none"
         />
         {/* While a turn runs the Send stays a Send: a draft queues as pending
@@ -562,15 +739,17 @@ function Composer() {
             <Square className="size-3 fill-current" />
           </ComposerPrimitive.Cancel>
         )}
-        {(!isRunning || value.trim().length > 0) && (
+        {(!isRunning || value.trim().length > 0 || images.length > 0) && (
           <button
+            type="button"
             onClick={() => {
               const text = value.trim();
-              if (!text) return;
+              if (!text && images.length === 0) return;
               setText("");
-              void sendPrompt(text);
+              setImages([]);
+              void sendPrompt(text, images.length > 0 ? images : undefined);
             }}
-            disabled={!value.trim()}
+            disabled={!value.trim() && images.length === 0}
             aria-label={t("chat.send")}
             className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition disabled:opacity-25 active:scale-90"
           >
@@ -605,14 +784,26 @@ function PendingPrompts() {
   if (pendingPrompts.length === 0) return null;
   return (
     <>
-      {pendingPrompts.map((text, i) => (
+      {pendingPrompts.map((draft, i) => (
         <div
           key={i}
           ref={i === pendingPrompts.length - 1 ? lastRef : undefined}
           className="flex min-w-0 justify-end opacity-60"
         >
           <div className="flex max-w-[85%] min-w-0 flex-col break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-sm text-ink">
-            <span>{text}</span>
+            {draft.text && <span>{draft.text}</span>}
+            {draft.images.length > 0 && (
+              <div className="mt-1 flex gap-1.5">
+                {draft.images.map((img, j) => (
+                  <img
+                    key={j}
+                    src={attachmentDataUrl(img)}
+                    alt=""
+                    className="size-12 rounded-lg object-cover ring-1 ring-hairline"
+                  />
+                ))}
+              </div>
+            )}
             <span className="mt-1 flex items-center justify-end gap-3 text-[11px]">
               <span className="text-faint">{t("chat.pending")}</span>
               {/* No force-send while replaying: there is no turn to interrupt
@@ -654,6 +845,7 @@ function Thread({
   onExpand,
   collapsedIds,
   taskNotices,
+  userImages,
 }: {
   viewportRef: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
@@ -663,6 +855,7 @@ function Thread({
   onExpand: () => void;
   collapsedIds: ReadonlySet<string>;
   taskNotices: ReadonlyMap<string, { status: string; summary: string }>;
+  userImages: ReadonlyMap<string, string[]>;
 }) {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -763,6 +956,7 @@ function Thread({
                 key={message.id}
                 collapsed={collapsedIds.has(message.id)}
                 notice={taskNotices.get(message.id)}
+                images={userImages.get(message.id)}
               />
             ) : (
               <AssistantMessage key={message.id} />
@@ -871,6 +1065,19 @@ export function ChatView() {
     return map;
   }, [messages]);
 
+  // Attachment echo data URLs per user message — same stable-identity pattern.
+  const userImages = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const m of messages) {
+      if (m.role !== "user") continue;
+      const urls = m.parts
+        .filter((p) => p.type === "image")
+        .map((p) => (p as { image: string }).image);
+      if (urls.length > 0) map.set(m.id, urls);
+    }
+    return map;
+  }, [messages]);
+
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage,
@@ -890,6 +1097,7 @@ export function ChatView() {
         onExpand={expand}
         collapsedIds={collapsedIds}
         taskNotices={taskNotices}
+        userImages={userImages}
       />
     </AssistantRuntimeProvider>
   );

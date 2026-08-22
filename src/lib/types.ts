@@ -198,7 +198,22 @@ export interface ToolCallPart {
 export type ChatPart =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
+  // Prompt attachment echo: `image` holds a display data URL.
+  | { type: "image"; image: string }
   | ToolCallPart;
+
+// A compressed prompt attachment ready for the wire (ADR 0007): base64
+// without the data-url prefix — exactly the ACP image block payload.
+export interface AttachmentDraft {
+  data: string;
+  mimeType: string;
+}
+
+// A queued prompt: text plus staged attachments (persisted across restarts).
+export interface PromptDraft {
+  text: string;
+  images: AttachmentDraft[];
+}
 
 export interface ChatMessage {
   id: string;
