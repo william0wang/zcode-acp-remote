@@ -38,7 +38,6 @@
     "discard": "移除",
     "send": "发送",
     "attach": "添加图片",
-    "camera": "拍照",
     "remove": "移除",
     "attachFailed": "图片处理失败",
     "imageTooLarge": "GIF/SVG 图片不能超过 5 MB",
@@ -74,6 +73,7 @@
   "quota": {
     "title": "配额使用",
     "refresh": "刷新",
+    "updated": "更新于",
     "unavailable": "暂不可用，点刷新重试"
   },
   "permission": {

@@ -32,7 +32,6 @@ import {
   ArrowUp,
   Bell,
   Brain,
-  Camera,
   Check,
   ChevronDown,
   Copy,
@@ -511,7 +510,6 @@ function Composer() {
   // data URLs. Reset on send; ride the prompt (or the queue while running).
   const [images, setImages] = useState<AttachmentDraft[]>([]);
   const galleryRef = useRef<HTMLInputElement | null>(null);
-  const cameraRef = useRef<HTMLInputElement | null>(null);
 
   const token = value.split(/\s/, 1)[0] ?? "";
   const matches = useMemo(() => {
@@ -690,17 +688,6 @@ function Composer() {
             e.target.value = "";
           }}
         />
-        <input
-          ref={cameraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => {
-            void addFiles(e.target.files ?? []);
-            e.target.value = "";
-          }}
-        />
         {/* type="button" — inside the composer <form>, an untyped button
             defaults to submit and would fire the draft off on tap. */}
         <button
@@ -710,16 +697,6 @@ function Composer() {
           className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
         >
           <ImagePlus className="size-5" />
-        </button>
-        {/* Camera capture only makes sense on touch devices; hidden on
-            desktop-web where the gallery button + paste cover it. */}
-        <button
-          type="button"
-          onClick={() => cameraRef.current?.click()}
-          aria-label={t("chat.camera")}
-          className="hidden size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06] [@media(pointer:coarse)]:flex"
-        >
-          <Camera className="size-5" />
         </button>
         <ComposerPrimitive.Input
           rows={1}

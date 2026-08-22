@@ -13,6 +13,17 @@ function fmtResetTime(ms: number): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Last-refresh stamp: `HH:MM` today, `MM-DD HH:MM` otherwise.
+function fmtRefreshedAt(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  if (d.toDateString() === new Date().toDateString()) {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  return fmtResetTime(ms);
+}
+
 function capitalise(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
@@ -50,21 +61,25 @@ function QuotaRow({
   label,
   percent,
   resetMs,
-  count,
+  used,
+  total,
 }: {
   label: string;
   percent: number;
   resetMs?: number;
-  count?: number;
+  used?: number;
+  total?: number;
 }) {
   const clamped = Math.min(100, Math.max(0, percent));
   return (
     <div className="px-4 py-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <span className="shrink-0 font-mono text-xs text-dim">{label}</span>
-        <span className="truncate text-xs tabular-nums text-faint">
-          {percent}%{resetMs != null && ` · ${fmtResetTime(resetMs)}`}
-          {count != null && ` · ${count}`}
+        {/* `used / total` when the API carries counts (GLM); the Go source
+            only exposes a percentage, so those rows stay on `NN%`. */}
+        <span className="shrink-0 truncate text-xs tabular-nums text-faint">
+          {used != null && total != null ? `${used} / ${total}` : `${percent}%`}
+          {resetMs != null && ` · ${fmtResetTime(resetMs)}`}
         </span>
       </div>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/[0.08]">
@@ -102,6 +117,7 @@ export function SectionLabel({
 export function QuotaSection() {
   const { t } = useTranslation();
   const usageStats = useAppStore((s) => s.usageStats);
+  const usageStatsAt = useAppStore((s) => s.usageStatsAt);
   const quotaUnavailable = useAppStore((s) => s.quotaUnavailable);
   const refreshUsageStats = useAppStore((s) => s.refreshUsageStats);
 
@@ -117,13 +133,20 @@ export function QuotaSection() {
         <h3 className="text-[11px] font-medium uppercase tracking-wide text-faint">
           {t("quota.title")}
         </h3>
-        <button
-          onClick={() => void refreshUsageStats()}
-          aria-label={t("quota.refresh")}
-          className="flex size-7 items-center justify-center rounded-full text-faint active:bg-white/[0.06]"
-        >
-          <RefreshCw className="size-3.5" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {usageStatsAt != null && (
+            <span className="text-[10px] tabular-nums text-faint">
+              {t("quota.updated")} {fmtRefreshedAt(usageStatsAt)}
+            </span>
+          )}
+          <button
+            onClick={() => void refreshUsageStats()}
+            aria-label={t("quota.refresh")}
+            className="flex size-7 items-center justify-center rounded-full text-faint active:bg-white/[0.06]"
+          >
+            <RefreshCw className="size-3.5" />
+          </button>
+        </div>
       </div>
       {quotaUnavailable ? (
         <p className="px-4 py-1 text-xs text-faint">{t("quota.unavailable")}</p>
@@ -144,7 +167,10 @@ export function QuotaSection() {
                   label={it.label}
                   percent={it.usedPercent}
                   resetMs={it.nextResetTime}
-                  count={it.usedCount}
+                  // CLI parity: only the MCP limit renders its absolute
+                  // used/total; every other row stays on `NN%`.
+                  used={it.key === "mcp" ? it.usedCount : undefined}
+                  total={it.key === "mcp" ? it.totalCount : undefined}
                 />
               ))
             ) : (
