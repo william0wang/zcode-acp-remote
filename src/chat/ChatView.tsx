@@ -63,38 +63,52 @@ import type {
 
 // ACP chat model -> assistant-ui message model (the ACP runtime adapter).
 
-const convertMessage = (m: ChatMessage): ThreadMessageLike => ({
-  id: m.id,
-  role: m.role,
-  createdAt: new Date(m.createdAt),
-  content: m.parts.map((p) => {
-    if (p.type === "text") return { type: "text" as const, text: p.text };
-    // Thought streams map onto the reasoning part type so they render through
-    // the collapsible ThoughtCard (auto-status marks the last part of the
-    // streaming message "running", which drives expand/collapse).
-    if (p.type === "thought") {
-      return { type: "reasoning" as const, text: p.text };
-    }
-    if (p.type === "image") {
-      return { type: "image" as const, image: p.image };
-    }
-    return {
-      type: "tool-call" as const,
-      toolCallId: p.toolCallId,
-      toolName: p.toolName,
-      // args must be JSON-clean: diffs ride as a serialized array.
-      args: {
-        detail: p.detail,
-        title: p.toolName,
-        ...(p.kind ? { kind: p.kind } : {}),
-        ...(p.rawName ? { rawName: p.rawName } : {}),
-        ...(p.foldKind ? { foldKind: p.foldKind } : {}),
-        ...(p.diffs ? { diffs: JSON.stringify(p.diffs) } : {}),
-      },
-      result: p.status === "completed" ? p.detail : p.status,
-    };
-  }),
-});
+// The runtime re-converts EVERY message on every store write (replay batches,
+// streaming deltas). Without a cache each conversion mints fresh objects, so
+// every message re-renders — and MarkdownText re-parses markdown + re-runs
+// highlight.js for the whole list each 120ms batch, freezing taps on a mobile
+// WebView for seconds. ChatMessage objects are replaced (never mutated) on
+// change, so object identity is the perfect cache key.
+const convertCache = new WeakMap<ChatMessage, ThreadMessageLike>();
+
+const convertMessage = (m: ChatMessage): ThreadMessageLike => {
+  const hit = convertCache.get(m);
+  if (hit) return hit;
+  const converted: ThreadMessageLike = {
+    id: m.id,
+    role: m.role,
+    createdAt: new Date(m.createdAt),
+    content: m.parts.map((p) => {
+      if (p.type === "text") return { type: "text" as const, text: p.text };
+      // Thought streams map onto the reasoning part type so they render through
+      // the collapsible ThoughtCard (auto-status marks the last part of the
+      // streaming message "running", which drives expand/collapse).
+      if (p.type === "thought") {
+        return { type: "reasoning" as const, text: p.text };
+      }
+      if (p.type === "image") {
+        return { type: "image" as const, image: p.image };
+      }
+      return {
+        type: "tool-call" as const,
+        toolCallId: p.toolCallId,
+        toolName: p.toolName,
+        // args must be JSON-clean: diffs ride as a serialized array.
+        args: {
+          detail: p.detail,
+          title: p.toolName,
+          ...(p.kind ? { kind: p.kind } : {}),
+          ...(p.rawName ? { rawName: p.rawName } : {}),
+          ...(p.foldKind ? { foldKind: p.foldKind } : {}),
+          ...(p.diffs ? { diffs: JSON.stringify(p.diffs) } : {}),
+        },
+        result: p.status === "completed" ? p.detail : p.status,
+      };
+    }),
+  };
+  convertCache.set(m, converted);
+  return converted;
+};
 
 function messageText(message: ThreadMessageLike | string): string {
   if (typeof message === "string") return message;
@@ -105,7 +119,10 @@ function messageText(message: ThreadMessageLike | string): string {
     .join("\n");
 }
 
-function MarkdownText({ text }: { text: string }) {
+// memo: markdown + highlight parsing is the most expensive render in the app;
+// identical text must never re-parse (belt-and-suspenders on top of the
+// convertMessage identity cache).
+const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <div className="prose prose-sm prose-invert max-w-none prose-pre:rounded-xl prose-pre:bg-canvas prose-pre:ring-1 prose-pre:ring-hairline">
       <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
@@ -113,7 +130,7 @@ function MarkdownText({ text }: { text: string }) {
       </Markdown>
     </div>
   );
-}
+});
 
 // Per-kind icon + accent colour (ADR 0004: rendering leans on libraries;
 // the mapping itself is ours).
