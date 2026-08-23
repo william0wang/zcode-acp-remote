@@ -341,11 +341,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /**
    * The instance's workspace label from the hub list, or undefined when the
-   * list is stale/missing this instance. NEVER falls back to "/" — the bridge
-   * records the load's cwd as the session's file root, and a "/" here hijacks
-   * the file browser to the filesystem root (and the instance's advertised
-   * workspace with it). Omitting cwd lets the bridge keep the root it
-   * already recorded for the session.
+   * list is stale/missing this instance. Callers that must send a cwd
+   * (session/load's SDK schema requires one) fall back to "/" — safe because
+   * the bridge ignores the load cwd entirely: session roots are
+   * backend-authoritative, never taken from the client.
    */
   function instanceWorkspace(): string | undefined {
     const s = get();
@@ -1471,9 +1470,12 @@ export const useAppStore = create<AppState>((set, get) => {
         const ws = instanceWorkspace();
         const result = await acp.request("session/load", {
           sessionId,
-          // cwd only when the hub list actually knows this instance — see
-          // instanceWorkspace(): a bogus cwd becomes the session's file root.
-          ...(ws ? { cwd: ws } : {}),
+          // cwd is REQUIRED by the SDK's session/load schema (no default) —
+          // omitting it fails with -32602 Invalid params, e.g. when the hub
+          // list is still stale right after a wake reconnect. The bridge
+          // ignores the value on load (roots are backend-authoritative), so
+          // an unknown workspace sends a "/" placeholder.
+          cwd: ws ?? "/",
           mcpServers: [],
           // Tail replay: the limit rides in _meta (top-level unknown keys are
           // stripped by the SDK schema). Counts messages, turn-aligned.
