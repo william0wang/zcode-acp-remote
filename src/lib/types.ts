@@ -25,6 +25,17 @@ export interface ConnectionProfile {
   token: string;
 }
 
+// POST /api/upgrade (bridge 0.11.7): the hub's own staleness-check verdict.
+// `restarting` means IT decided the on-disk code is newer — the client only
+// triggered the check; the decision was never ours to make.
+export interface HubUpgradeResult {
+  ok: boolean;
+  restarting: boolean;
+  reason: "version" | "mtime" | "up-to-date";
+  runningVersion: string;
+  diskVersion: string | null;
+}
+
 // Session Files (bridge 0.7.0, ADR-0005): one directory level per call;
 // entries sort dirs-first in byte order server-side.
 export interface FsEntry {

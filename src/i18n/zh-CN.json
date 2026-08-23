@@ -62,7 +62,11 @@
     "server": "服务器",
     "changeServer": "更换服务器",
     "changeServerConfirm": "再点一次确认",
-    "changeServerHint": "断开连接并清除已保存的地址和令牌"
+    "changeServerHint": "断开连接并清除已保存的地址和令牌",
+    "upgrade": "检查 Hub 更新",
+    "upgradeBusy": "检查/重启中…",
+    "upgradeLatest": "Hub 已是最新 ({{version}})",
+    "upgradeRestarted": "Hub 已重启到 {{version}}"
   },
   "config": {
     "title": "会话",

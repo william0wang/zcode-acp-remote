@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
 
@@ -42,15 +42,18 @@ export function PanelShell({
 }
 
 // Global settings, shown OUTSIDE any session (entry screen): language, the
-// destructive server reset, and the account quota card (connection-level
-// data — the list screen keeps the instance WS alive, so it renders here
-// too). Session-scoped controls live in SessionPanel.
+// destructive server reset, the hub upgrade trigger, and the account quota
+// card (connection-level data — the list screen keeps the instance WS alive,
+// so it renders here too). Session-scoped controls live in SessionPanel.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const profile = useAppStore((s) => s.profile);
   const forgetHub = useAppStore((s) => s.forgetHub);
   const setLang = useAppStore((s) => s.setLang);
+  const upgradeHub = useAppStore((s) => s.upgradeHub);
   const [confirmForget, setConfirmForget] = useState(false);
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const [upgradeNote, setUpgradeNote] = useState<string | null>(null);
 
   // The confirm state is fleeting — a stray first tap must not linger armed.
   useEffect(() => {
@@ -58,6 +61,32 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     const id = setTimeout(() => setConfirmForget(false), 3000);
     return () => clearTimeout(id);
   }, [confirmForget]);
+
+  // Same for the upgrade result note.
+  useEffect(() => {
+    if (!upgradeNote) return;
+    const id = setTimeout(() => setUpgradeNote(null), 5000);
+    return () => clearTimeout(id);
+  }, [upgradeNote]);
+
+  // The hub alone decides whether to restart; this only triggers its check
+  // and rides out the respawn (store polls health + refreshes discovery).
+  async function checkHubUpgrade() {
+    setUpgradeBusy(true);
+    setUpgradeNote(null);
+    try {
+      const r = await upgradeHub();
+      setUpgradeNote(
+        r.restarting
+          ? t("panel.upgradeRestarted", { version: r.diskVersion ?? "" })
+          : t("panel.upgradeLatest", { version: r.runningVersion }),
+      );
+    } catch (e) {
+      setUpgradeNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpgradeBusy(false);
+    }
+  }
 
   function switchLang(lang: "en" | "zh-CN") {
     setLang(lang);
@@ -114,6 +143,21 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               ? t("panel.changeServerConfirm")
               : t("panel.changeServer")}
           </button>
+          <button
+            onClick={() => void checkHubUpgrade()}
+            disabled={upgradeBusy}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-raised px-3 py-2 text-xs font-medium text-dim active:bg-white/[0.07] disabled:opacity-60"
+          >
+            <RefreshCw
+              className={`size-3.5 ${upgradeBusy ? "animate-spin" : ""}`}
+            />
+            {upgradeBusy ? t("panel.upgradeBusy") : t("panel.upgrade")}
+          </button>
+          {upgradeNote && (
+            <p className="pt-1.5 text-center text-[11px] text-faint">
+              {upgradeNote}
+            </p>
+          )}
         </div>
       </div>
 

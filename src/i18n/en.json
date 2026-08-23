@@ -62,7 +62,11 @@
     "server": "Server",
     "changeServer": "Change server",
     "changeServerConfirm": "Tap again to confirm",
-    "changeServerHint": "Disconnects and clears the saved URL and token"
+    "changeServerHint": "Disconnects and clears the saved URL and token",
+    "upgrade": "Check hub update",
+    "upgradeBusy": "Checking / restarting…",
+    "upgradeLatest": "Hub is up to date ({{version}})",
+    "upgradeRestarted": "Hub restarted onto {{version}}"
   },
   "config": {
     "title": "Session",

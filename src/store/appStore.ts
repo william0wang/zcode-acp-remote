@@ -26,6 +26,7 @@ import {
   type GoWindowEntry,
   type GlmUsageStats,
   type HubInstance,
+  type HubUpgradeResult,
   type PromptDraft,
   type QuotaItem,
   type SessionUpdate,
@@ -216,6 +217,7 @@ interface AppState {
   forgetHub: () => void;
   setLang: (lang: Lang) => void;
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
+  upgradeHub: () => Promise<HubUpgradeResult>;
   connectInstance: (
     instanceId: string,
     attachSessionId?: string,
@@ -1239,6 +1241,32 @@ export const useAppStore = create<AppState>((set, get) => {
             : `discovery failed: ${(e as Error).message}`;
         set({ instancesError: msg, hubOffline: false });
       }
+    },
+
+    // Trigger the hub's SELF-decided upgrade check (bridge 0.11.7): POST
+    // /api/upgrade, and if the hub judged the on-disk code newer (it exits
+    // ~500ms after replying, re-spawning onto the new dist), poll health
+    // until the respawn answers, then refresh discovery. The restart
+    // decision is entirely the hub's — this only triggers the check.
+    upgradeHub: async () => {
+      const client = hub();
+      if (!client) throw new Error("not connected");
+      const result = await client.upgrade();
+      if (!result.restarting) return result;
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        try {
+          await client.health();
+          break;
+        } catch {
+          // Still down mid-respawn — keep polling until the deadline; the
+          // 4s discovery poll heals the list even if we give up here.
+          if (Date.now() > deadline) break;
+        }
+      }
+      await get().refreshInstances({ probe: true });
+      return result;
     },
 
     connectInstance: async (instanceId, attachSessionId) => {
