@@ -223,6 +223,10 @@ interface AppState {
     attachSessionId?: string,
   ) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
+  // Foreground wake hook: proves the WS pipe is actually alive (Android deep
+  // sleep leaves zombie sockets that never fire onclose) and reconnects if
+  // not. Registered at module level via visibilitychange.
+  wakeProbe: () => void;
   // Returns to the session list. The instance connection stays open so
   // bridge broadcasts keep the list's activity badges live (running state
   // is broadcast-only — the hub's REST discovery carries no such field);
@@ -907,6 +911,48 @@ export const useAppStore = create<AppState>((set, get) => {
     reconnectTimer = setTimeout(() => void tryReconnect(), delay);
   }
 
+  // Liveness probe for wake: the bridge's SDK answers unknown methods with an
+  // immediate -32601, so ANY settle (even a rejection) within the timeout
+  // proves the round-trip works. Only silence — or a locally-refused send —
+  // means the socket is a zombie.
+  function probeAlive(timeoutMs: number): Promise<boolean> {
+    const conn = acp;
+    if (!conn) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (alive: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(alive);
+      };
+      const timer = setTimeout(() => done(false), timeoutMs);
+      conn.request("$/zcode/ping").then(
+        () => done(true),
+        (e: Error) => done(e.message !== "connection not open"),
+      );
+    });
+  }
+
+  // Deep sleep on Android routinely kills the socket without ever delivering
+  // onclose in the WebView: connState stays "open", every request silently
+  // vanishes, and nothing schedules a reconnect. On foreground, probe the
+  // pipe; a zombie is torn down exactly like an unexpected close so the
+  // reconnect loop (and its replay) recover the session automatically.
+  async function wakeProbe(): Promise<void> {
+    const s = get();
+    if (!s.profile || !s.instanceId || s.connState !== "open") return;
+    if (await probeAlive(5000)) return;
+    if (get().connState !== "open") return; // closed meanwhile — loop has it
+    connSeq++;
+    acp?.close();
+    acp = null;
+    pendingRespond = null;
+    pendingElicitRespond = null;
+    set({ permission: null, elicitation: null, sessionStates: {} });
+    scheduleReconnect();
+  }
+
   async function tryReconnect(): Promise<void> {
     const s = get();
     if (!s.profile || !s.instanceId) return;
@@ -1324,6 +1370,10 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       await get().connectInstance(instanceId, sessionId);
+    },
+
+    wakeProbe: () => {
+      void wakeProbe();
     },
 
     closeRemoteSession: async (instanceId, sessionId) => {
@@ -1772,3 +1822,13 @@ export const useAppStore = create<AppState>((set, get) => {
     notify: (text) => set({ notice: text }),
   };
 });
+
+// Zombie-socket guard: deep-sleep wake is the one moment connState can lie
+// ("open" socket that died mid-sleep without an onclose). Validate on every
+// foreground return — the probe is one tiny round-trip on a healthy pipe.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible")
+      useAppStore.getState().wakeProbe();
+  });
+}
