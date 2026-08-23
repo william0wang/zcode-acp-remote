@@ -117,6 +117,7 @@
     "retry": "重试"
   },
   "viewer": {
+    "download": "下载",
     "share": "分享 / 保存",
     "copyLink": "复制链接",
     "shareFailed": "分享失败",

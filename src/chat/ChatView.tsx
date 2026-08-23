@@ -715,11 +715,14 @@ function Composer() {
         >
           <ImagePlus className="size-5" />
         </button>
+        {/* leading-5 + py-2 = 36px: the single-line input matches the size-9
+            buttons exactly, so items-end aligns them instead of dropping
+            them below the inherited-1.5 text line. */}
         <ComposerPrimitive.Input
           rows={1}
           placeholder={t("chat.inputPlaceholder")}
           onPaste={onPaste}
-          className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] text-ink placeholder:text-faint focus:outline-none"
+          className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] leading-5 text-ink placeholder:text-faint focus:outline-none"
         />
         {/* While a turn runs the Send stays a Send: a draft queues as pending
             (sendPrompt routes it), never a dead button. Cancel stops the turn.

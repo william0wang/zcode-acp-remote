@@ -117,6 +117,7 @@
     "retry": "Retry"
   },
   "viewer": {
+    "download": "Download",
     "share": "Share / Save",
     "copyLink": "Copy link",
     "shareFailed": "Share failed",
