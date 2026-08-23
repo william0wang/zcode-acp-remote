@@ -17,7 +17,9 @@ APK="src-tauri/gen/android/app/build/outputs/apk/universal/${BUILD_TYPE}/app-uni
 OUT="dist/ZCode-ACP-v${VERSION}-${BUILD_TYPE}.apk"
 
 echo "==> building ${BUILD_TYPE} APK (v${VERSION})"
-pnpm exec tauri android build --apk ${DEBUG_FLAG}
+# arm64-only: real devices running this app are all aarch64; the other ABIs
+# (armv7/x86/x86_64) only tripled the APK size (36M -> 12M).
+pnpm exec tauri android build --apk --target aarch64 ${DEBUG_FLAG}
 
 mkdir -p dist
 cp "${APK}" "${OUT}"
