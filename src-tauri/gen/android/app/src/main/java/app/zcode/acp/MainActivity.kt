@@ -1,8 +1,14 @@
 package app.zcode.acp
 
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.URLUtil
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
@@ -12,6 +18,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    attachDownloadHandler(retriesLeft = 3)
 
     // Edge-to-edge draws the WebView under the system bars, but Android
     // WebView reports env(safe-area-inset-*) as 0. Forward the real insets
@@ -37,6 +44,45 @@ class MainActivity : TauriActivity() {
       findWebView(content)?.evaluateJavascript(js, null)
       insets
     }
+  }
+
+  // wry registers no DownloadListener: without one the WebView silently
+  // drops every download (fs file URLs with ?dl=1 answer with
+  // Content-Disposition: attachment). Route those into the system
+  // DownloadManager — native notification, lands in public Downloads.
+  private fun attachDownloadHandler(retriesLeft: Int) {
+    val content = findViewById<View>(android.R.id.content)
+    val webView = findWebView(content)
+    if (webView == null) {
+      if (retriesLeft > 0) content.post { attachDownloadHandler(retriesLeft - 1) }
+      return
+    }
+    webView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+      val name = fileNameFrom(url, contentDisposition, mimeType)
+      try {
+        val request = DownloadManager.Request(Uri.parse(url))
+          .setTitle(name)
+          .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+          .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+        (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+      } catch (e: Exception) {
+        Log.w("MainActivity", "download enqueue failed: ${e.message}")
+      }
+    }
+  }
+
+  // Prefer the RFC 5987 filename* form (Android's URLUtil only reads the
+  // ASCII fallback), so non-ASCII filenames survive the download.
+  private fun fileNameFrom(url: String, contentDisposition: String?, mimeType: String?): String {
+    if (contentDisposition != null) {
+      val star = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)?.groupValues?.getOrNull(1)
+      if (!star.isNullOrBlank()) return Uri.decode(star)
+      val plain = Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+        .find(contentDisposition)?.groupValues?.getOrNull(1)
+      if (!plain.isNullOrBlank()) return plain
+    }
+    return URLUtil.guessFileName(url, contentDisposition, mimeType)
   }
 
   // The Tauri WebView is not exposed directly; it is the only WebView in the

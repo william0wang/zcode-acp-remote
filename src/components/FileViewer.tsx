@@ -35,7 +35,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
-import { ArrowLeft, FileText, Link2, Share2, X } from "lucide-react";
+import { ArrowLeft, Download, FileText, Link2, Share2, X } from "lucide-react";
 import type { FsEntry } from "../lib/types";
 import { useAppStore } from "../store/appStore";
 import { Spinner } from "./Spinner";
@@ -399,6 +399,21 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
     }
   };
 
+  // dl=1 makes the bridge answer with Content-Disposition: attachment, so
+  // the WebView fires its DownloadListener (MainActivity routes it into the
+  // system DownloadManager) instead of navigating to the file. Needs bridge
+  // 0.11.8+; an older bridge ignores the flag and the WebView renders the
+  // file inline — the system back button returns to the app.
+  const downloadFile = () => {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = `${url}&dl=1`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-canvas text-ink">
       <header className="flex items-center gap-2 border-b border-hairline px-1.5 pb-2 pt-[max(var(--safe-top),0.5rem)]">
@@ -447,6 +462,13 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
           )}
           {url && (
             <div className="flex items-center gap-2">
+              <button
+                onClick={downloadFile}
+                className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2 text-sm text-white active:bg-blue-500"
+              >
+                <Download className="size-4" />
+                {t("viewer.download")}
+              </button>
               {canShareFiles && (
                 <button
                   onClick={shareFile}
