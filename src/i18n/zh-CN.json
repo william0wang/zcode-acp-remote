@@ -119,6 +119,8 @@
     "openAsText": "作为文本打开",
     "loadMore": "加载更多",
     "lines": "{{count}} 行",
-    "loadedAll": "已到文件末尾"
+    "loadedAll": "已到文件末尾",
+    "tooLarge": "文件过大，无法预览",
+    "lineCap": "已达查看上限（1 万行）"
   }
 }

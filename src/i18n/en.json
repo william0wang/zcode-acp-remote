@@ -119,6 +119,8 @@
     "openAsText": "Open as text",
     "loadMore": "Load more",
     "lines": "{{count}} lines",
-    "loadedAll": "End of file"
+    "loadedAll": "End of file",
+    "tooLarge": "Too large to preview",
+    "lineCap": "Viewer limit reached (10,000 lines)"
   }
 }

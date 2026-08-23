@@ -195,6 +195,10 @@ export function fmtSize(bytes: number): string {
 const FIRST_WINDOW = 200;
 const NEXT_WINDOW = 500;
 const MAX_LINES = 10000;
+// Text files past this size exceed the viewer's MAX_LINES budget (10k lines
+// is ~300-500 KB of typical source) and highlighting the growing buffer janks
+// the WebView — they get the download card instead.
+const LARGE_TEXT_BYTES = 512 * 1024;
 
 interface TextViewerProps {
   path: string;
@@ -206,6 +210,9 @@ function TextViewer({ path }: TextViewerProps) {
   const [firstLine, setFirstLine] = useState(1);
   const [text, setText] = useState("");
   const [eof, setEof] = useState(false);
+  // eof via the MAX_LINES cap is not the real end of file — the footer must
+  // not claim "end of file" when the viewer simply refused to load more.
+  const [capped, setCapped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -244,12 +251,14 @@ function TextViewer({ path }: TextViewerProps) {
         return;
       }
       setText((cur) => (cur ? `${cur}\n${res.text}` : res.text));
-      if (
-        !res.text ||
-        res.text.split("\n").length < NEXT_WINDOW ||
-        firstLine + lines.length + res.text.split("\n").length >= MAX_LINES
-      )
+      if (!res.text || res.text.split("\n").length < NEXT_WINDOW) setEof(true);
+      else if (
+        firstLine + lines.length + res.text.split("\n").length >=
+        MAX_LINES
+      ) {
         setEof(true);
+        setCapped(true);
+      }
     });
   };
 
@@ -311,7 +320,7 @@ function TextViewer({ path }: TextViewerProps) {
           {t("viewer.lines", { count: firstLine + lines.length - 1 })}
         </span>
         {eof ? (
-          <span>{t("viewer.loadedAll")}</span>
+          <span>{capped ? t("viewer.lineCap") : t("viewer.loadedAll")}</span>
         ) : loading ? (
           <Spinner className="size-4" />
         ) : (
@@ -338,10 +347,16 @@ export function FileViewer({ file, path, onClose }: FileViewerProps) {
   const fsFileUrl = useAppStore((s) => s.fsFileUrl);
   const notify = useAppStore((s) => s.notify);
   const [sharing, setSharing] = useState(false);
-  // Unknown kinds can be forced into the text viewer — binary content shows
-  // as garbage, which the user can see and back out of.
+  // Unknown kinds AND oversized text files can be forced into the text
+  // viewer — binary content shows as garbage, which the user can see and
+  // back out of.
   const [forcedText, setForcedText] = useState(false);
-  const kind = forcedText ? "text" : fileKindOf(file.name);
+  const baseKind = fileKindOf(file.name);
+  const kind: "image" | "text" | "binary" = forcedText
+    ? "text"
+    : baseKind === "text" && file.size > LARGE_TEXT_BYTES
+      ? "binary"
+      : baseKind;
   const url = fsFileUrl(path);
 
   // wry's Android WebView registers no DownloadListener (verified in
@@ -415,6 +430,9 @@ export function FileViewer({ file, path, onClose }: FileViewerProps) {
           <div className="text-sm text-dim">
             {file.name} · {fmtSize(file.size)}
           </div>
+          {baseKind === "text" && (
+            <div className="text-xs text-faint">{t("viewer.tooLarge")}</div>
+          )}
           {url && (
             <div className="flex items-center gap-2">
               {canShareFiles && (
