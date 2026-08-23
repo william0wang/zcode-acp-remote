@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.URLUtil
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -18,7 +19,6 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    attachDownloadHandler(retriesLeft = 3)
 
     // Edge-to-edge draws the WebView under the system bars, but Android
     // WebView reports env(safe-area-inset-*) as 0. Forward the real insets
@@ -50,15 +50,16 @@ class MainActivity : TauriActivity() {
   // drops every download (fs file URLs with ?dl=1 answer with
   // Content-Disposition: attachment). Route those into the system
   // DownloadManager — native notification, lands in public Downloads.
-  private fun attachDownloadHandler(retriesLeft: Int) {
-    val content = findViewById<View>(android.R.id.content)
-    val webView = findWebView(content)
-    if (webView == null) {
-      if (retriesLeft > 0) content.post { attachDownloadHandler(retriesLeft - 1) }
-      return
-    }
+  // WryActivity.setWebView calls this the moment the runtime's WebView
+  // exists — the only hook that doesn't race the async webview creation
+  // (tree-walking from onCreate loses that race: 3 frames is far too
+  // early, the Rust runtime boots much later).
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
     webView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
-      val name = fileNameFrom(url, contentDisposition, mimeType)
+      // Strip path separators: DownloadManager throws on them, and a
+      // guessed name must never escape DIRECTORY_DOWNLOADS.
+      val name = fileNameFrom(url, contentDisposition, mimeType).replace("/", "_")
       try {
         val request = DownloadManager.Request(Uri.parse(url))
           .setTitle(name)
@@ -67,6 +68,7 @@ class MainActivity : TauriActivity() {
         (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
       } catch (e: Exception) {
         Log.w("MainActivity", "download enqueue failed: ${e.message}")
+        Toast.makeText(this, "download failed: ${e.message}", Toast.LENGTH_LONG).show()
       }
     }
   }
