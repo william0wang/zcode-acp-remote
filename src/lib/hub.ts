@@ -1,4 +1,4 @@
-import type { FsListing, HubInstance } from "./types";
+import type { FsListing, HubInstance, HubUpgradeResult } from "./types";
 
 export class HubApiError extends Error {
   // `network` = the fetch itself failed (hub unreachable): the hub lives and
@@ -73,6 +73,17 @@ export class HubClient {
   async quota(): Promise<unknown> {
     const res = await this.fetch("/api/quota");
     return res.json();
+  }
+
+  /**
+   * Trigger the hub's staleness check (bridge 0.11.7). The hub alone decides
+   * whether the on-disk code is newer and restarts onto it; `restarting`
+   * just means it is about to exit and re-spawn — poll health() until it
+   * answers, then re-fetch instances.
+   */
+  async upgrade(): Promise<HubUpgradeResult> {
+    const res = await this.fetch("/api/upgrade", "POST");
+    return (await res.json()) as HubUpgradeResult;
   }
 
   /**
