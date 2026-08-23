@@ -105,6 +105,7 @@
     "title": "文件",
     "root": "根目录",
     "back": "返回",
+    "close": "关闭",
     "showHidden": "切换隐藏项",
     "empty": "空目录",
     "truncated": "仅显示前 2000 项",

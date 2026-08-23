@@ -35,7 +35,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
-import { ArrowLeft, FileText, Link2, Share2 } from "lucide-react";
+import { ArrowLeft, FileText, Link2, Share2, X } from "lucide-react";
 import type { FsEntry } from "../lib/types";
 import { useAppStore } from "../store/appStore";
 import { Spinner } from "./Spinner";
@@ -340,9 +340,12 @@ interface FileViewerProps {
   file: FsEntry;
   path: string;
   onClose: () => void;
+  /** Exit the whole file browser back to the session — the back arrow only
+   * returns to the browser at the same directory depth. */
+  onExit?: () => void;
 }
 
-export function FileViewer({ file, path, onClose }: FileViewerProps) {
+export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   const { t } = useTranslation();
   const fsFileUrl = useAppStore((s) => s.fsFileUrl);
   const notify = useAppStore((s) => s.notify);
@@ -410,6 +413,15 @@ export function FileViewer({ file, path, onClose }: FileViewerProps) {
           <div className="truncate text-[15px] font-medium">{file.name}</div>
           <div className="text-[11px] text-faint">{fmtSize(file.size)}</div>
         </div>
+        {onExit && (
+          <button
+            onClick={onExit}
+            aria-label={t("files.close")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <X className="size-5" />
+          </button>
+        )}
       </header>
 
       {kind === "image" && url && (

@@ -105,6 +105,7 @@
     "title": "Files",
     "root": "Root",
     "back": "Back",
+    "close": "Close",
     "showHidden": "Toggle hidden files",
     "empty": "Empty directory",
     "truncated": "Showing the first 2000 entries",

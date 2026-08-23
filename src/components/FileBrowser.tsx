@@ -10,6 +10,7 @@ import {
   Folder,
   Link2,
   RefreshCw,
+  X,
 } from "lucide-react";
 import type { FsEntry, FsListing } from "../lib/types";
 import { useAppStore } from "../store/appStore";
@@ -146,6 +147,14 @@ export function FileBrowser({ onClose }: FileBrowserProps) {
         >
           <RefreshCw className="size-4.5" />
         </button>
+        {/* Back arrow pops one directory level; X exits the whole browser. */}
+        <button
+          onClick={onClose}
+          aria-label={t("files.close")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+        >
+          <X className="size-5" />
+        </button>
       </header>
 
       {listing?.truncated && (
@@ -221,6 +230,7 @@ export function FileBrowser({ onClose }: FileBrowserProps) {
           file={viewing.entry}
           path={viewing.path}
           onClose={() => setViewing(null)}
+          onExit={onClose}
         />
       )}
     </div>
