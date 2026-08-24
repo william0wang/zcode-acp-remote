@@ -238,6 +238,15 @@ interface AppState {
   // conversations self-heal back on their next use. Refused (409 notice)
   // while a turn runs.
   closeRemoteSession: (instanceId: string, sessionId: string) => Promise<void>;
+  // Renames a session via the hub's HTTP rename endpoint (bridge 0.11.9).
+  // The one-shot auto-title never revises a title; this is the manual path.
+  // Updates the local list optimistically; the bridge broadcasts the change
+  // to attached clients and the next discovery poll reconciles.
+  renameSession: (
+    instanceId: string,
+    sessionId: string,
+    title: string,
+  ) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   refreshUsageStats: () => Promise<void>;
@@ -1414,6 +1423,36 @@ export const useAppStore = create<AppState>((set, get) => {
         get().closeSession();
       }
       set({ notice: "notice.sessionClosed" });
+    },
+
+    renameSession: async (instanceId, sessionId, title) => {
+      const trimmed = title.trim().slice(0, 80);
+      if (!trimmed) return;
+      const client = hub();
+      if (!client) return;
+      try {
+        await client.renameSession(instanceId, sessionId, trimmed);
+      } catch (e) {
+        set({
+          notice: `rename failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        });
+        return;
+      }
+      set((state) => ({
+        instances: state.instances.map((i) =>
+          i.id === instanceId
+            ? {
+                ...i,
+                sessions: (i.sessions ?? []).map((s) =>
+                  s.sessionId === sessionId ? { ...s, title: trimmed } : s,
+                ),
+              }
+            : i,
+        ),
+      }));
+      set({ notice: "notice.sessionRenamed" });
     },
 
     closeSession: () => {
