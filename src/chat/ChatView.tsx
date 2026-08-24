@@ -508,11 +508,17 @@ const AssistantMessage = memo(function AssistantMessage() {
   );
 });
 
+// Whitespace class for composer word scanning (slash-completion tokens).
+const WS = /\s/;
+
 // Composer input row + the "/" completion menu. The command list comes from
-// the bridge's available_commands_update; the query is the composer's first
-// (and so far only) token. Enter/Tab complete, arrows navigate, Escape or a
-// space dismisses until the query changes. Keydown is intercepted in the
-// CAPTURE phase on the form so it beats ComposerPrimitive.Input's Enter-send.
+// the bridge's available_commands_update; the query is the word under the
+// caret. At the very start of the draft every command matches; anywhere else
+// only skill commands ("$" names, wire form "/$name") do — a mid-draft slash
+// is meaningful only as a skill invocation. Enter/Tab complete (caret lands
+// after the inserted command), arrows navigate, Escape dismisses until the
+// query changes. Keydown is intercepted in the CAPTURE phase on the form so
+// it beats ComposerPrimitive.Input's Enter-send.
 function Composer() {
   const { t } = useTranslation();
   const commands = useAppStore((s) => s.availableCommands);
@@ -522,27 +528,46 @@ function Composer() {
   const { value, setText } = unstable_useComposerInput();
   const [highlight, setHighlight] = useState(0);
   const [dismissedToken, setDismissedToken] = useState<string | null>(null);
+  // Caret offset in the textarea; decides which word the "/" menu completes.
+  const [caret, setCaret] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   // Staged attachments (ADR 0007): compressed base64 + mime, rendered from
   // data URLs. Reset on send; ride the prompt (or the queue while running).
   const [images, setImages] = useState<AttachmentDraft[]>([]);
   const galleryRef = useRef<HTMLInputElement | null>(null);
 
-  const token = value.split(/\s/, 1)[0] ?? "";
+  // The whitespace-delimited word around the caret and its offset — the
+  // completion query source. A caret resting exactly on a following word's
+  // start edge counts as no word (nothing has been typed into it yet).
+  let tokenStart = caret;
+  while (tokenStart > 0 && !WS.test(value[tokenStart - 1]!)) tokenStart--;
+  let tokenEnd = caret;
+  while (tokenEnd < value.length && !WS.test(value[tokenEnd]!)) tokenEnd++;
+  const token =
+    tokenStart === caret && tokenEnd > caret
+      ? ""
+      : value.slice(tokenStart, tokenEnd);
+
   const matches = useMemo(() => {
     if (!token.startsWith("/")) return [];
     // Skill commands ride a "$" visual-grouping prefix (e.g. "$tdd"); the
     // wire form is "/$name", but users naturally type "/td" — strip the
     // marker on BOTH sides so either spelling matches. Insertion keeps the
-    // real name (the bridge passes "/$name" through verbatim).
+    // real name (the bridge passes "/$name" through verbatim). Mid-draft,
+    // only skills are valid invocations, so only those complete.
     const strip = (s: string) => s.replace(/^\$/, "");
     const q = strip(token.slice(1).toLowerCase());
-    return commands.filter((c) => strip(c.name.toLowerCase()).startsWith(q));
-  }, [token, commands]);
+    const pool =
+      tokenStart === 0
+        ? commands
+        : commands.filter((c) => c.name.startsWith("$"));
+    return pool.filter((c) => strip(c.name.toLowerCase()).startsWith(q));
+  }, [token, tokenStart, commands]);
 
-  // Still typing the command token (no space yet) and not dismissed.
-  const open =
-    matches.length > 0 && !/\s/.test(value) && dismissedToken !== token;
+  // Not dismissed for this query — the caret-in-token part of the old gate is
+  // inherent now that the token itself is derived from the caret position.
+  const open = matches.length > 0 && dismissedToken !== token;
   const idx = Math.min(highlight, matches.length - 1);
 
   useEffect(() => {
@@ -556,10 +581,26 @@ function Composer() {
 
   const select = useCallback(
     (name: string) => {
-      setText(`/${name} ` + value.slice(token.length).trimStart());
+      setText(
+        value.slice(0, tokenStart) +
+          `/${name} ` +
+          value.slice(tokenStart + token.length).trimStart(),
+      );
       setDismissedToken(`/${name}`);
+      // setText's value swap resets the caret to the draft's end; park it
+      // right after the inserted command instead. rAF runs after React
+      // commits the new value but before paint.
+      const pos = tokenStart + name.length + 2;
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el && pos <= el.value.length) {
+          el.focus();
+          el.setSelectionRange(pos, pos);
+          setCaret(pos);
+        }
+      });
     },
-    [setText, value, token],
+    [setText, value, tokenStart, token],
   );
 
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
@@ -719,9 +760,13 @@ function Composer() {
             buttons exactly, so items-end aligns them instead of dropping
             them below the inherited-1.5 text line. */}
         <ComposerPrimitive.Input
+          ref={inputRef}
           rows={1}
           placeholder={t("chat.inputPlaceholder")}
           onPaste={onPaste}
+          // select fires on every caret move (typing, click, arrow keys), so
+          // this keeps the "/" menu's caret gate in sync with the textarea.
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] leading-5 text-ink placeholder:text-faint focus:outline-none"
         />
         {/* While a turn runs the Send stays a Send: a draft queues as pending
