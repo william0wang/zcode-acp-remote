@@ -133,6 +133,9 @@
     "lines": "{{count}} 行",
     "loadedAll": "已到文件末尾",
     "tooLarge": "文件过大，无法预览",
-    "lineCap": "已达查看上限（1 万行）"
+    "lineCap": "已达查看上限（1 万行）",
+    "downloadStarted": "开始下载 {{name}}…",
+    "downloadDone": "{{name}} 已保存到下载目录",
+    "downloadFailed": "下载失败：{{name}}"
   }
 }

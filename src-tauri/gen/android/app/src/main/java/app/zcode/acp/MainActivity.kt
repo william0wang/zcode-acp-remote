@@ -1,7 +1,10 @@
 package app.zcode.acp
 
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -10,15 +13,37 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.URLUtil
 import android.webkit.WebView
-import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
+  // DownloadManager ids → display names: the completion broadcast carries
+  // only the id, but the webview toast needs the filename too.
+  private val downloadNames = HashMap<Long, String>()
+  private var appWebView: WebView? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    // The WebView hands downloads to the system DownloadManager and never
+    // hears the outcome; forward the completion broadcast so the page can
+    // toast success/failure (see the zcode:download listener in ChatScreen).
+    ContextCompat.registerReceiver(
+      applicationContext,
+      object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+          val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+          val name = downloadNames.remove(id) ?: return
+          emitDownloadEvent(name, if (downloadSucceeded(id)) "done" else "failed")
+        }
+      },
+      IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+      ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
 
     // Edge-to-edge draws the WebView under the system bars, but Android
     // WebView reports env(safe-area-inset-*) as 0. Forward the real insets
@@ -56,6 +81,7 @@ class MainActivity : TauriActivity() {
   // early, the Rust runtime boots much later).
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    appWebView = webView
     webView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
       // Strip path separators: DownloadManager throws on them, and a
       // guessed name must never escape DIRECTORY_DOWNLOADS.
@@ -65,11 +91,37 @@ class MainActivity : TauriActivity() {
           .setTitle(name)
           .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
           .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-        (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+        val id = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+        downloadNames[id] = name
+        emitDownloadEvent(name, "started")
       } catch (e: Exception) {
         Log.w("MainActivity", "download enqueue failed: ${e.message}")
-        Toast.makeText(this, "download failed: ${e.message}", Toast.LENGTH_LONG).show()
+        emitDownloadEvent(name, "failed")
       }
+    }
+  }
+
+  private fun downloadSucceeded(id: Long): Boolean = try {
+    val cursor = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager)
+      .query(DownloadManager.Query().setFilterById(id))
+    cursor.use { c ->
+      c.moveToFirst() &&
+        c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) ==
+        DownloadManager.STATUS_SUCCESSFUL
+    }
+  } catch (e: Exception) {
+    false
+  }
+
+  // The payload is a JSON object literal spliced into JS source, so any
+  // filename survives the crossing escaped.
+  private fun emitDownloadEvent(name: String, state: String) {
+    val payload = JSONObject().put("name", name).put("state", state).toString()
+    appWebView?.post {
+      appWebView?.evaluateJavascript(
+        "window.dispatchEvent(new CustomEvent('zcode:download',{detail:$payload}))",
+        null
+      )
     }
   }
 

@@ -133,6 +133,9 @@
     "lines": "{{count}} lines",
     "loadedAll": "End of file",
     "tooLarge": "Too large to preview",
-    "lineCap": "Viewer limit reached (10,000 lines)"
+    "lineCap": "Viewer limit reached (10,000 lines)",
+    "downloadStarted": "Downloading {{name}}…",
+    "downloadDone": "{{name}} saved to Downloads",
+    "downloadFailed": "Download failed: {{name}}"
   }
 }

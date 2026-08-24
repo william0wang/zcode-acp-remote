@@ -403,7 +403,9 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   // the WebView fires its DownloadListener (MainActivity routes it into the
   // system DownloadManager) instead of navigating to the file. Needs bridge
   // 0.11.8+; an older bridge ignores the flag and the WebView renders the
-  // file inline — the system back button returns to the app.
+  // file inline — the system back button returns to the app. MainActivity
+  // reports started/done/failed via the zcode:download event (toasted in
+  // ChatScreen) — this click itself stays fire-and-forget.
   const downloadFile = () => {
     if (!url) return;
     const a = document.createElement("a");

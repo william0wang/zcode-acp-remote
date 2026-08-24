@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -79,6 +79,30 @@ export function ChatScreen() {
   const usage = useAppStore((s) => s.usage);
   const fsCapable = useAppStore((s) => s.fsCapable);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
+  const notify = useAppStore((s) => s.notify);
+
+  // Android download feedback (MainActivity): the WebView hands file
+  // downloads to the system DownloadManager, which the page cannot observe
+  // directly — the native side reports started/done/failed over this DOM
+  // event. Lives here, not in FileViewer, because a download can finish
+  // after the viewer has closed.
+  useEffect(() => {
+    const onDownload = (e: Event) => {
+      const { name, state } = (
+        e as CustomEvent<{ name: string; state: string }>
+      ).detail;
+      if (!name) return;
+      notify(
+        state === "started"
+          ? t("viewer.downloadStarted", { name })
+          : state === "done"
+            ? t("viewer.downloadDone", { name })
+            : t("viewer.downloadFailed", { name }),
+      );
+    };
+    window.addEventListener("zcode:download", onDownload);
+    return () => window.removeEventListener("zcode:download", onDownload);
+  }, [t, notify]);
 
   const instance = instances.find((i) => i.id === instanceId);
   const session = instance?.sessions?.find(
