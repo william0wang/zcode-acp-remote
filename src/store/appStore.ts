@@ -1432,12 +1432,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!client) return;
       try {
         await client.renameSession(instanceId, sessionId, trimmed);
-      } catch (e) {
-        set({
-          notice: `rename failed: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        });
+      } catch {
+        set({ notice: "notice.sessionRenameFailed" });
         return;
       }
       set((state) => ({

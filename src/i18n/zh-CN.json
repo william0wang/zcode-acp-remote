@@ -98,7 +98,8 @@
     "noSession": "请先选择一个会话（从菜单）",
     "sessionRunning": "会话正在运行，请先取消",
     "sessionClosed": "会话已关闭",
-    "sessionRenamed": "会话已重命名"
+    "sessionRenamed": "会话已重命名",
+    "sessionRenameFailed": "重命名失败"
   },
   "common": {
     "cancel": "取消",
