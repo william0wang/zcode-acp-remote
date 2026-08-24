@@ -189,8 +189,28 @@ export function SessionList({
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const [retireTarget, setRetireTarget] = useState<SessionRowItem | null>(null);
+  const [actionTarget, setActionTarget] = useState<SessionRowItem | null>(null);
+  // Rename sub-mode of the action sheet: swaps the close/retire buttons for
+  // a prefilled title input.
+  const [renaming, setRenaming] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
   const closeRemoteSession = useAppStore((s) => s.closeRemoteSession);
+  const renameSession = useAppStore((s) => s.renameSession);
+
+  const openActions = (s: SessionRowItem) => {
+    setRenaming(false);
+    setActionTarget(s);
+  };
+  const openRename = () => {
+    setDraftTitle(actionTarget?.title ?? "");
+    setRenaming(true);
+  };
+  const submitRename = () => {
+    const target = actionTarget;
+    if (!target) return;
+    setActionTarget(null);
+    void renameSession(target.instanceId, target.sessionId, draftTitle);
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -230,15 +250,15 @@ export function SessionList({
             active={activeKey === `${s.instanceId}:${s.sessionId}`}
             disabled={connecting}
             onSelect={() => onSelect(s.instanceId, s.sessionId)}
-            onLongPress={() => setRetireTarget(s)}
+            onLongPress={() => openActions(s)}
           />
         ))}
       </div>
 
-      {retireTarget && (
+      {actionTarget && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]"
-          onClick={() => setRetireTarget(null)}
+          onClick={() => setActionTarget(null)}
         >
           <div
             className="w-full max-w-md overflow-hidden rounded-2xl border border-hairline bg-surface"
@@ -246,30 +266,65 @@ export function SessionList({
           >
             <div className="px-4 pt-4">
               <h2 className="text-sm font-semibold text-ink">
-                {retireTarget.title || t("chat.untitled")}
+                {actionTarget.title || t("chat.untitled")}
               </h2>
               <p className="mt-1 text-xs text-faint">
-                {t("chat.closeSessionHint")}
+                {renaming
+                  ? t("chat.renameSessionHint")
+                  : t("chat.closeSessionHint")}
               </p>
             </div>
-            <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
-              <button
-                onClick={() => {
-                  const { instanceId, sessionId } = retireTarget;
-                  setRetireTarget(null);
-                  void closeRemoteSession(instanceId, sessionId);
-                }}
-                className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
-              >
-                {t("chat.closeSession")}
-              </button>
-              <button
-                onClick={() => setRetireTarget(null)}
-                className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
+            {renaming ? (
+              <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
+                <input
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  placeholder={t("chat.renamePlaceholder")}
+                  maxLength={200}
+                  autoFocus
+                  enterKeyHint="done"
+                  className="w-full rounded-xl bg-raised px-3 py-2.5 text-sm text-ink placeholder:text-faint ring-1 ring-inset ring-hairline focus:outline-none"
+                />
+                <button
+                  onClick={submitRename}
+                  disabled={!draftTitle.trim()}
+                  className="rounded-xl bg-blue-500 px-4 py-3 text-sm font-medium text-white active:bg-blue-600 disabled:opacity-50"
+                >
+                  {t("chat.save")}
+                </button>
+                <button
+                  onClick={() => setActionTarget(null)}
+                  className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
+                <button
+                  onClick={openRename}
+                  className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+                >
+                  {t("chat.renameSession")}
+                </button>
+                <button
+                  onClick={() => {
+                    const { instanceId, sessionId } = actionTarget;
+                    setActionTarget(null);
+                    void closeRemoteSession(instanceId, sessionId);
+                  }}
+                  className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+                >
+                  {t("chat.closeSession")}
+                </button>
+                <button
+                  onClick={() => setActionTarget(null)}
+                  className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

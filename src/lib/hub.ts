@@ -26,12 +26,17 @@ export class HubClient {
   private async fetch(
     path: string,
     method: "GET" | "POST" = "GET",
+    body?: unknown,
   ): Promise<Response> {
     let res: Response;
     try {
       res = await fetch(this.url(path), {
         method,
-        headers: { Authorization: `Bearer ${this.token}` },
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (e) {
       throw new HubApiError(
@@ -96,6 +101,24 @@ export class HubClient {
     await this.fetch(
       `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/close`,
       "POST",
+    );
+  }
+
+  /**
+   * Renames a session (bridge 0.11.9). The title is set once automatically
+   * from the first prompt; this is the only later modifier — the bridge pins
+   * it (title_overridden) and broadcasts session_info_update so attached
+   * editors update live.
+   */
+  async renameSession(
+    instanceId: string,
+    sessionId: string,
+    title: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/rename`,
+      "POST",
+      { title },
     );
   }
 
