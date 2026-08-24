@@ -29,9 +29,10 @@ const fs = require("fs");
 const v = process.argv[2];
 const bump = (path, pattern) => {
   const text = fs.readFileSync(path, "utf8");
-  const out = text.replace(pattern, `$1"${v}"`);
-  if (out === text) throw new Error(`no version found in ${path}`);
-  fs.writeFileSync(path, out);
+  // Only a missing version field is fatal; a file already at the target
+  // version (e.g. the feature commit bumped it ahead of the release) is fine.
+  if (!pattern.test(text)) throw new Error(`no version found in ${path}`);
+  fs.writeFileSync(path, text.replace(pattern, `$1"${v}"`));
 };
 bump("package.json", /("version"\s*:\s*)"[^"]*"/);
 bump("src-tauri/tauri.conf.json", /("version"\s*:\s*)"[^"]*"/);
