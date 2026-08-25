@@ -20,9 +20,6 @@ import {
   groupPartByType,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import ReactDiffViewer from "react-diff-viewer-continued";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
@@ -53,6 +50,7 @@ import {
 import { useTranslation } from "react-i18next";
 import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
+import { MarkdownText } from "../components/Markdown";
 import { Spinner } from "../components/Spinner";
 import { MAX_IMAGES, attachmentDataUrl, prepareImage } from "../lib/image";
 import type {
@@ -118,19 +116,6 @@ function messageText(message: ThreadMessageLike | string): string {
     .map((p) => (p as { text: string }).text)
     .join("\n");
 }
-
-// memo: markdown + highlight parsing is the most expensive render in the app;
-// identical text must never re-parse (belt-and-suspenders on top of the
-// convertMessage identity cache).
-const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
-  return (
-    <div className="prose prose-sm prose-invert max-w-none prose-pre:rounded-xl prose-pre:bg-canvas prose-pre:ring-1 prose-pre:ring-hairline">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-        {text}
-      </Markdown>
-    </div>
-  );
-});
 
 // Per-kind icon + accent colour (ADR 0004: rendering leans on libraries;
 // the mapping itself is ours).

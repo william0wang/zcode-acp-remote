@@ -35,9 +35,19 @@ import yaml from "highlight.js/lib/languages/yaml";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
-import { ArrowLeft, Download, FileText, Link2, Share2, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Code,
+  Download,
+  Eye,
+  FileText,
+  Link2,
+  Share2,
+  X,
+} from "lucide-react";
 import type { FsEntry } from "../lib/types";
 import { useAppStore } from "../store/appStore";
+import { MarkdownText } from "./Markdown";
 import { Spinner } from "./Spinner";
 
 for (const lang of [
@@ -184,6 +194,16 @@ export function fileKindOf(name: string): "image" | "text" | "binary" {
   if (ext && TEXT_EXT.has(ext)) return "text";
   if (!ext && TEXT_NAMES.has(lower)) return "text";
   return "binary";
+}
+
+// Markdown gets a rendered preview by default (source stays one toggle away);
+// everything else text-shaped keeps the plain source viewer.
+const MARKDOWN_EXT = new Set(["md", "markdown", "mdx"]);
+
+export function isMarkdown(name: string): boolean {
+  const lower = name.toLowerCase();
+  const ext = lower.includes(".") ? lower.split(".").pop()! : "";
+  return MARKDOWN_EXT.has(ext);
 }
 
 export function fmtSize(bytes: number): string {
@@ -336,6 +356,85 @@ function TextViewer({ path }: TextViewerProps) {
   );
 }
 
+// Whole-file markdown preview: reading is the viewer's purpose on mobile, so
+// pull every window up front (bounded by the same MAX_LINES budget as the
+// source view) and render it as prose.
+function MarkdownView({ path }: { path: string }) {
+  const { t } = useTranslation();
+  const fsFileText = useAppStore((s) => s.fsFileText);
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [capped, setCapped] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setText(null);
+    setFailed(false);
+    setCapped(false);
+    (async () => {
+      const parts: string[] = [];
+      let from = 1;
+      let total = 0;
+      for (;;) {
+        const res = await fsFileText(path, from, NEXT_WINDOW);
+        if (!alive) return;
+        if (!res) {
+          if (parts.length === 0) setFailed(true);
+          break;
+        }
+        const got = res.text ? res.text.split("\n").length : 0;
+        parts.push(res.text);
+        total += got;
+        from += got;
+        if (got < NEXT_WINDOW) break;
+        if (total >= MAX_LINES) {
+          setCapped(true);
+          break;
+        }
+      }
+      if (!alive) return;
+      setText(parts.join("\n"));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [path, attempt, fsFileText]);
+
+  if (text == null && !failed) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Spinner className="size-7" />
+      </div>
+    );
+  }
+  if (text == null && failed) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-sm text-dim">
+        <span>{t("files.loadError")}</span>
+        <button
+          onClick={() => setAttempt((n) => n + 1)}
+          className="text-xs text-blue-400 active:text-blue-300"
+        >
+          {t("files.retry")}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+        <MarkdownText text={text ?? ""} />
+      </div>
+      {capped && (
+        <div className="border-t border-hairline px-3 py-2 text-center text-[11px] text-faint">
+          {t("viewer.lineCap")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface FileViewerProps {
   file: FsEntry;
   path: string;
@@ -354,6 +453,9 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   // viewer — binary content shows as garbage, which the user can see and
   // back out of.
   const [forcedText, setForcedText] = useState(false);
+  // Markdown: which of preview (default) / source is shown.
+  const [mdSource, setMdSource] = useState(false);
+  const markdown = isMarkdown(file.name);
   const baseKind = fileKindOf(file.name);
   const kind: "image" | "text" | "binary" = forcedText
     ? "text"
@@ -430,6 +532,19 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
           <div className="truncate text-[15px] font-medium">{file.name}</div>
           <div className="text-[11px] text-faint">{fmtSize(file.size)}</div>
         </div>
+        {kind === "text" && markdown && (
+          <button
+            onClick={() => setMdSource((v) => !v)}
+            aria-label={mdSource ? t("viewer.preview") : t("viewer.source")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            {mdSource ? (
+              <Eye className="size-5" />
+            ) : (
+              <Code className="size-5" />
+            )}
+          </button>
+        )}
         {onExit && (
           <button
             onClick={onExit}
@@ -451,7 +566,12 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
         />
       )}
 
-      {kind === "text" && <TextViewer path={path} />}
+      {kind === "text" &&
+        (markdown && !mdSource ? (
+          <MarkdownView path={path} />
+        ) : (
+          <TextViewer path={path} />
+        ))}
 
       {kind === "binary" && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6">

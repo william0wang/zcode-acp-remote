@@ -136,6 +136,8 @@
     "lineCap": "已达查看上限（1 万行）",
     "downloadStarted": "开始下载 {{name}}…",
     "downloadDone": "{{name}} 已保存到下载目录",
-    "downloadFailed": "下载失败：{{name}}"
+    "downloadFailed": "下载失败：{{name}}",
+    "preview": "预览",
+    "source": "源码"
   }
 }
