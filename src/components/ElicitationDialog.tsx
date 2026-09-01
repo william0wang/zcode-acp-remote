@@ -1,24 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore, type ElicitField } from "../store/appStore";
-import type { HubInstance } from "../lib/types";
 
 // AskUserQuestion form (elicitation/create): the bridge's preferred channel
 // once ANY client advertises elicitation.form — capabilities OR-merge across
 // clients, so Zed's declaration routes our questions here too. One bottom
 // sheet per question set; unanswered fields are skipped (the bridge's parser
 // treats absent as skipped), Cancel declines the whole form.
-
-function sessionTitle(
-  instances: HubInstance[],
-  sessionId: string,
-): string | null {
-  for (const inst of instances) {
-    const s = (inst.sessions ?? []).find((x) => x.sessionId === sessionId);
-    if (s) return s.title ?? null;
-  }
-  return null;
-}
 
 function QuestionBlock({
   field,
@@ -77,10 +65,12 @@ function QuestionBlock({
 
 export function ElicitationDialog() {
   const { t } = useTranslation();
-  const elicitation = useAppStore((s) => s.elicitation);
+  // Per-session rendering (bridge 0.17.0 semantics): the form shows ONLY in
+  // the session that asked — see PermissionDialog for the rationale.
+  const elicitation = useAppStore(
+    (s) => (s.activeSessionId ? s.elicitations[s.activeSessionId] : undefined) ?? null,
+  );
   const answerElicitation = useAppStore((s) => s.answerElicitation);
-  const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const instances = useAppStore((s) => s.instances);
   // Local answer state; keyed fresh per request (option sets can repeat q_0).
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -94,11 +84,6 @@ export function ElicitationDialog() {
   }, [requestId]);
 
   if (!elicitation) return null;
-
-  const otherSession =
-    elicitation.sessionId !== activeSessionId
-      ? sessionTitle(instances, elicitation.sessionId)
-      : null;
 
   const submit = () => {
     const content: Record<string, string | string[]> = {};
@@ -122,12 +107,6 @@ export function ElicitationDialog() {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]">
       <div className="flex max-h-[75vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-hairline bg-surface">
-        {otherSession != null && (
-          <div className="border-b border-hairline bg-white/[0.03] px-4 py-1.5 text-[11px] text-faint">
-            {t("permission.sessionLabel")}:{" "}
-            <span className="text-dim">{otherSession}</span>
-          </div>
-        )}
         <div className="min-h-0 flex-1 overflow-y-auto">
           <h2 className="px-4 pt-3 text-sm font-semibold text-ink">
             {elicitation.message || t("permission.questionTitle")}

@@ -25,6 +25,7 @@ import {
   type GoUsageStats,
   type GoWindowEntry,
   type GlmUsageStats,
+  type HubCreateInstanceResult,
   type HubInstance,
   type HubUpgradeResult,
   type PromptDraft,
@@ -178,10 +179,16 @@ interface AppState {
   // Keyed by sessionId and persisted — drafts survive session switches and
   // app restarts.
   pendingPrompts: Record<string, PromptDraft[]>;
-  permission: PendingPermission | null;
+  // Pending permission/elicitation requests, keyed by the sessionId they
+  // belong to (bridge 0.17.0 semantics: a request is only ever answered in
+  // the session that raised it — dialogs render per-session, and a request
+  // from session A must never appear in session B's view). One pending
+  // request per session at a time: the bridge issues its interactions
+  // sequentially within a turn.
+  permissions: Record<string, PendingPermission>;
   // AskUserQuestion via elicitation/create (the bridge's preferred channel
   // once ANY client advertises elicitation.form — capabilities OR-merge).
-  elicitation: PendingElicitation | null;
+  elicitations: Record<string, PendingElicitation>;
   notice: string | null;
   // Pagination state from the attach response's replayMeta.
   replayCursor: string | null;
@@ -221,7 +228,11 @@ interface AppState {
   connectInstance: (
     instanceId: string,
     attachSessionId?: string,
+    opts?: { noAttach?: boolean },
   ) => Promise<void>;
+  // Remote session-create (bridge 0.17.0, ADR-0014): create/reuse a headless
+  // serve bridge for a known project and open a FRESH session in it.
+  createProjectSession: (workspacePath: string) => Promise<void>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Foreground wake hook: proves the WS pipe is actually alive (Android deep
   // sleep leaves zombie sockets that never fire onclose) and reconnects if
@@ -955,9 +966,9 @@ export const useAppStore = create<AppState>((set, get) => {
     connSeq++;
     acp?.close();
     acp = null;
-    pendingRespond = null;
-    pendingElicitRespond = null;
-    set({ permission: null, elicitation: null, sessionStates: {} });
+    pendingResponds.clear();
+    pendingElicitResponds.clear();
+    set({ permissions: {}, elicitations: {}, sessionStates: {} });
     scheduleReconnect();
   }
 
@@ -996,8 +1007,8 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         planEntries: null,
-        permission: null,
-        elicitation: null,
+        permissions: {},
+        elicitations: {},
         notice: "notice.instanceGone",
         fsCapable: false,
         replayCursor: null,
@@ -1045,11 +1056,11 @@ export const useAppStore = create<AppState>((set, get) => {
             // The pending permission/elicitation requests die with the
             // socket; don't leave dead dialogs that silently swallow taps.
             // Broadcast activity is equally untrustworthy now.
-            pendingRespond = null;
-            pendingElicitRespond = null;
+            pendingResponds.clear();
+            pendingElicitResponds.clear();
             set({
-              permission: null,
-              elicitation: null,
+              permissions: {},
+              elicitations: {},
               sessionStates: {},
             });
             scheduleReconnect();
@@ -1101,16 +1112,19 @@ export const useAppStore = create<AppState>((set, get) => {
             ? (req.params.options as PermissionOption[])
             : [];
           setActivity(sessionId, { awaitingPermission: true });
-          set({
-            permission: {
-              requestId: req.id,
-              sessionId,
-              options: options.filter((o) => typeof o.optionId === "string"),
-              context: buildApprovalContext(req.params),
+          set((s) => ({
+            permissions: {
+              ...s.permissions,
+              [sessionId]: {
+                requestId: req.id,
+                sessionId,
+                options: options.filter((o) => typeof o.optionId === "string"),
+                context: buildApprovalContext(req.params),
+              },
             },
-          });
+          }));
           // respond is captured by answerPermission through the stored request id.
-          pendingRespond = { id: req.id, respond };
+          pendingResponds.set(req.id, respond);
         } else if (req.method === "elicitation/create") {
           // AskUserQuestion form (the bridge's preferred channel once any
           // client advertises elicitation.form — capabilities OR-merge, so
@@ -1118,8 +1132,13 @@ export const useAppStore = create<AppState>((set, get) => {
           const parsed = parseElicitationForm(req.params);
           if (parsed) {
             setActivity(parsed.sessionId, { awaitingPermission: true });
-            set({ elicitation: { requestId: req.id, ...parsed } });
-            pendingElicitRespond = { id: req.id, respond };
+            set((s) => ({
+              elicitations: {
+                ...s.elicitations,
+                [parsed.sessionId]: { requestId: req.id, ...parsed },
+              },
+            }));
+            pendingElicitResponds.set(req.id, respond);
           } else {
             // Unparseable schema: decline rather than leave the request
             // dangling (first-response-wins; Zed may still answer).
@@ -1133,19 +1152,28 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       },
       onCancelRequest: (id) => {
-        // We lost the Permission Race; drop the dialog(s).
-        const lost = get().permission;
-        if (lost?.requestId === id) {
-          setActivity(lost.sessionId, { awaitingPermission: false });
-          set({ permission: null });
-          pendingRespond = null;
-        }
-        const lostForm = get().elicitation;
-        if (lostForm?.requestId === id) {
-          setActivity(lostForm.sessionId, { awaitingPermission: false });
-          set({ elicitation: null });
-          pendingElicitRespond = null;
-        }
+        // We lost the Permission Race; drop the dialog(s) for this request.
+        const cleared: string[] = [];
+        set((s) => {
+          const permissions = { ...s.permissions };
+          const elicitations = { ...s.elicitations };
+          for (const [sid, p] of Object.entries(permissions)) {
+            if (p.requestId === id) {
+              delete permissions[sid];
+              cleared.push(sid);
+            }
+          }
+          for (const [sid, e] of Object.entries(elicitations)) {
+            if (e.requestId === id) {
+              delete elicitations[sid];
+              cleared.push(sid);
+            }
+          }
+          return { permissions, elicitations };
+        });
+        for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
+        pendingResponds.delete(id);
+        pendingElicitResponds.delete(id);
       },
     });
     acp = conn;
@@ -1163,14 +1191,8 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
-  let pendingRespond: {
-    id: number;
-    respond: (result: unknown) => void;
-  } | null = null;
-  let pendingElicitRespond: {
-    id: number;
-    respond: (result: unknown) => void;
-  } | null = null;
+  const pendingResponds = new Map<number, (result: unknown) => void>();
+  const pendingElicitResponds = new Map<number, (result: unknown) => void>();
 
   return {
     profile: null,
@@ -1185,8 +1207,8 @@ export const useAppStore = create<AppState>((set, get) => {
     pendingPrompts: loadPending(),
     planEntries: null,
     isRunning: false,
-    permission: null,
-    elicitation: null,
+    permissions: {},
+    elicitations: {},
     notice: null,
     replayCursor: null,
     hasMore: false,
@@ -1227,7 +1249,8 @@ export const useAppStore = create<AppState>((set, get) => {
       connSeq++; // invalidate any in-flight connection events
       acp?.close();
       acp = null;
-      pendingRespond = null;
+      pendingResponds.clear();
+      pendingElicitResponds.clear();
       reconnectAttempt = 0;
       dropQueuedUpdates();
       clearProfileStorage();
@@ -1243,8 +1266,8 @@ export const useAppStore = create<AppState>((set, get) => {
         messages: [],
         pendingPrompts: {},
         planEntries: null,
-        permission: null,
-        elicitation: null,
+        permissions: {},
+        elicitations: {},
         notice: null,
         replayCursor: null,
         hasMore: false,
@@ -1323,13 +1346,13 @@ export const useAppStore = create<AppState>((set, get) => {
       return result;
     },
 
-    connectInstance: async (instanceId, attachSessionId) => {
+    connectInstance: async (instanceId, attachSessionId, opts) => {
       const s = get();
       if (!s.profile) return;
       stopReconnect();
       reconnectAttempt = 0;
-      pendingRespond = null;
-      pendingElicitRespond = null;
+      pendingResponds.clear();
+      pendingElicitResponds.clear();
       dropQueuedUpdates();
       set({
         instanceId,
@@ -1337,8 +1360,8 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSessionId: null,
         messages: [],
         planEntries: null,
-        permission: null,
-        elicitation: null,
+        permissions: {},
+        elicitations: {},
         notice: null,
         replayCursor: null,
         hasMore: false,
@@ -1356,7 +1379,9 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       await openConnection(s.profile, instanceId);
       // Attach to the requested session, else the most recently updated one.
-      if (get().connState === "open" && !get().activeSessionId) {
+      // noAttach (remote session-create): the caller opens a FRESH session
+      // itself — never auto-attach a recycled instance's history.
+      if (!opts?.noAttach && get().connState === "open" && !get().activeSessionId) {
         const inst = get().instances.find((i) => i.id === instanceId);
         let target = attachSessionId ?? null;
         if (!target && inst?.sessions?.length) {
@@ -1365,6 +1390,61 @@ export const useAppStore = create<AppState>((set, get) => {
           )[0].sessionId;
         }
         if (target) await get().loadSession(target);
+      }
+    },
+
+    // Remote session-create (bridge 0.17.0, ADR-0014): start a NEW CLI
+    // session in one of the machine's known projects. Creates (or reuses) a
+    // headless serve bridge for the workspace, connects it with noAttach,
+    // and opens a fresh session whose cwd is the project directory. The new
+    // conversation counts as "no activity" on the bridge until its first
+    // prompt lands it in discovery — normal, not an error.
+    createProjectSession: async (workspacePath) => {
+      const client = hub();
+      if (!client) return;
+      let created: HubCreateInstanceResult;
+      try {
+        created = await client.createInstance(workspacePath);
+      } catch (e) {
+        set({
+          notice:
+            e instanceof HubApiError && e.status === 403
+              ? "notice.projectUnknown"
+              : `create session failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        return;
+      }
+      // Discovery refresh (best-effort) so the new instance shows in the
+      // list; the connection itself does not depend on it.
+      void get().refreshInstances().catch(() => undefined);
+      await get().connectInstance(created.id, undefined, { noAttach: true });
+      if (get().connState !== "open" || !acp) {
+        // POST succeeded but the WS never opened (e.g. serve bridge died
+        // between registration and connect); scheduleReconnect owns the
+        // retry. Surface it or pick() silently restores its buttons.
+        set({ notice: "create session failed: instance connection failed" });
+        return;
+      }
+      try {
+        // cwd is REQUIRED by the ACP schema — a request without it is
+        // rejected -32602 before the bridge's serve-mode handler (which
+        // ignores the value in favor of the process cwd) ever runs.
+        const result = (await acp.request("session/new", {
+          cwd: workspacePath,
+          mcpServers: [],
+        })) as {
+          sessionId: string;
+          configOptions?: ConfigOption[];
+          modes?: { currentModeId?: string };
+        };
+        set({
+          activeSessionId: result.sessionId,
+          configOptions: result.configOptions ?? [],
+          currentModeId: result.modes?.currentModeId ?? null,
+          loadingSession: false,
+        });
+      } catch (e) {
+        set({ notice: `create session failed: ${e instanceof Error ? e.message : String(e)}` });
       }
     },
 
@@ -1458,48 +1538,77 @@ export const useAppStore = create<AppState>((set, get) => {
       // Connection-level teardown (instance gone, forget hub) lives
       // elsewhere; this only resets session-scoped state. openSession's
       // fast path reuses the still-open socket.
-      pendingRespond = null;
-      pendingElicitRespond = null;
       dropQueuedUpdates();
-      set({
-        activeSessionId: null,
-        messages: [],
-        planEntries: null,
-        permission: null,
-        elicitation: null,
-        notice: null,
-        replayCursor: null,
-        hasMore: false,
-        totalMessages: null,
-        loadingEarlier: false,
-        configOptions: [],
-        currentModeId: null,
-        usage: null,
-        availableCommands: [],
-        loadingSession: false,
-        isRunning: false,
+      const leaving = get().activeSessionId;
+      // The leaving session's dialogs are gone — drop their respond handles
+      // too (the bridge's race resolves elsewhere or dies with the turn).
+      const leavingPerm = leaving ? get().permissions[leaving] : undefined;
+      const leavingElicit = leaving ? get().elicitations[leaving] : undefined;
+      if (leavingPerm) pendingResponds.delete(leavingPerm.requestId);
+      if (leavingElicit) pendingElicitResponds.delete(leavingElicit.requestId);
+      set((s) => {
+        // Other sessions' pending dialogs stay: a request raised in session
+        // A keeps waiting in the bridge's first-response-wins race, and the
+        // awaitingPermission badge points the user back into A to answer.
+        const permissions = { ...s.permissions };
+        const elicitations = { ...s.elicitations };
+        if (s.activeSessionId) {
+          delete permissions[s.activeSessionId];
+          delete elicitations[s.activeSessionId];
+        }
+        return {
+          activeSessionId: null,
+          messages: [],
+          planEntries: null,
+          permissions,
+          elicitations,
+          notice: null,
+          replayCursor: null,
+          hasMore: false,
+          totalMessages: null,
+          loadingEarlier: false,
+          configOptions: [],
+          currentModeId: null,
+          usage: null,
+          availableCommands: [],
+          loadingSession: false,
+          isRunning: false,
+        };
       });
     },
 
     loadSession: async (sessionId) => {
       if (!acp || get().connState !== "open") return;
-      // Replay arrives as session/update notifications; reset first.
+      // Replay arrives as session/update notifications; reset first. A stale
+      // local dialog for THIS session dies here (a still-pending request is
+      // re-sent by the bridge after the load and lands as a fresh entry);
+      // other sessions' dialogs are untouched.
       dropQueuedUpdates();
-      set({
-        activeSessionId: sessionId,
-        messages: [],
-        planEntries: null,
-        permission: null,
-        elicitation: null,
-        replayCursor: null,
-        hasMore: false,
-        totalMessages: null,
-        loadingEarlier: false,
-        configOptions: [],
-        currentModeId: null,
-        usage: null,
-        availableCommands: [],
-        loadingSession: true,
+      set((s) => {
+        const permissions = { ...s.permissions };
+        const elicitations = { ...s.elicitations };
+        const oldPerm = permissions[sessionId];
+        const oldElicit = elicitations[sessionId];
+        if (oldPerm) pendingResponds.delete(oldPerm.requestId);
+        if (oldElicit) pendingElicitResponds.delete(oldElicit.requestId);
+        delete permissions[sessionId];
+        delete elicitations[sessionId];
+        return {
+          activeSessionId: sessionId,
+          messages: [],
+          planEntries: null,
+          permissions,
+          elicitations,
+          replayCursor: null,
+          hasMore: false,
+          totalMessages: null,
+          loadingEarlier: false,
+          configOptions: [],
+          currentModeId: null,
+          usage: null,
+          availableCommands: [],
+          loadingSession: true,
+        };
       });
       try {
         const ws = instanceWorkspace();
@@ -1831,27 +1940,43 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     answerPermission: (requestId, optionId) => {
-      const entry = pendingRespond;
-      if (!entry || entry.id !== requestId) return;
-      const sid = get().permission?.sessionId;
-      pendingRespond = null;
-      entry.respond({ outcome: { outcome: "selected", optionId } });
-      if (sid) setActivity(sid, { awaitingPermission: false });
-      set({ permission: null });
+      const respond = pendingResponds.get(requestId);
+      if (!respond) return;
+      pendingResponds.delete(requestId);
+      const cleared: string[] = [];
+      set((s) => {
+        const permissions = { ...s.permissions };
+        for (const [sid, p] of Object.entries(permissions)) {
+          if (p.requestId === requestId) {
+            delete permissions[sid];
+            cleared.push(sid);
+          }
+        }
+        return { permissions };
+      });
+      for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
+      respond({ outcome: { outcome: "selected", optionId } });
     },
 
     answerElicitation: (requestId, content) => {
-      const entry = pendingElicitRespond;
-      if (!entry || entry.id !== requestId) return;
-      const sid = get().elicitation?.sessionId;
-      pendingElicitRespond = null;
+      const respond = pendingElicitResponds.get(requestId);
+      if (!respond) return;
+      pendingElicitResponds.delete(requestId);
+      const cleared: string[] = [];
+      set((s) => {
+        const elicitations = { ...s.elicitations };
+        for (const [sid, e] of Object.entries(elicitations)) {
+          if (e.requestId === requestId) {
+            delete elicitations[sid];
+            cleared.push(sid);
+          }
+        }
+        return { elicitations };
+      });
+      for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
       // Wire shape (elicitation/create): accept carries the form content,
       // anything else declines. Absent fields = skipped questions.
-      entry.respond(
-        content ? { action: "accept", content } : { action: "decline" },
-      );
-      if (sid) setActivity(sid, { awaitingPermission: false });
-      set({ elicitation: null });
+      respond(content ? { action: "accept", content } : { action: "decline" });
     },
 
     dismissNotice: () => set({ notice: null }),

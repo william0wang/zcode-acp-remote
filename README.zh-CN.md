@@ -7,13 +7,15 @@
 传输协议契约见服务端的
 [REMOTE-CLIENTS.md](https://github.com/william0wang/zcode-acp/blob/main/docs/REMOTE-CLIENTS.md)。
 
-仅附加模式（Attach-only）—— 会话在编辑器中创建，本应用不新建会话。
+既可接入现有会话，也可在本机任意已知项目中远程新建会话（需 bridge
+0.17.0+）—— hub 会为该项目拉起一个无头 serve bridge，会话在其中运行。
 
 ## 功能
 
 - 会话列表带实时活动徽标（运行中 / 空闲 / 刚结束），长按可远程关闭会话
+- 远程新建会话：从本机已知项目列表中选择一个，CLI 会话即在其中启动（需 bridge 0.17.0+）
 - 聊天流式输出，支持 Markdown、代码高亮和 diff 视图
-- 审批工具权限请求、回答 AskUserQuestion 表单；手机离线期间发出的提问会在重连后补发
+- 审批工具权限请求、回答 AskUserQuestion 表单，仅在发起请求的会话中弹出；手机离线期间发出的提问会在重连后补发
 - 按会话的提示词队列 —— 草稿在应用重启后保留
 - 斜杠命令补全，含 `$` 前缀的 skills
 - 用量配额卡片，绿→黄→红热力色显示

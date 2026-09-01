@@ -33,11 +33,22 @@ clients receive `$/cancel_request`.
 _Avoid_: permission conflict
 
 **Approval Card**:
-The single bottom-sheet surface rendering every `session/request_permission`
-request. Three shapes: Plan Approval (ExitPlanMode), Tool Permission, and
-Question (AskUserQuestion). Context shown on the card comes from the tool_call
-matched by `toolCallId`, never guessed from the options alone.
+The bottom-sheet surface rendering `session/request_permission` requests —
+shown ONLY in the session that raised it (bridge 0.17.0 per-session
+semantics); another session's request surfaces through the session list's
+awaiting-confirmation badge instead. Three shapes: Plan Approval
+(ExitPlanMode), Tool Permission, and Question (AskUserQuestion). Context
+shown on the card comes from the tool_call matched by `toolCallId`, never
+guessed from the options alone.
 _Avoid_: permission dialog, confirm popup
+
+**Remote Session Create**:
+Starting a NEW CLI session from the app by picking one of the machine's known
+projects (bridge 0.17.0, server ADR-0014): the hub spawns — or reuses — a
+headless serve bridge for the workspace, and the fresh session's cwd is that
+project. The known-project list doubles as the create whitelist; there is no
+free-form path entry.
+_Avoid_: new tab, project open
 
 **Session Activity**:
 The per-session display state in the session list: awaiting confirmation,

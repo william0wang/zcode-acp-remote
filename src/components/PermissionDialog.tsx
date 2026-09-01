@@ -7,7 +7,6 @@ import {
   type ApprovalContext,
   type PermissionOption,
 } from "../store/appStore";
-import type { HubInstance } from "../lib/types";
 
 // Approval card (CONTEXT.md): one bottom sheet for every
 // session/request_permission. Three shapes — Plan Approval, Tool Permission,
@@ -47,17 +46,6 @@ function optionClass(kind: string | undefined): string {
   if (kind?.startsWith("reject"))
     return "bg-red-600/10 text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-600/20";
   return "bg-raised text-ink ring-1 ring-inset ring-hairline";
-}
-
-function sessionTitle(
-  instances: HubInstance[],
-  sessionId: string,
-): string | null {
-  for (const inst of instances) {
-    const s = (inst.sessions ?? []).find((x) => x.sessionId === sessionId);
-    if (s) return s.title ?? null;
-  }
-  return null;
 }
 
 function ActionButtons({
@@ -114,10 +102,14 @@ function ActionButtons({
 
 export function PermissionDialog() {
   const { t } = useTranslation();
-  const permission = useAppStore((s) => s.permission);
+  // Per-session rendering (bridge 0.17.0 semantics): a request is shown ONLY
+  // in the session that raised it — session A's approval never pops up over
+  // session B. Requests for other sessions surface through the session
+  // list's awaitingPermission badge instead.
+  const permission = useAppStore(
+    (s) => (s.activeSessionId ? s.permissions[s.activeSessionId] : undefined) ?? null,
+  );
   const answerPermission = useAppStore((s) => s.answerPermission);
-  const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const instances = useAppStore((s) => s.instances);
   if (!permission) return null;
 
   const ctx = permission.context;
@@ -132,10 +124,6 @@ export function PermissionDialog() {
     : isQuestion
       ? ctx?.detail
       : undefined;
-  const otherSession =
-    permission.sessionId !== activeSessionId
-      ? sessionTitle(instances, permission.sessionId)
-      : null;
 
   const onAnswer = (optionId: string) =>
     answerPermission(permission.requestId, optionId);
@@ -143,12 +131,6 @@ export function PermissionDialog() {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]">
       <div className="flex max-h-[75vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-hairline bg-surface">
-        {otherSession != null && (
-          <div className="border-b border-hairline bg-white/[0.03] px-4 py-1.5 text-[11px] text-faint">
-            {t("permission.sessionLabel")}:{" "}
-            <span className="text-dim">{otherSession}</span>
-          </div>
-        )}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
             {isPlan ? (

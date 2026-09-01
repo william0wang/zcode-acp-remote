@@ -16,8 +16,28 @@ export interface HubInstance {
   pid?: number;
   startedAt?: number;
   workspace?: string;
+  // How the instance was started (bridge 0.17.0, ADR-0014): "editor" = a
+  // bridge an editor spawned over stdio; "serve" = a headless bridge created
+  // via remote session-create. Absent on older bridges — treat as "editor".
+  origin?: "editor" | "serve";
   sessions: HubSessionInfo[];
   [key: string]: unknown;
+}
+
+// GET /api/projects (bridge 0.17.0, ADR-0014): one known project workspace —
+// every directory the machine's App tasks index has ever recorded a session
+// for (temp trees and ~/.zcode filtered out server-side). This list is also
+// the create whitelist: POST /api/instances refuses paths outside it.
+export interface HubProject {
+  workspacePath: string;
+  sessions: number;
+  lastActive: number;
+}
+
+// POST /api/instances result: the (new or reused) serve instance id.
+export interface HubCreateInstanceResult {
+  id: string;
+  reused: boolean;
 }
 
 export interface ConnectionProfile {

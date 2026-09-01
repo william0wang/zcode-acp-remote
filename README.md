@@ -8,15 +8,20 @@ agent sessions as your editor. See the server's
 [REMOTE-CLIENTS.md](https://github.com/william0wang/zcode-acp/blob/main/docs/REMOTE-CLIENTS.md)
 for the transport contract this app implements.
 
-Attach-only — sessions are created in the editor, never here.
+Attach to existing sessions, or start new ones in any of the machine's known
+projects (bridge 0.17.0+) — the hub spawns a headless serve bridge for the
+project and the session runs there.
 
 ## Features
 
 - Session list with live activity badges (running / idle / just finished),
   long-press to retire a session remotely
+- Start new sessions remotely: pick one of the machine's known projects and a
+  CLI session starts there (bridge 0.17.0+)
 - Chat with streaming assistant replies, Markdown + code highlight, diff views
-- Approve tool permission requests and answer AskUserQuestion forms, even ones
-  that fired while the phone was offline (re-delivered after reconnect)
+- Approve tool permission requests and answer AskUserQuestion forms in the
+  session that raised them — even ones that fired while the phone was offline
+  (re-delivered after reconnect)
 - Prompt queue per session — drafts survive app restarts
 - Slash command completion, including `$`-prefixed skills
 - Usage quota card with green→yellow→red heat colors

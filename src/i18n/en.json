@@ -88,7 +88,6 @@
     "title": "Permission requested",
     "planTitle": "Ready to code?",
     "questionTitle": "Question for you",
-    "sessionLabel": "Session",
     "hint": "The first answer across all clients wins",
     "submit": "Submit"
   },
@@ -99,7 +98,18 @@
     "sessionRunning": "Session is running — cancel the turn first",
     "sessionClosed": "Session closed",
     "sessionRenamed": "Session renamed",
-    "sessionRenameFailed": "Rename failed"
+    "sessionRenameFailed": "Rename failed",
+    "projectUnknown": "Unknown project — refresh the list and pick again"
+  },
+  "projectDialog": {
+    "title": "New session",
+    "hint": "Pick one of this machine's projects — a CLI session starts there",
+    "filter": "Filter projects",
+    "loading": "Loading projects…",
+    "empty": "No matching projects",
+    "sessionCount": "{{count}} sessions",
+    "sessionCount_one": "1 session",
+    "tooOld": "Bridge 0.17.0+ required for remote session-create"
   },
   "common": {
     "cancel": "Cancel",

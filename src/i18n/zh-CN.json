@@ -88,7 +88,6 @@
     "title": "权限请求",
     "planTitle": "可以开始编码了吗？",
     "questionTitle": "需要你回答",
-    "sessionLabel": "会话",
     "hint": "所有客户端中最先应答的生效",
     "submit": "提交"
   },
@@ -99,7 +98,17 @@
     "sessionRunning": "会话正在运行，请先取消",
     "sessionClosed": "会话已关闭",
     "sessionRenamed": "会话已重命名",
-    "sessionRenameFailed": "重命名失败"
+    "sessionRenameFailed": "重命名失败",
+    "projectUnknown": "未知项目——请刷新列表后重选"
+  },
+  "projectDialog": {
+    "title": "新建会话",
+    "hint": "选择本机的一个项目，将在其中启动 CLI 会话",
+    "filter": "筛选项目",
+    "loading": "正在加载项目…",
+    "empty": "没有匹配的项目",
+    "sessionCount": "{{count}} 个会话",
+    "tooOld": "远程创建会话需要 bridge 0.17.0+"
   },
   "common": {
     "cancel": "取消",

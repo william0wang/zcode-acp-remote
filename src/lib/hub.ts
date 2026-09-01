@@ -1,4 +1,10 @@
-import type { FsListing, HubInstance, HubUpgradeResult } from "./types";
+import type {
+  FsListing,
+  HubCreateInstanceResult,
+  HubInstance,
+  HubProject,
+  HubUpgradeResult,
+} from "./types";
 
 export class HubApiError extends Error {
   // `network` = the fetch itself failed (hub unreachable): the hub lives and
@@ -89,6 +95,31 @@ export class HubClient {
   async upgrade(): Promise<HubUpgradeResult> {
     const res = await this.fetch("/api/upgrade", "POST");
     return (await res.json()) as HubUpgradeResult;
+  }
+
+  /**
+   * Known-project list (bridge 0.17.0, ADR-0014), newest activity first.
+   * Every workspace that ever ran a session — this list doubles as the
+   * create whitelist, so the paths it returns are exactly the ones
+   * createInstance() accepts.
+   */
+  async projects(): Promise<HubProject[]> {
+    const res = await this.fetch("/api/projects");
+    const data: unknown = await res.json();
+    if (!Array.isArray(data)) throw new HubApiError("unexpected /api/projects payload");
+    return data as HubProject[];
+  }
+
+  /**
+   * Create (or reuse) a headless serve bridge for one known project (bridge
+   * 0.17.0, ADR-0014). The hub spawns `zcode-acp serve` in the project's cwd
+   * and waits for its registration; `reused` means a live serve instance for
+   * the same workspace already existed. 403 = path not on the projects list;
+   * 502 = spawn failed or the bridge never registered (10s budget).
+   */
+  async createInstance(workspacePath: string): Promise<HubCreateInstanceResult> {
+    const res = await this.fetch("/api/instances", "POST", { workspacePath });
+    return (await res.json()) as HubCreateInstanceResult;
   }
 
   /**
