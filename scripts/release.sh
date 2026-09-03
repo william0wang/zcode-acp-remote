@@ -49,7 +49,12 @@ if ! pnpm build:android; then
 fi
 
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "chore: bump version to ${VERSION}"
+# The version may already sit at the target (e.g. the fix/feature commit was
+# tested at that version) — nothing to stage then, and a bare `git commit`
+# would abort the whole flow. Skip the commit in that case.
+if ! git diff --cached --quiet; then
+  git commit -m "chore: bump version to ${VERSION}"
+fi
 git tag "${TAG}"
 git push origin main "${TAG}"
 # A GITHUB_TOKEN/GH_TOKEN env var overrides gh's keyring login; if that PAT
