@@ -40,6 +40,37 @@ export interface HubCreateInstanceResult {
   reused: boolean;
 }
 
+// One row of GET /api/projects/sessions (bridge 0.19.0, server ADR-0015):
+// the project's backend session store, closed conversations included.
+export interface HubHistorySession {
+  sessionId: string;
+  title?: string;
+  cwd?: string;
+  // The store's ISO timestamp — NOT discovery's epoch-ms number.
+  updatedAt?: string;
+  // live = currently advertised by a bridge (discovery membership);
+  // running = a turn is in flight. Both absent on the wire when false.
+  live?: boolean;
+  running?: boolean;
+  [key: string]: unknown;
+}
+
+// Composite "load more" cursor. Pass BOTH fields back verbatim — `before`
+// alone would drop rows whose timestamps tie across a page boundary.
+export interface HubHistoryCursor {
+  before: number;
+  beforeId: string;
+}
+
+export interface HubHistoryPage {
+  workspacePath: string;
+  // The serve instance a follow-up resume attaches to.
+  instance: { id: string; origin?: "editor" | "serve" };
+  sessions: HubHistorySession[];
+  // null = no older sessions (last page).
+  nextCursor: HubHistoryCursor | null;
+}
+
 export interface ConnectionProfile {
   hubUrl: string;
   token: string;

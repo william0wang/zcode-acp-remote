@@ -104,11 +104,27 @@
   "projectDialog": {
     "title": "新建会话",
     "hint": "选择本机的一个项目，将在其中启动 CLI 会话",
+    "creatingHint": "将在桌面机打开一个终端窗口——可能需要约 20 秒",
     "filter": "筛选项目",
     "loading": "正在加载项目…",
     "empty": "没有匹配的项目",
     "sessionCount": "{{count}} 个会话",
     "tooOld": "远程创建会话需要 bridge 0.17.0+"
+  },
+  "historyDialog": {
+    "title": "会话历史",
+    "hint": "选择一个项目，浏览它的历史会话",
+    "listHint": "点按会话即可恢复——会先回放历史再继续",
+    "filter": "筛选项目",
+    "loading": "正在加载项目…",
+    "empty": "没有匹配的项目",
+    "listEmpty": "该项目还没有会话记录",
+    "waking": "正在唤醒项目的桥接——首次加载可能需要约 12 秒",
+    "loadMore": "加载更多",
+    "loadingMore": "加载中…",
+    "end": "已到最早记录",
+    "retry": "重试",
+    "tooOld": "会话历史需要 bridge 0.19.0+"
   },
   "common": {
     "cancel": "取消",

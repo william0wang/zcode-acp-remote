@@ -104,12 +104,28 @@
   "projectDialog": {
     "title": "New session",
     "hint": "Pick one of this machine's projects — a CLI session starts there",
+    "creatingHint": "A terminal window opens on the desktop machine — allow ~20s",
     "filter": "Filter projects",
     "loading": "Loading projects…",
     "empty": "No matching projects",
     "sessionCount": "{{count}} sessions",
     "sessionCount_one": "1 session",
     "tooOld": "Bridge 0.17.0+ required for remote session-create"
+  },
+  "historyDialog": {
+    "title": "Session history",
+    "hint": "Pick a project to browse its past sessions",
+    "listHint": "Tap a session to resume it — history replays first",
+    "filter": "Filter projects",
+    "loading": "Loading projects…",
+    "empty": "No matching projects",
+    "listEmpty": "No sessions recorded for this project yet",
+    "waking": "Waking the project's bridge — first load can take ~12s",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "end": "Beginning of history",
+    "retry": "Retry",
+    "tooOld": "Bridge 0.19.0+ required for session history"
   },
   "common": {
     "cancel": "Cancel",

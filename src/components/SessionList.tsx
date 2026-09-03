@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -88,7 +89,7 @@ function baseName(path: string | undefined): string {
 // cancelled by movement (scroll intent) or release. Spread onto the row.
 // The trailing click after a fired long-press is swallowed, else releasing
 // the finger would also open the session.
-function useLongPress(onLongPress: () => void, ms = 500) {
+function useLongPress(onLongPress: (() => void) | undefined, ms = 500) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const origin = useRef<{ x: number; y: number } | null>(null);
   const fired = useRef(false);
@@ -100,6 +101,7 @@ function useLongPress(onLongPress: () => void, ms = 500) {
   return {
     onPointerDown: (e: React.PointerEvent) => {
       fired.current = false;
+      if (!onLongPress) return;
       origin.current = { x: e.clientX, y: e.clientY };
       clear();
       timer.current = setTimeout(() => {
@@ -138,7 +140,7 @@ function SessionRow({
   active: boolean;
   disabled?: boolean;
   onSelect: () => void;
-  onLongPress: () => void;
+  onLongPress?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const press = useLongPress(onLongPress);
@@ -180,12 +182,20 @@ export function SessionList({
   connecting,
   onSelect,
   emptyHint,
+  readOnly = false,
+  footer,
 }: {
   sessions: SessionRowItem[];
   activeKey: string | null;
   connecting?: boolean;
   onSelect: (instanceId: string, sessionId: string) => void;
   emptyHint: string;
+  // History mode (ADR-0008): rows are store entries a bridge may not even
+  // hold, so the long-press action sheet (rename/retire — both
+  // instance-scoped) is off; rows just navigate.
+  readOnly?: boolean;
+  // Rendered at the bottom of the scroll area (e.g. a "load more" button).
+  footer?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -250,9 +260,10 @@ export function SessionList({
             active={activeKey === `${s.instanceId}:${s.sessionId}`}
             disabled={connecting}
             onSelect={() => onSelect(s.instanceId, s.sessionId)}
-            onLongPress={() => openActions(s)}
+            onLongPress={readOnly ? undefined : () => openActions(s)}
           />
         ))}
+        {footer}
       </div>
 
       {actionTarget && (

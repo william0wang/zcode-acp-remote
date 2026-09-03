@@ -1,6 +1,8 @@
 import type {
   FsListing,
   HubCreateInstanceResult,
+  HubHistoryCursor,
+  HubHistoryPage,
   HubInstance,
   HubProject,
   HubUpgradeResult,
@@ -106,20 +108,46 @@ export class HubClient {
   async projects(): Promise<HubProject[]> {
     const res = await this.fetch("/api/projects");
     const data: unknown = await res.json();
-    if (!Array.isArray(data)) throw new HubApiError("unexpected /api/projects payload");
+    if (!Array.isArray(data))
+      throw new HubApiError("unexpected /api/projects payload");
     return data as HubProject[];
   }
 
   /**
-   * Create (or reuse) a headless serve bridge for one known project (bridge
-   * 0.17.0, ADR-0014). The hub spawns `zcode-acp serve` in the project's cwd
-   * and waits for its registration; `reused` means a live serve instance for
-   * the same workspace already existed. 403 = path not on the projects list;
-   * 502 = spawn failed or the bridge never registered (10s budget).
+   * Create (or reuse) a serve bridge for one known project (bridge 0.17.0,
+   * ADR-0014). The hub spawns a bridge in the project's cwd and waits for its
+   * registration; `reused` means a live serve instance for the same workspace
+   * already existed. Since ADR-0016 the spawn opens a VISIBLE terminal REPL
+   * on the desktop (headless is the fallback), so the registration budget is
+   * ~20s — let the fetch run, no client-side timeout. 403 = path not on the
+   * projects list; 502 = spawn failed or the bridge never registered.
    */
-  async createInstance(workspacePath: string): Promise<HubCreateInstanceResult> {
+  async createInstance(
+    workspacePath: string,
+  ): Promise<HubCreateInstanceResult> {
     const res = await this.fetch("/api/instances", "POST", { workspacePath });
     return (await res.json()) as HubCreateInstanceResult;
+  }
+
+  /**
+   * One page of a project's session history (bridge 0.19.0, ADR-0015): the
+   * backend session store, closed conversations included, newest first.
+   * `cursor` is the previous response's `nextCursor` passed back VERBATIM —
+   * the composite `{before, beforeId}` names the exact last row, so
+   * timestamps tied across a page boundary never skip rows. A cold project's
+   * first page incubates its serve bridge (~12s budget) — let it run.
+   */
+  async projectSessions(
+    workspacePath: string,
+    cursor?: HubHistoryCursor,
+  ): Promise<HubHistoryPage> {
+    const q = new URLSearchParams({ workspacePath });
+    if (cursor) {
+      q.set("before", String(cursor.before));
+      q.set("beforeId", cursor.beforeId);
+    }
+    const res = await this.fetch(`/api/projects/sessions?${q}`);
+    return (await res.json()) as HubHistoryPage;
   }
 
   /**

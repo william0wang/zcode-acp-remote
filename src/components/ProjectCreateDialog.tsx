@@ -8,10 +8,11 @@ import { useAppStore } from "../store/appStore";
 
 // Remote session-create (bridge 0.17.0, ADR-0014): pick one of the machine's
 // known projects and start a NEW CLI session in it. The hub spawns (or
-// reuses) a headless serve bridge for the project; the list below is exactly
-// the hub's whitelist — no free-form path entry by design.
+// reuses) a serve bridge for the project — a visible terminal REPL on the
+// desktop since ADR-0016; the list below is exactly the hub's whitelist — no
+// free-form path entry by design.
 
-function projectName(path: string): string {
+export function projectName(path: string): string {
   const parts = path.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
 }
@@ -83,7 +84,7 @@ export function ProjectCreateDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p className="px-4 pt-1 text-xs text-faint">
-          {t("projectDialog.hint")}
+          {creating ? t("projectDialog.creatingHint") : t("projectDialog.hint")}
         </p>
 
         <div className="flex items-center gap-2 px-4 py-2">

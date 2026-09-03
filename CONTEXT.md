@@ -45,10 +45,24 @@ _Avoid_: permission dialog, confirm popup
 **Remote Session Create**:
 Starting a NEW CLI session from the app by picking one of the machine's known
 projects (bridge 0.17.0, server ADR-0014): the hub spawns — or reuses — a
-headless serve bridge for the workspace, and the fresh session's cwd is that
-project. The known-project list doubles as the create whitelist; there is no
-free-form path entry.
+serve bridge for the workspace, and the fresh session's cwd is that project.
+Since server ADR-0016 the spawn opens a VISIBLE terminal REPL on the desktop
+(~20s registration budget), and the owner closing that window retires the
+bridge — the app treats the vanished instance like any dead bridge. The
+known-project list doubles as the create whitelist; there is no free-form
+path entry.
 _Avoid_: new tab, project open
+
+**Session History**:
+The per-project browse/resume listing of the backend session store (bridge
+0.19.0, server ADR-0015) — closed conversations included, newest first,
+paged via the server's composite cursor (`{before, beforeId}` passed back
+verbatim, never recomputed client-side). Fetched strictly on demand for the
+one chosen project: a cold project's first page incubates its serve bridge
+(~12s). Resuming loads the store id via `session/load` on the listing's
+instance; the same conversation may also appear in discovery under a
+different (ACP) id — the surfaces are deliberately not reconciled.
+_Avoid_: archive, all-sessions list
 
 **Session Activity**:
 The per-session display state in the session list: awaiting confirmation,
