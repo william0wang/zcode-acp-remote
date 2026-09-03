@@ -346,6 +346,11 @@ export const useAppStore = create<AppState>((set, get) => {
   // after a restored (bridged) turn ends, and when an attach lands. The
   // check-then-run is synchronous, so concurrent callers stay safe.
   function flushPending(): void {
+    // The optimistic bubble inserted below must see every ARRIVED update:
+    // a turn's trailing chunks precede its settle notification on the wire
+    // but may still sit in applyUpdate's 120ms batch — inserting first
+    // would land the queued message in the middle of the finished turn.
+    flushUpdateBatch();
     const s = get();
     if (s.connState !== "open" || !s.activeSessionId) return;
     if (s.loadingSession || s.isRunning) return;
@@ -724,6 +729,46 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
+  // Applies (or re-applies) whatever arrived since the last batch. Called by
+  // the 120ms coalescing timer and synchronously by flushPending, which must
+  // not let the optimistic bubble overtake already-received turn content.
+  function flushUpdateBatch(): void {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    const batch = updateQueue;
+    if (batch.length === 0) return;
+    updateQueue = [];
+    set((state) => {
+      let messages = state.messages;
+      let planEntries = state.planEntries;
+      let configOptions = state.configOptions;
+      let currentModeId = state.currentModeId;
+      let usage = state.usage;
+      let availableCommands = state.availableCommands;
+      for (const { sessionId: sid, u: upd, meta } of batch) {
+        if (state.activeSessionId !== sid) continue;
+        const r = applyOne(messages, upd, meta);
+        if (!r) continue;
+        if (r.messages) messages = r.messages;
+        if (r.planEntries !== undefined) planEntries = r.planEntries;
+        if (r.configOptions) configOptions = r.configOptions;
+        if (r.currentModeId !== undefined) currentModeId = r.currentModeId;
+        if (r.usage) usage = r.usage;
+        if (r.availableCommands) availableCommands = r.availableCommands;
+      }
+      return {
+        messages,
+        planEntries,
+        configOptions,
+        currentModeId,
+        usage,
+        availableCommands,
+      };
+    });
+  }
+
   function applyUpdate(
     sessionId: string,
     u: SessionUpdate,
@@ -733,35 +778,7 @@ export const useAppStore = create<AppState>((set, get) => {
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      const batch = updateQueue;
-      updateQueue = [];
-      set((state) => {
-        let messages = state.messages;
-        let planEntries = state.planEntries;
-        let configOptions = state.configOptions;
-        let currentModeId = state.currentModeId;
-        let usage = state.usage;
-        let availableCommands = state.availableCommands;
-        for (const { sessionId: sid, u: upd, meta } of batch) {
-          if (state.activeSessionId !== sid) continue;
-          const r = applyOne(messages, upd, meta);
-          if (!r) continue;
-          if (r.messages) messages = r.messages;
-          if (r.planEntries !== undefined) planEntries = r.planEntries;
-          if (r.configOptions) configOptions = r.configOptions;
-          if (r.currentModeId !== undefined) currentModeId = r.currentModeId;
-          if (r.usage) usage = r.usage;
-          if (r.availableCommands) availableCommands = r.availableCommands;
-        }
-        return {
-          messages,
-          planEntries,
-          configOptions,
-          currentModeId,
-          usage,
-          availableCommands,
-        };
-      });
+      flushUpdateBatch();
     }, 120);
   }
 
