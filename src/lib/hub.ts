@@ -121,11 +121,19 @@ export class HubClient {
    * on the desktop (headless is the fallback), so the registration budget is
    * ~20s — let the fetch run, no client-side timeout. 403 = path not on the
    * projects list; 502 = spawn failed or the bridge never registered.
+   *
+   * `sessionId` (ADR-0017, bridge-side resume) makes the spawned TUI boot
+   * straight into that session instead of a fresh conversation; the answer is
+   * always the NEW instance (resume never reuses a live serve bridge).
    */
   async createInstance(
     workspacePath: string,
+    sessionId?: string,
   ): Promise<HubCreateInstanceResult> {
-    const res = await this.fetch("/api/instances", "POST", { workspacePath });
+    const res = await this.fetch("/api/instances", "POST", {
+      workspacePath,
+      ...(sessionId ? { sessionId } : {}),
+    });
     return (await res.json()) as HubCreateInstanceResult;
   }
 

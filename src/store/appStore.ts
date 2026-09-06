@@ -1483,17 +1483,17 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     // Resume a closed session from the project history listing (bridge
-    // 0.19.0, ADR-0015): the store id (`sess_…`) loads as-is on the
-    // workspace's serve bridge — "pass-through resume", no id mapping. POST
-    // /api/instances usually answers reused:true with the listing's instance;
-    // a retired one (the desktop REPL window was closed, ADR-0016)
-    // re-incubates here exactly like session-create does.
+    // 0.19.0, ADR-0015): the store id (`sess_…`) rides the POST body so the
+    // hub incubates a resume TUI that boots straight into the session
+    // (ADR-0017) — always a NEW instance, never the listing's live serve
+    // bridge. The attach below then session/loads the same id on that
+    // instance, sharing the bridge (and backend process) with the window.
     resumeProjectSession: async (workspacePath, sessionId) => {
       const client = hub();
       if (!client) return;
       let created: HubCreateInstanceResult;
       try {
-        created = await client.createInstance(workspacePath);
+        created = await client.createInstance(workspacePath, sessionId);
       } catch (e) {
         set({
           notice:
