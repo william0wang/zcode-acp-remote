@@ -2,6 +2,10 @@ import type { SessionUpdate } from "./types";
 
 export type AcpConnectionState = "connecting" | "open" | "closed";
 
+// Deadline for open + initialize; WS events alone can't be trusted to fire
+// (zombie sockets after deep sleep / network switch).
+const CONNECT_TIMEOUT_MS = 15_000;
+
 export interface ServerRequest {
   id: number;
   method: string;
@@ -59,9 +63,25 @@ export class AcpConnection {
   connect(): Promise<AcpInitializeResult> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      // A zombie socket (deep sleep, network switch) can sit open forever
+      // without ever answering `initialize` — no WS event fires, so without
+      // this deadline the connect() promise hangs and the reconnect loop
+      // stalls with it.
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.close();
+        reject(new Error("connect timed out"));
+      }, CONNECT_TIMEOUT_MS);
       this.handlers.onState("connecting");
       const ws = new WebSocket(this.wsUrl());
       this.ws = ws;
+      const settle = <T>(fn: (v: T) => void, arg: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        fn(arg);
+      };
 
       ws.onopen = () => {
         this.request("initialize", {
@@ -69,31 +89,24 @@ export class AcpConnection {
           clientCapabilities: {},
         }).then(
           (result) => {
-            settled = true;
+            settle(resolve, result as AcpInitializeResult);
             this.handlers.onState("open");
-            resolve(result as AcpInitializeResult);
           },
           (err: Error) => {
-            if (!settled) {
-              settled = true;
-              reject(err);
-            }
+            settle(reject, err);
             this.close();
           },
         );
       };
       ws.onerror = () => {
-        if (!settled) {
-          settled = true;
-          reject(new Error("WebSocket error (bad URL, token, or instance id)"));
-        }
+        settle(
+          reject,
+          new Error("WebSocket error (bad URL, token, or instance id)"),
+        );
       };
       ws.onclose = () => {
         this.failAllPending(new Error("connection closed"));
-        if (!settled) {
-          settled = true;
-          reject(new Error("connection closed before open"));
-        }
+        settle(reject, new Error("connection closed before open"));
         if (!this.closedByUs) this.handlers.onState("closed");
       };
       ws.onmessage = (ev) => {

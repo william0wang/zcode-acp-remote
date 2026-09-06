@@ -305,6 +305,9 @@ let connSeq = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
+// When the in-flight openConnection() attempt started (0 = none). wakeProbe
+// uses it to recognize a connect attempt wedged past its 15s deadline.
+let connectingSince = 0;
 let msgCounter = 0;
 // Consecutive network-level discovery failures. A phone's network stack
 // takes a moment after launch — the first failed poll means "not yet",
@@ -983,18 +986,37 @@ export const useAppStore = create<AppState>((set, get) => {
   // vanishes, and nothing schedules a reconnect. On foreground, probe the
   // pipe; a zombie is torn down exactly like an unexpected close so the
   // reconnect loop (and its replay) recover the session automatically.
-  async function wakeProbe(): Promise<void> {
-    const s = get();
-    if (!s.profile || !s.instanceId || s.connState !== "open") return;
-    if (await probeAlive(5000)) return;
-    if (get().connState !== "open") return; // closed meanwhile — loop has it
+  // Belt-and-braces for the same freeze in mid-(re)connect: an attempt wedged
+  // past its deadline, or a "reconnecting" with no timer left, gets the same
+  // teardown — without this the connect() timeout is the only way out.
+  function teardownZombieConnection(): void {
     connSeq++;
     acp?.close();
     acp = null;
+    connectingSince = 0;
     pendingResponds.clear();
     pendingElicitResponds.clear();
     set({ permissions: {}, elicitations: {}, sessionStates: {} });
     scheduleReconnect();
+  }
+
+  async function wakeProbe(): Promise<void> {
+    const s = get();
+    if (!s.profile || !s.instanceId) return;
+    if (s.connState === "open") {
+      if (await probeAlive(5000)) return;
+      if (get().connState !== "open") return; // closed meanwhile — loop has it
+      teardownZombieConnection();
+      return;
+    }
+    if (
+      (s.connState === "connecting" &&
+        connectingSince > 0 &&
+        Date.now() - connectingSince > 30_000) ||
+      (s.connState === "reconnecting" && !reconnectTimer)
+    ) {
+      teardownZombieConnection();
+    }
   }
 
   async function tryReconnect(): Promise<void> {
@@ -1070,6 +1092,7 @@ export const useAppStore = create<AppState>((set, get) => {
         if (stale()) return;
         if (state === "open") {
           reconnectAttempt = 0;
+          connectingSince = 0;
           // Activity is broadcast-only: a fresh connection knows nothing
           // until events arrive (active session's turnActive is restored by
           // loadSession's replay). Stale notices (e.g. from the dropped
@@ -1203,9 +1226,11 @@ export const useAppStore = create<AppState>((set, get) => {
       },
     });
     acp = conn;
+    connectingSince = Date.now();
     try {
       const init = await conn.connect();
       if (stale()) return;
+      connectingSince = 0;
       set({ fsCapable: init.agentCapabilities?._meta?.zcode?.fs === true });
       const active = get().activeSessionId;
       if (active) {
@@ -1213,6 +1238,7 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().loadSession(active);
       }
     } catch {
+      connectingSince = 0;
       if (get().instanceId === instanceId) scheduleReconnect();
     }
   }
