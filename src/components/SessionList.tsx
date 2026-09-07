@@ -14,6 +14,9 @@ export interface SessionRowItem {
   title?: string;
   updatedAt?: number;
   workspace?: string;
+  // "serve" = a remote session-create incubated bridge; only those may be
+  // shut down from the app (the hub refuses editor bridges with 403).
+  origin?: string;
   // Coarse "running" | "idle" from the hub heartbeat (REST) — used when no
   // instance connection exists to feed the live broadcast-based activity.
   status?: string;
@@ -206,6 +209,7 @@ export function SessionList({
   const [draftTitle, setDraftTitle] = useState("");
   const closeRemoteSession = useAppStore((s) => s.closeRemoteSession);
   const renameSession = useAppStore((s) => s.renameSession);
+  const shutdownInstance = useAppStore((s) => s.shutdownInstance);
 
   const openActions = (s: SessionRowItem) => {
     setRenaming(false);
@@ -328,6 +332,18 @@ export function SessionList({
                 >
                   {t("chat.closeSession")}
                 </button>
+                {actionTarget.origin === "serve" && (
+                  <button
+                    onClick={() => {
+                      const { instanceId } = actionTarget;
+                      setActionTarget(null);
+                      void shutdownInstance(instanceId);
+                    }}
+                    className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+                  >
+                    {t("chat.shutdownInstance")}
+                  </button>
+                )}
                 <button
                   onClick={() => setActionTarget(null)}
                   className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"

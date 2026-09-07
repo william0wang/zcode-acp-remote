@@ -41,6 +41,7 @@ export function InstancePicker() {
             ...s,
             instanceId: i.id,
             workspace: i.workspace,
+            origin: i.origin,
           })),
         )
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),

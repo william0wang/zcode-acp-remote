@@ -172,6 +172,15 @@ export class HubClient {
   }
 
   /**
+   * Terminates a remote-incubated bridge — instance-level, the "close the
+   * session window" counterpart for app-created instances. Editor-origin
+   * bridges are refused server-side with 403.
+   */
+  async shutdownInstance(instanceId: string): Promise<void> {
+    await this.fetch(`/api/instances/${instanceId}/shutdown`, "POST");
+  }
+
+  /**
    * Renames a session (bridge 0.11.9). The title is set once automatically
    * from the first prompt; this is the only later modifier — the bridge pins
    * it (title_overridden) and broadcasts session_info_update so attached

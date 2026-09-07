@@ -50,6 +50,8 @@
     "noMatches": "没有匹配的会话",
     "closeSession": "关闭会话",
     "closeSessionHint": "从列表中移除；编辑器中仍打开的会话会在下次使用时重新出现",
+    "shutdownInstance": "关闭实例",
+    "shutdownInstanceHint": "终止该项目的后台 bridge。历史保留；重新打开会话会启动新的 bridge。",
     "renameSession": "重命名",
     "renameSessionHint": "标题会同步显示在列表、编辑器和 ZCode 应用中",
     "renamePlaceholder": "会话名称",
@@ -94,6 +96,7 @@
   "notice": {
     "unsupported": "此交互请在编辑器中应答",
     "instanceGone": "实例已离线——请选择其他实例",
+    "instanceShutdown": "实例已关闭",
     "noSession": "请先选择一个会话（从菜单）",
     "sessionRunning": "会话正在运行，请先取消",
     "sessionClosed": "会话已关闭",

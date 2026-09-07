@@ -266,6 +266,10 @@ interface AppState {
     sessionId: string,
     title: string,
   ) => Promise<void>;
+  // Terminates a remote-incubated bridge via the hub's instance shutdown
+  // endpoint — the "close the session window" counterpart for app-created
+  // instances. Editor-origin bridges are refused server-side (403).
+  shutdownInstance: (instanceId: string) => Promise<void>;
   loadEarlier: () => Promise<boolean>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   refreshUsageStats: () => Promise<void>;
@@ -1596,6 +1600,59 @@ export const useAppStore = create<AppState>((set, get) => {
         get().closeSession();
       }
       set({ notice: "notice.sessionClosed" });
+    },
+
+    shutdownInstance: async (instanceId) => {
+      const client = hub();
+      if (!client) return;
+      try {
+        await client.shutdownInstance(instanceId);
+      } catch (e) {
+        set({
+          notice: `shutdown instance failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        });
+        return;
+      }
+      // Drop the instance locally; the heartbeat list aligns within ~10s.
+      set((state) => ({
+        instances: state.instances.filter((i) => i.id !== instanceId),
+      }));
+      if (get().instanceId !== instanceId) {
+        set({ notice: "notice.instanceShutdown" });
+        return;
+      }
+      // We were connected to it: same teardown as tryReconnect's "instance
+      // gone" branch — the sessions died with the bridge (contract).
+      connSeq++;
+      acp?.close();
+      acp = null;
+      dropQueuedUpdates();
+      set({
+        connState: "idle",
+        instanceId: null,
+        activeSessionId: null,
+        messages: [],
+        planEntries: null,
+        permissions: {},
+        elicitations: {},
+        notice: "notice.instanceShutdown",
+        fsCapable: false,
+        replayCursor: null,
+        hasMore: false,
+        totalMessages: null,
+        loadingEarlier: false,
+        configOptions: [],
+        currentModeId: null,
+        usage: null,
+        availableCommands: [],
+        // usageStats stays (hub-level quota, not instance-scoped).
+        sessionStates: {},
+        loadingSession: false,
+        isRunning: false,
+      });
+      reconnectAttempt = 0;
     },
 
     renameSession: async (instanceId, sessionId, title) => {
