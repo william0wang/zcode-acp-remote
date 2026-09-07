@@ -27,6 +27,7 @@ import {
   type GlmUsageStats,
   type HubCreateInstanceResult,
   type HubInstance,
+  type HubSessionInfo,
   type HubUpgradeResult,
   type PromptDraft,
   type QuotaItem,
@@ -335,6 +336,40 @@ function stopReconnect(): void {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+}
+
+// Optimistically merge a just-created session into the discovery list: add
+// it to its instance (creating the instance row if discovery hasn't seen it
+// yet) so it renders before the first prompt promotes it.
+function mergeCreatedSession(
+  instances: HubInstance[],
+  created: { instanceId: string; sessionId: string; workspace: string },
+): HubInstance[] {
+  const session: HubSessionInfo = {
+    sessionId: created.sessionId,
+    updatedAt: Date.now(),
+  };
+  const idx = instances.findIndex((i) => i.id === created.instanceId);
+  if (idx === -1)
+    return [
+      ...instances,
+      {
+        id: created.instanceId,
+        workspace: created.workspace,
+        origin: "serve",
+        sessions: [session],
+      },
+    ];
+  const inst = instances[idx];
+  if (inst.sessions.some((x) => x.sessionId === session.sessionId))
+    return instances;
+  const next = [...instances];
+  next[idx] = {
+    ...inst,
+    workspace: inst.workspace ?? created.workspace,
+    sessions: [...inst.sessions, session],
+  };
+  return next;
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -1499,12 +1534,19 @@ export const useAppStore = create<AppState>((set, get) => {
           configOptions?: ConfigOption[];
           modes?: { currentModeId?: string };
         };
-        set({
+        set((s) => ({
           activeSessionId: result.sessionId,
           configOptions: result.configOptions ?? [],
           currentModeId: result.modes?.currentModeId ?? null,
           loadingSession: false,
-        });
+          // Discovery skips the conversation until its first prompt — seed
+          // it locally so the session list shows it right away.
+          instances: mergeCreatedSession(s.instances, {
+            instanceId: created.id,
+            sessionId: result.sessionId,
+            workspace: workspacePath,
+          }),
+        }));
       } catch (e) {
         set({
           notice: `create session failed: ${e instanceof Error ? e.message : String(e)}`,
