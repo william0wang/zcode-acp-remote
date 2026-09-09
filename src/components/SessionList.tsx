@@ -294,6 +294,16 @@ export function SessionList({
                 <input
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    // isComposing: Enter confirms an IME composition, not
+                    // the rename. Guard mirrors the disabled Save button.
+                    if (
+                      e.key === "Enter" &&
+                      !e.nativeEvent.isComposing &&
+                      draftTitle.trim()
+                    )
+                      submitRename();
+                  }}
                   placeholder={t("chat.renamePlaceholder")}
                   maxLength={200}
                   autoFocus
