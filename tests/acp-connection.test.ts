@@ -12,6 +12,8 @@ interface Frame {
   params?: Record<string, unknown>;
   result?: unknown;
   error?: { message: string };
+  // Notification-level replay flags ride on session/update frames.
+  _meta?: unknown;
 }
 
 class FakeWebSocket {

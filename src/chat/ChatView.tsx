@@ -498,9 +498,9 @@ const WS = /\s/;
 
 // Composer input row + the "/" completion menu. The command list comes from
 // the bridge's available_commands_update; the query is the word under the
-// caret. At the very start of the draft every command matches; anywhere else
-// only skill commands ("$" names, wire form "/$name") do — a mid-draft slash
-// is meaningful only as a skill invocation. Enter/Tab complete (caret lands
+// caret, and every command matches at any caret position (a mid-draft
+// completion inserts text — only a slash at the very start of the draft is
+// executed as a command by the harness). Enter/Tab complete (caret lands
 // after the inserted command), arrows navigate, Escape dismisses until the
 // query changes. Keydown is intercepted in the CAPTURE phase on the form so
 // it beats ComposerPrimitive.Input's Enter-send.
