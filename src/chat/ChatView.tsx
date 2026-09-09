@@ -539,16 +539,11 @@ function Composer() {
     // Skill commands ride a "$" visual-grouping prefix (e.g. "$tdd"); the
     // wire form is "/$name", but users naturally type "/td" — strip the
     // marker on BOTH sides so either spelling matches. Insertion keeps the
-    // real name (the bridge passes "/$name" through verbatim). Mid-draft,
-    // only skills are valid invocations, so only those complete.
+    // real name (the bridge passes "/$name" through verbatim).
     const strip = (s: string) => s.replace(/^\$/, "");
     const q = strip(token.slice(1).toLowerCase());
-    const pool =
-      tokenStart === 0
-        ? commands
-        : commands.filter((c) => c.name.startsWith("$"));
-    return pool.filter((c) => strip(c.name.toLowerCase()).startsWith(q));
-  }, [token, tokenStart, commands]);
+    return commands.filter((c) => strip(c.name.toLowerCase()).startsWith(q));
+  }, [token, commands]);
 
   // Not dismissed for this query — the caret-in-token part of the old gate is
   // inherent now that the token itself is derived from the caret position.
@@ -749,9 +744,12 @@ function Composer() {
           rows={1}
           placeholder={t("chat.inputPlaceholder")}
           onPaste={onPaste}
-          // select fires on every caret move (typing, click, arrow keys), so
-          // this keeps the "/" menu's caret gate in sync with the textarea.
+          // select covers caret moves (click, arrow keys); input covers
+          // typing — Android WebView does not fire select per keystroke, and
+          // a caret stuck at 0 strands the "/" menu at the draft's start
+          // (the one position where 0 happens to be correct).
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onInput={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           className="max-h-32 min-h-9 flex-1 resize-none bg-transparent py-2 text-[15px] leading-5 text-ink placeholder:text-faint focus:outline-none"
         />
         {/* While a turn runs the Send stays a Send: a draft queues as pending
