@@ -1,12 +1,28 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ListChecks } from "lucide-react";
 import { useAppStore, type ElicitField } from "../store/appStore";
 
-// AskUserQuestion form (elicitation/create): the bridge's preferred channel
-// once ANY client advertises elicitation.form — capabilities OR-merge across
-// clients, so Zed's declaration routes our questions here too. One bottom
-// sheet per question set; unanswered fields are skipped (the bridge's parser
-// treats absent as skipped), Cancel declines the whole form.
+// elicitation/create forms — the bridge's preferred channel once any client
+// advertises elicitation.form (we declare it in initialize). Two shapes:
+// AskUserQuestion question sets (one bottom sheet per field set; unanswered
+// fields are skipped, Cancel declines the whole form) and the plan-approval
+// form (bridge 0.33+), a single approve/reject field whose `description`
+// carries the COMPLETE plan markdown — rendered as a review card with the
+// plan in a scrollable pane, not a blind approve/reject.
+
+// Plan-approval field: single-select approve/reject (the values the bridge's
+// buildPlanApprovalElicitationForm hardcodes; titles are backend-localized).
+function isPlanField(f: ElicitField): boolean {
+  return (
+    !f.multi &&
+    f.otherKey == null &&
+    f.options.some((o) => o.value === "approve") &&
+    f.options.some((o) => o.value === "reject")
+  );
+}
 
 function QuestionBlock({
   field,
@@ -28,6 +44,11 @@ function QuestionBlock({
   return (
     <div className="px-4 pb-3 pt-1">
       <p className="pb-1.5 text-sm text-ink">{field.question}</p>
+      {field.description && (
+        <div className="prose prose-sm prose-invert max-w-none pb-2">
+          <Markdown remarkPlugins={[remarkGfm]}>{field.description}</Markdown>
+        </div>
+      )}
       <div className="flex flex-col gap-1.5">
         {field.options.map((o) => {
           const on = field.multi ? checked[o.value] : picked === o.value;
@@ -84,6 +105,60 @@ export function ElicitationDialog() {
   }, [requestId]);
 
   if (!elicitation) return null;
+
+  // Plan-approval form (exactly one approve/reject field): direct-answer
+  // buttons instead of the pick-then-submit flow — same card as the
+  // request_permission plan fallback (PermissionDialog).
+  const planField =
+    elicitation.fields.length === 1 && isPlanField(elicitation.fields[0])
+      ? elicitation.fields[0]
+      : null;
+
+  if (planField) {
+    const approve = planField.options.find((o) => o.value === "approve");
+    const reject = planField.options.find((o) => o.value === "reject");
+    const answer = (v: string) =>
+      answerElicitation(elicitation.requestId, { [planField.key]: v });
+    return (
+      <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]">
+        <div className="flex max-h-[75vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-hairline bg-surface">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3">
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+              <ListChecks className="size-4 shrink-0 text-cyan-400" />
+              {elicitation.message || t("permission.planTitle")}
+            </h2>
+            {planField.description && (
+              <div className="prose prose-sm prose-invert mt-2 max-w-none">
+                <Markdown remarkPlugins={[remarkGfm]}>
+                  {planField.description}
+                </Markdown>
+              </div>
+            )}
+          </div>
+          <div className="px-4 pb-4 pt-3">
+            <button
+              onClick={() => answer("approve")}
+              className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white active:bg-emerald-700"
+            >
+              {approve?.label || "Approve"}
+            </button>
+            <button
+              onClick={() => answer("reject")}
+              className="mt-2 w-full rounded-xl bg-red-600/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-600/20"
+            >
+              {reject?.label || "Reject"}
+            </button>
+            <button
+              onClick={() => answerElicitation(elicitation.requestId, null)}
+              className="mt-2 w-full rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const submit = () => {
     const content: Record<string, string | string[]> = {};

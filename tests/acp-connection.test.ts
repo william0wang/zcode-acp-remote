@@ -86,6 +86,11 @@ test("connect resolves once initialize answers, and reports state open", async (
   ws.onopen?.();
   expect(ws.sent).toHaveLength(1);
   expect(ws.sent[0]).toMatchObject({ method: "initialize" });
+  // Plan approval / AskUserQuestion route through elicitation/create only
+  // for clients that declare the form capability — assert we do.
+  expect(
+    (ws.sent[0].params as { clientCapabilities?: unknown }).clientCapabilities,
+  ).toMatchObject({ elicitation: { form: true } });
   ws.server({
     jsonrpc: "2.0",
     id: ws.sent[0].id!,

@@ -86,7 +86,12 @@ export class AcpConnection {
       ws.onopen = () => {
         this.request("initialize", {
           protocolVersion: 1,
-          clientCapabilities: {},
+          // Declared so the bridge routes ExitPlanMode / AskUserQuestion
+          // through the richer elicitation/create form deterministically —
+          // capabilities OR-merge across attached clients, so without this
+          // the dialog style depends on whether another client (e.g. Zed)
+          // happened to declare it first.
+          clientCapabilities: { elicitation: { form: true } },
         }).then(
           (result) => {
             settle(resolve, result as AcpInitializeResult);

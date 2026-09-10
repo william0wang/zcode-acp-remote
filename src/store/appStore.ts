@@ -128,12 +128,16 @@ export interface PendingPermission {
 }
 
 // One AskUserQuestion field parsed out of an elicitation/create form
-// (bridge builds the schema: `q_<i>` enum/array + `q_<i>_other` free text).
+// (bridge builds the schema: `q_<i>` enum/array + `q_<i>_other` free text;
+// the plan-approval form is a single `approval` enum field).
 export interface ElicitField {
   // Field key in requestedSchema (q_0, q_1, …) and its free-text companion.
   key: string;
   otherKey: string | null;
   question: string;
+  // Long-form markdown under the question — the plan-approval form (bridge
+  // 0.33+) carries the COMPLETE plan here, rendered as a markdown pane.
+  description?: string;
   multi: boolean;
   options: { value: string; label: string }[];
 }
@@ -895,6 +899,8 @@ export const useAppStore = create<AppState>((set, get) => {
   ): ApprovalContext | undefined {
     const tc = (params.toolCall ?? null) as {
       toolCallId?: unknown;
+      title?: unknown;
+      content?: unknown;
       rawInput?: unknown;
     } | null;
     if (!tc || typeof tc !== "object") return undefined;
@@ -912,6 +918,22 @@ export const useAppStore = create<AppState>((set, get) => {
       typeof (rawInput as { plan?: unknown }).plan === "string"
         ? (rawInput as { plan: string }).plan
         : undefined;
+    // Wire-provided popup fields (bridge 0.33+): title and content text
+    // blocks carry the readable form of the input — prefer them over the
+    // matched tool_call part and the INPUT_KEYS heuristic.
+    const title =
+      typeof tc.title === "string" && tc.title ? tc.title : undefined;
+    let contentText: string | undefined;
+    if (Array.isArray(tc.content)) {
+      const texts = tc.content
+        .map(
+          (b) =>
+            (b as { content?: { text?: unknown } } | null)?.content?.text ??
+            null,
+        )
+        .filter((t): t is string => typeof t === "string" && t.length > 0);
+      if (texts.length > 0) contentText = texts.join("\n\n");
+    }
     let rawInputText: string | undefined;
     if (rawInput != null) {
       try {
@@ -923,23 +945,31 @@ export const useAppStore = create<AppState>((set, get) => {
         rawInputText = String(rawInput);
       }
     }
-    if (!toolCallId && rawInputText == null) return undefined;
+    if (
+      !toolCallId &&
+      rawInputText == null &&
+      title == null &&
+      contentText == null
+    )
+      return undefined;
     return {
       toolCallId,
       // Part fields first (richer); title = the wire title stored in toolName.
       toolName: part?.rawName ?? part?.toolName,
       kind: part?.kind,
-      title: part?.toolName,
-      detail: part?.detail,
+      title: title ?? part?.toolName,
+      detail: contentText ?? part?.detail,
       plan,
       rawInputText,
     };
   }
 
-  // Parses an elicitation/create form (bridge's buildAskUserElicitationForm
-  // shape) into renderable fields: `q_<i>` enum/array + `q_<i>_other`
-  // free-text companion. The skip sentinel option is dropped — an unanswered
-  // field IS the skip (the bridge's parser treats absent as skipped).
+  // Parses an elicitation/create form into renderable fields: the bridge's
+  // buildAskUserElicitationForm shape (`q_<i>` enum/array + `q_<i>_other`
+  // free-text companion) and the plan-approval form (single `approval` enum
+  // field whose `description` carries the full plan markdown). The skip
+  // sentinel option is dropped — an unanswered field IS the skip (the
+  // bridge's parser treats absent as skipped).
   function parseElicitationForm(params: Record<string, unknown>): {
     sessionId: string;
     message: string;
@@ -958,6 +988,7 @@ export const useAppStore = create<AppState>((set, get) => {
         | {
             type?: unknown;
             title?: unknown;
+            description?: unknown;
             oneOf?: Array<{ const?: unknown; title?: unknown }>;
             items?: { anyOf?: Array<{ const?: unknown; title?: unknown }> };
           }
@@ -980,6 +1011,10 @@ export const useAppStore = create<AppState>((set, get) => {
         otherKey:
           typeof props[`${key}_other`] === "object" ? `${key}_other` : null,
         question: typeof prop.title === "string" ? prop.title : key,
+        description:
+          typeof prop.description === "string" && prop.description.trim()
+            ? prop.description
+            : undefined,
         multi: prop.type === "array",
         options,
       });
@@ -1213,9 +1248,9 @@ export const useAppStore = create<AppState>((set, get) => {
           // respond is captured by answerPermission through the stored request id.
           pendingResponds.set(req.id, respond);
         } else if (req.method === "elicitation/create") {
-          // AskUserQuestion form (the bridge's preferred channel once any
-          // client advertises elicitation.form — capabilities OR-merge, so
-          // Zed's declaration routes OUR questions here too).
+          // AskUserQuestion / plan-approval form — the bridge's preferred
+          // channel once any client advertises elicitation.form, which we
+          // now declare ourselves in initialize (see AcpConnection).
           const parsed = parseElicitationForm(req.params);
           if (parsed) {
             setActivity(parsed.sessionId, { awaitingPermission: true });
