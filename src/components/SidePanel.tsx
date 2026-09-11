@@ -164,6 +164,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       {/* Sibling, not inside the px-4 wrapper: rows carry their own padding
           and the section's top divider must span the full panel width. */}
       <QuotaSection />
+
+      <p className="px-4 pb-[max(var(--safe-bottom),1rem)] pt-4 text-center text-[11px] text-faint">
+        v{__APP_VERSION__}
+      </p>
     </PanelShell>
   );
 }

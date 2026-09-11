@@ -41,6 +41,7 @@ export function ConnectScreen() {
       <form onSubmit={onSubmit} className="w-full max-w-sm">
         <h1 className="text-center text-2xl font-semibold tracking-tight">ZCode ACP</h1>
         <p className="mt-2 text-center text-sm text-faint">{t("connect.subtitle")}</p>
+        <p className="mt-1 text-center text-[11px] text-faint">v{__APP_VERSION__}</p>
 
         <label className="mt-8 block text-xs font-medium text-dim">
           {t("connect.hubUrl")}
