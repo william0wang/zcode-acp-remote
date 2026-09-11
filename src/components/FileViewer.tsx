@@ -22,6 +22,7 @@ import lua from "highlight.js/lib/languages/lua";
 import markdown from "highlight.js/lib/languages/markdown";
 import perl from "highlight.js/lib/languages/perl";
 import php from "highlight.js/lib/languages/php";
+import plaintext from "highlight.js/lib/languages/plaintext";
 import python from "highlight.js/lib/languages/python";
 import ruby from "highlight.js/lib/languages/ruby";
 import rust from "highlight.js/lib/languages/rust";
@@ -70,6 +71,7 @@ for (const lang of [
   markdown,
   perl,
   php,
+  plaintext,
   python,
   ruby,
   rust,
@@ -215,10 +217,27 @@ export function fmtSize(bytes: number): string {
 const FIRST_WINDOW = 200;
 const NEXT_WINDOW = 500;
 const MAX_LINES = 10000;
+// Highlighted JSON balloons ~14x the source (every token gets a <span>);
+// past this size highlighting costs more than it returns — plaintext keeps
+// the DOM (and the WebView) alive on large files.
+const MAX_HIGHLIGHT_BYTES = 128 * 1024;
+// A single mega-line (minified JSON/JS is one line, no newlines) defeats the
+// line-window budget: the whole file arrives in window one and renders as one
+// unwrapped <pre> row. Truncate the displayed row instead.
+const MAX_LINE_CHARS = 2000;
 // Text files past this size exceed the viewer's MAX_LINES budget (10k lines
 // is ~300-500 KB of typical source) and highlighting the growing buffer janks
 // the WebView — they get the download card instead.
 const LARGE_TEXT_BYTES = 512 * 1024;
+
+// Fallback that cannot throw: highlight.js may reject a language or blow up
+// on pathological input, the viewer must degrade to escaped source instead.
+function escapeHtml(s: string): string {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
 
 interface TextViewerProps {
   path: string;
@@ -259,6 +278,16 @@ function TextViewer({ path }: TextViewerProps) {
   }, [path, attempt, fsFileText]);
 
   const lines = text ? text.split("\n") : [];
+  const truncatedLines = lines.some((l) => l.length > MAX_LINE_CHARS);
+  // Long rows are chopped for display only — line numbers and window
+  // stitching still count the original lines.
+  const displayText = truncatedLines
+    ? lines
+        .map((l) =>
+          l.length > MAX_LINE_CHARS ? `${l.slice(0, MAX_LINE_CHARS)} …` : l,
+        )
+        .join("\n")
+    : text;
 
   const loadMore = () => {
     if (loading || eof) return;
@@ -293,12 +322,14 @@ function TextViewer({ path }: TextViewerProps) {
   // Memoized: re-highlighting the whole (growing) buffer on every render
   // janks the UI each "Load more".
   const html = useMemo(() => {
+    const lang = displayText.length > MAX_HIGHLIGHT_BYTES ? "plaintext" : language;
+    if (lang === "plaintext") return escapeHtml(displayText);
     try {
-      return hljs.highlight(text, { language, ignoreIllegals: true }).value;
+      return hljs.highlight(displayText, { language: lang, ignoreIllegals: true }).value;
     } catch {
-      return hljs.highlight(text, { language: "plaintext" }).value;
+      return escapeHtml(displayText);
     }
-  }, [text, language]);
+  }, [displayText, language]);
 
   if (loading && !text) {
     return (
@@ -338,6 +369,7 @@ function TextViewer({ path }: TextViewerProps) {
       <div className="flex items-center justify-between gap-2 border-t border-hairline px-3 py-2 text-[11px] text-faint">
         <span>
           {t("viewer.lines", { count: firstLine + lines.length - 1 })}
+          {truncatedLines ? ` · ${t("viewer.longLines")}` : ""}
         </span>
         {eof ? (
           <span>{capped ? t("viewer.lineCap") : t("viewer.loadedAll")}</span>
