@@ -50,6 +50,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const profile = useAppStore((s) => s.profile);
   const forgetHub = useAppStore((s) => s.forgetHub);
   const setLang = useAppStore((s) => s.setLang);
+  const fontSize = useAppStore((s) => s.fontSize);
+  const setFontSize = useAppStore((s) => s.setFontSize);
   const upgradeHub = useAppStore((s) => s.upgradeHub);
   const [confirmForget, setConfirmForget] = useState(false);
   const [upgradeBusy, setUpgradeBusy] = useState(false);
@@ -112,6 +114,27 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 }`}
               >
                 {lang === "en" ? "English" : "中文"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+            {t("panel.fontSize")}
+          </h3>
+          <div className="flex gap-2 rounded-xl bg-raised p-1">
+            {(["small", "medium", "large"] as const).map((size) => (
+              <button
+                key={size}
+                onClick={() => setFontSize(size)}
+                className={`flex-1 rounded-lg px-3 py-1.5 transition ${
+                  fontSize === size
+                    ? "bg-white/[0.1] font-medium text-ink"
+                    : "text-faint"
+                }`}
+              >
+                {t(`panel.fontSize${size.charAt(0).toUpperCase() + size.slice(1)}`)}
               </button>
             ))}
           </div>

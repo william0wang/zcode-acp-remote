@@ -5,9 +5,11 @@ import type { ConnectionProfile, PromptDraft } from "./types";
 
 const PROFILE_KEY = "zcode-acp:profile";
 const LANG_KEY = "zcode-acp:lang";
+const FONT_SIZE_KEY = "zcode-acp:font-size";
 const PENDING_KEY = "zcode-acp:pending";
 
 export type Lang = "en" | "zh-CN";
+export type FontSize = "small" | "medium" | "large";
 
 export function loadProfile(): ConnectionProfile | null {
   try {
@@ -37,6 +39,15 @@ export function loadLang(): Lang {
 
 export function saveLang(lang: Lang): void {
   localStorage.setItem(LANG_KEY, lang);
+}
+
+export function loadFontSize(): FontSize {
+  const v = localStorage.getItem(FONT_SIZE_KEY);
+  return v === "medium" || v === "large" ? v : "small";
+}
+
+export function saveFontSize(size: FontSize): void {
+  localStorage.setItem(FONT_SIZE_KEY, size);
 }
 
 // Queued (pending) prompt drafts per session id — they must survive session

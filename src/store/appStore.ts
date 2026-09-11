@@ -3,12 +3,15 @@ import { AcpConnection } from "../lib/acp";
 import { HubApiError, HubClient } from "../lib/hub";
 import {
   clearProfileStorage,
+  loadFontSize,
   loadLang,
   loadPending,
   loadProfile,
+  saveFontSize,
   saveLang,
   savePending,
   saveProfile as persistProfile,
+  type FontSize,
   type Lang,
 } from "../lib/storage";
 import {
@@ -168,6 +171,7 @@ export interface PlanEntry {
 interface AppState {
   profile: ConnectionProfile | null;
   lang: Lang;
+  fontSize: FontSize;
   instances: HubInstance[];
   instancesError: string | null;
   // Hub unreachable (editor exited — it re-spawns the hub on demand). Expected
@@ -228,6 +232,7 @@ interface AppState {
   connectToHub: (profile: ConnectionProfile) => void;
   forgetHub: () => void;
   setLang: (lang: Lang) => void;
+  setFontSize: (size: FontSize) => void;
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
   upgradeHub: () => Promise<HubUpgradeResult>;
   connectInstance: (
@@ -1320,9 +1325,18 @@ export const useAppStore = create<AppState>((set, get) => {
   const pendingResponds = new Map<number, (result: unknown) => void>();
   const pendingElicitResponds = new Map<number, (result: unknown) => void>();
 
+  // Scales the whole UI: every Tailwind text/size class is rem-based, so
+  // overriding the root font size is enough. "small" keeps the browser
+  // default (16px) — i.e. the pre-setting look.
+  const FONT_SIZE_PX = { small: "16px", medium: "17.5px", large: "19px" };
+  function applyFontSize(size: FontSize) {
+    document.documentElement.style.fontSize = FONT_SIZE_PX[size];
+  }
+
   return {
     profile: null,
     lang: "en",
+    fontSize: "small" as FontSize,
     instances: [],
     instancesError: null,
     hubOffline: false,
@@ -1353,7 +1367,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
     init: () => {
       const profile = loadProfile();
-      set({ profile, lang: loadLang() });
+      const fontSize = loadFontSize();
+      applyFontSize(fontSize);
+      set({ profile, lang: loadLang(), fontSize });
       if (profile) {
         startPolling();
         // Plain HTTP (no instance connection needed); slow-moving data.
@@ -1414,6 +1430,12 @@ export const useAppStore = create<AppState>((set, get) => {
     setLang: (lang) => {
       saveLang(lang);
       set({ lang });
+    },
+
+    setFontSize: (size) => {
+      saveFontSize(size);
+      applyFontSize(size);
+      set({ fontSize: size });
     },
 
     refreshInstances: async (opts?: { probe?: boolean }) => {
