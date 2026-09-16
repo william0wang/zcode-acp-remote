@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, X } from "lucide-react";
+import { Check, Pencil, RefreshCw, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
 
@@ -42,30 +42,22 @@ export function PanelShell({
 }
 
 // Global settings, shown OUTSIDE any session (entry screen): language, the
-// server switch (saved servers are kept — the manager screen lists them),
-// the hub upgrade trigger, and the account quota card (connection-level
-// data — the list screen keeps the instance WS alive, so it renders here
-// too). Session-scoped controls live in SessionPanel.
+// saved-server list (tap a row to switch instantly), the hub upgrade
+// trigger, and the account quota card (connection-level data — the list
+// screen keeps the instance WS alive, so it renders here too).
+// Session-scoped controls live in SessionPanel.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
-  const profile = useAppStore((s) => s.profile);
   const savedServers = useAppStore((s) => s.savedServers);
   const activeServerId = useAppStore((s) => s.activeServerId);
+  const switchServer = useAppStore((s) => s.switchServer);
   const disconnectHub = useAppStore((s) => s.disconnectHub);
   const setLang = useAppStore((s) => s.setLang);
   const fontSize = useAppStore((s) => s.fontSize);
   const setFontSize = useAppStore((s) => s.setFontSize);
   const upgradeHub = useAppStore((s) => s.upgradeHub);
-  const [confirmForget, setConfirmForget] = useState(false);
   const [upgradeBusy, setUpgradeBusy] = useState(false);
   const [upgradeNote, setUpgradeNote] = useState<string | null>(null);
-
-  // The confirm state is fleeting — a stray first tap must not linger armed.
-  useEffect(() => {
-    if (!confirmForget) return;
-    const id = setTimeout(() => setConfirmForget(false), 3000);
-    return () => clearTimeout(id);
-  }, [confirmForget]);
 
   // Same for the upgrade result note.
   useEffect(() => {
@@ -147,32 +139,45 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
             {t("panel.server")}
           </h3>
-          {profile && (
-            <>
-              <p className="truncate pb-0.5 text-xs font-medium">
-                {savedServers.find((s) => s.id === activeServerId)?.name}
-              </p>
-              <p className="truncate pb-1 font-mono text-xs text-faint">
-                {profile.hubUrl}
-              </p>
-            </>
-          )}
           <p className="pb-2 text-[11px] text-faint">
-            {t("panel.changeServerHint")}
+            {t("panel.serverHint")}
           </p>
+          <div className="space-y-1">
+            {savedServers.map((s) => {
+              const active = s.id === activeServerId;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    if (!active) switchServer(s.id);
+                  }}
+                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left ${
+                    active ? "bg-white/[0.07]" : "active:bg-white/[0.05]"
+                  }`}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={`block truncate text-sm ${
+                        active ? "font-medium text-ink" : "text-dim"
+                      }`}
+                    >
+                      {s.name}
+                    </span>
+                    <span className="block truncate font-mono text-[11px] text-faint">
+                      {s.hubUrl}
+                    </span>
+                  </span>
+                  {active && <Check className="size-4 shrink-0 text-dim" />}
+                </button>
+              );
+            })}
+          </div>
           <button
-            onClick={() =>
-              confirmForget ? disconnectHub() : setConfirmForget(true)
-            }
-            className={`w-full rounded-xl px-3 py-2 text-xs font-medium transition ${
-              confirmForget
-                ? "bg-red-500 text-white active:bg-red-600"
-                : "bg-red-500/10 text-red-400 active:bg-red-500/20"
-            }`}
+            onClick={disconnectHub}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-raised px-3 py-2 text-xs font-medium text-dim active:bg-white/[0.07]"
           >
-            {confirmForget
-              ? t("panel.changeServerConfirm")
-              : t("panel.changeServer")}
+            <Pencil className="size-3.5" />
+            {t("panel.manageServers")}
           </button>
           <button
             onClick={() => void checkHubUpgrade()}
