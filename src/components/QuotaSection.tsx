@@ -38,6 +38,11 @@ const GO_STATUS: Record<string, string> = {
   auth_error: "auth expired — refresh your opencode.ai cookie",
   unavailable: "unavailable",
 };
+// Mirrors the CLI card's Ollama Cloud prose (cloud.ollama.ai keys).
+const OC_STATUS: Record<string, string> = {
+  auth_error: "auth expired — refresh your Ollama Cloud API key",
+  unavailable: "unavailable",
+};
 
 // One bar line — CLI layout: label, bar, then `NN% · reset · count` trailing.
 // The per-item MCP breakdown is deliberately dropped; the totals suffice.
@@ -195,6 +200,25 @@ export function QuotaSection() {
                   <p className="px-4 py-1 text-xs text-faint">
                     {GO_STATUS[usageStats.opencode.kind] ??
                       GO_STATUS.unavailable}
+                  </p>
+                )}
+              </>
+            )}
+
+            {usageStats.ollama && usageStats.ollama.kind !== "not_configured" && (
+              <>
+                <SectionLabel title="Ollama Cloud" divided />
+                {usageStats.ollama.kind === "success" ? (
+                  usageStats.ollama.windows?.map((w) => (
+                    <QuotaRow
+                      key={w.key}
+                      label={w.label}
+                      percent={w.usagePercent}
+                    />
+                  ))
+                ) : (
+                  <p className="px-4 py-1 text-xs text-faint">
+                    {OC_STATUS[usageStats.ollama.kind] ?? OC_STATUS.unavailable}
                   </p>
                 )}
               </>

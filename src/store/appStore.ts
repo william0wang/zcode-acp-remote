@@ -33,6 +33,8 @@ import {
   type HubInstance,
   type HubSessionInfo,
   type HubUpgradeResult,
+  type OcWindowEntry,
+  type OllamaUsageStats,
   type PromptDraft,
   type QuotaItem,
   type SavedServer,
@@ -67,15 +69,24 @@ function readReplayMeta(result: unknown): ReplayMeta | null {
 }
 
 // Validates an account/usage_stats result into the combined GLM + Opencode
-// Go shape; null when the payload doesn't fit (treated like a failed fetch).
+// Go + Ollama Cloud shape; null when the payload doesn't fit (treated like a
+// failed fetch). glm/opencode stay required, ollama is optional (older hubs).
 function parseUsageStats(result: unknown): AccountUsageStats | null {
   if (typeof result !== "object" || result === null) return null;
-  const r = result as { glm?: unknown; opencode?: unknown };
+  const r = result as {
+    glm?: unknown;
+    opencode?: unknown;
+    ollama?: unknown;
+  };
   if (typeof r.glm !== "object" || r.glm === null) return null;
   if (typeof r.opencode !== "object" || r.opencode === null) return null;
 
   const glm = r.glm as Partial<GlmUsageStats>;
   const go = r.opencode as Partial<GoUsageStats>;
+  const oc =
+    typeof r.ollama === "object" && r.ollama !== null
+      ? (r.ollama as Partial<OllamaUsageStats>)
+      : undefined;
   const items = Array.isArray(glm.items)
     ? glm.items.filter((it) => it && typeof it.usedPercent === "number")
     : undefined;
@@ -101,6 +112,25 @@ function parseUsageStats(result: unknown): AccountUsageStats | null {
         : "unavailable",
       ...(windows ? { windows: windows as GoWindowEntry[] } : {}),
     },
+    // Ollama section is optional — pre-0.41.0 bridges don't send it.
+    ...(oc
+      ? {
+          ollama: {
+            kind: (
+              ["success", "not_configured", "auth_error", "unavailable"] as const
+            ).includes(oc.kind as OllamaUsageStats["kind"])
+              ? (oc.kind as OllamaUsageStats["kind"])
+              : "unavailable",
+            ...(Array.isArray(oc.windows)
+              ? {
+                  windows: oc.windows.filter(
+                    (w) => w && typeof w.usagePercent === "number",
+                  ) as OcWindowEntry[],
+                }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 

@@ -160,9 +160,25 @@ export interface GoUsageStats {
   windows?: GoWindowEntry[];
 }
 
+// Ollama Cloud section (bridge 0.41.0): whichever windows the account's plan
+// exposes (legacy: 5h + Week; credit plans: Month). ollama.com returns
+// fractions only — no reset timestamps, so there is no resetsAt.
+export interface OcWindowEntry {
+  key: string;
+  label: string;
+  usagePercent: number;
+}
+
+export interface OllamaUsageStats {
+  kind: "success" | "not_configured" | "auth_error" | "unavailable";
+  windows?: OcWindowEntry[];
+}
+
 export interface AccountUsageStats {
   glm: GlmUsageStats;
   opencode: GoUsageStats;
+  // Optional: hub payloads before bridge 0.41.0 carry no ollama section.
+  ollama?: OllamaUsageStats;
 }
 
 // available_commands_update entry (ACP AvailableCommand shape): the bridge's
