@@ -5,7 +5,15 @@
     "token": "Access token",
     "connect": "Connect",
     "testing": "Testing…",
-    "invalidUrl": "Enter a valid http(s) URL"
+    "invalidUrl": "Enter a valid http(s) URL",
+    "savedServers": "Servers",
+    "addServer": "Add server",
+    "editServer": "Edit server",
+    "serverName": "Name",
+    "namePlaceholder": "Optional — defaults to the host",
+    "deleteServer": "Delete server",
+    "deleteConfirm": "Tap again to delete",
+    "saveServer": "Save"
   },
   "picker": {
     "title": "Sessions",
@@ -70,9 +78,9 @@
     "fontSizeMedium": "Medium",
     "fontSizeLarge": "Large",
     "server": "Server",
-    "changeServer": "Change server",
+    "changeServer": "Switch server",
     "changeServerConfirm": "Tap again to confirm",
-    "changeServerHint": "Disconnects and clears the saved URL and token",
+    "changeServerHint": "Disconnects and returns to the server list — saved servers are kept",
     "upgrade": "Check hub update",
     "upgradeBusy": "Checking / restarting…",
     "upgradeLatest": "Hub is up to date ({{version}})",

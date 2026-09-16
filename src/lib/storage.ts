@@ -1,9 +1,11 @@
-import type { ConnectionProfile, PromptDraft } from "./types";
+import type { ConnectionProfile, PromptDraft, SavedServer } from "./types";
 
 // Thin wrapper over localStorage (ADR: app-private WebView storage is
 // acceptable for a sideloaded personal client; swap implementations here).
 
+// Legacy single-server key — only read for the one-time migration.
 const PROFILE_KEY = "zcode-acp:profile";
+const SERVERS_KEY = "zcode-acp:servers";
 const LANG_KEY = "zcode-acp:lang";
 const FONT_SIZE_KEY = "zcode-acp:font-size";
 const PENDING_KEY = "zcode-acp:pending";
@@ -11,26 +13,96 @@ const PENDING_KEY = "zcode-acp:pending";
 export type Lang = "en" | "zh-CN";
 export type FontSize = "small" | "medium" | "large";
 
-export function loadProfile(): ConnectionProfile | null {
+// The persisted multi-server state: every saved Hub URL + token pair and
+// which one is active. activeId may be null (nothing connected); when set it
+// always points at an existing entry.
+export interface ServerBook {
+  servers: SavedServer[];
+  activeId: string | null;
+}
+
+function isValidServer(v: unknown): v is SavedServer {
+  if (!v || typeof v !== "object") return false;
+  const s = v as Partial<SavedServer>;
+  return (
+    typeof s.id === "string" &&
+    s.id.length > 0 &&
+    typeof s.name === "string" &&
+    s.name.length > 0 &&
+    typeof s.hubUrl === "string" &&
+    s.hubUrl.length > 0 &&
+    typeof s.token === "string"
+  );
+}
+
+// Default display name: host[:port] of the hub URL, falling back to the raw
+// string when it does not parse.
+export function defaultServerName(hubUrl: string): string {
+  try {
+    return new URL(hubUrl).host || hubUrl;
+  } catch {
+    return hubUrl;
+  }
+}
+
+export function newServerId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `srv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// One-time migration: the pre-multi-server single profile becomes the seed
+// entry; the legacy key is removed only after the book has been written.
+function migrateLegacyProfile(): ServerBook | null {
   try {
     const raw = localStorage.getItem(PROFILE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ConnectionProfile>;
-    if (typeof parsed.hubUrl === "string" && typeof parsed.token === "string") {
-      return { hubUrl: parsed.hubUrl, token: parsed.token };
+    if (
+      typeof parsed.hubUrl !== "string" ||
+      parsed.hubUrl.length === 0 ||
+      typeof parsed.token !== "string"
+    ) {
+      return null;
     }
-    return null;
+    const hubUrl = parsed.hubUrl.replace(/\/+$/, "");
+    const server: SavedServer = {
+      id: newServerId(),
+      name: defaultServerName(hubUrl),
+      hubUrl,
+      token: parsed.token,
+    };
+    const book: ServerBook = { servers: [server], activeId: server.id };
+    localStorage.setItem(SERVERS_KEY, JSON.stringify(book));
+    localStorage.removeItem(PROFILE_KEY);
+    return book;
   } catch {
     return null;
   }
 }
 
-export function saveProfile(profile: ConnectionProfile): void {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+export function loadServerBook(): ServerBook | null {
+  const raw = localStorage.getItem(SERVERS_KEY);
+  if (raw == null) return migrateLegacyProfile();
+  try {
+    const parsed = JSON.parse(raw) as { servers?: unknown; activeId?: unknown };
+    const servers = Array.isArray(parsed.servers)
+      ? parsed.servers.filter(isValidServer)
+      : [];
+    if (servers.length === 0) return null;
+    const activeId =
+      typeof parsed.activeId === "string" &&
+      servers.some((s) => s.id === parsed.activeId)
+        ? parsed.activeId
+        : servers[0].id;
+    return { servers, activeId };
+  } catch {
+    return null;
+  }
 }
 
-export function clearProfileStorage(): void {
-  localStorage.removeItem(PROFILE_KEY);
+export function saveServerBook(book: ServerBook): void {
+  localStorage.setItem(SERVERS_KEY, JSON.stringify(book));
 }
 
 export function loadLang(): Lang {

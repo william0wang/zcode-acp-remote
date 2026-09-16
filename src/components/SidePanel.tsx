@@ -42,13 +42,16 @@ export function PanelShell({
 }
 
 // Global settings, shown OUTSIDE any session (entry screen): language, the
-// destructive server reset, the hub upgrade trigger, and the account quota
-// card (connection-level data — the list screen keeps the instance WS alive,
-// so it renders here too). Session-scoped controls live in SessionPanel.
+// server switch (saved servers are kept — the manager screen lists them),
+// the hub upgrade trigger, and the account quota card (connection-level
+// data — the list screen keeps the instance WS alive, so it renders here
+// too). Session-scoped controls live in SessionPanel.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const profile = useAppStore((s) => s.profile);
-  const forgetHub = useAppStore((s) => s.forgetHub);
+  const savedServers = useAppStore((s) => s.savedServers);
+  const activeServerId = useAppStore((s) => s.activeServerId);
+  const disconnectHub = useAppStore((s) => s.disconnectHub);
   const setLang = useAppStore((s) => s.setLang);
   const fontSize = useAppStore((s) => s.fontSize);
   const setFontSize = useAppStore((s) => s.setFontSize);
@@ -145,16 +148,21 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             {t("panel.server")}
           </h3>
           {profile && (
-            <p className="truncate pb-1 font-mono text-xs text-faint">
-              {profile.hubUrl}
-            </p>
+            <>
+              <p className="truncate pb-0.5 text-xs font-medium">
+                {savedServers.find((s) => s.id === activeServerId)?.name}
+              </p>
+              <p className="truncate pb-1 font-mono text-xs text-faint">
+                {profile.hubUrl}
+              </p>
+            </>
           )}
           <p className="pb-2 text-[11px] text-faint">
             {t("panel.changeServerHint")}
           </p>
           <button
             onClick={() =>
-              confirmForget ? forgetHub() : setConfirmForget(true)
+              confirmForget ? disconnectHub() : setConfirmForget(true)
             }
             className={`w-full rounded-xl px-3 py-2 text-xs font-medium transition ${
               confirmForget

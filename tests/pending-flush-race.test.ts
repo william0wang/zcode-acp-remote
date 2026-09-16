@@ -103,7 +103,7 @@ beforeAll(() => {
 afterAll(() => {
   // Stop the 4s discovery poll so the worker can exit.
   void import("../src/store/appStore").then((m) =>
-    m.useAppStore.getState().forgetHub(),
+    m.useAppStore.getState().disconnectHub(),
   );
 });
 

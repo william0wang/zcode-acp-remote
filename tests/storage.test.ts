@@ -1,17 +1,21 @@
 // @vitest-environment node
 // Persistence coverage for storage.ts: legacy draft migration, invalid-entry
 // filtering, and the quota-exceeded fallback that strips images instead of
-// losing the queue.
+// losing the queue. Also the multi-server book: round-trip, garbage filtering,
+// and the one-time legacy single-profile migration.
 import { beforeEach, expect, test } from "vitest";
 import {
+  defaultServerName,
   loadPending,
-  loadProfile,
+  loadServerBook,
+  newServerId,
   savePending,
-  saveProfile,
+  saveServerBook,
 } from "../src/lib/storage";
 
 const PENDING_KEY = "zcode-acp:pending";
 const PROFILE_KEY = "zcode-acp:profile";
+const SERVERS_KEY = "zcode-acp:servers";
 
 let backing: Map<string, string>;
 
@@ -83,13 +87,79 @@ test("savePending strips images on quota failure instead of losing the queue", (
   });
 });
 
-test("loadProfile returns only the connection fields and rejects garbage", () => {
-  saveProfile({ hubUrl: "http://hub", token: "t" });
-  expect(loadProfile()).toEqual({ hubUrl: "http://hub", token: "t" });
+test("saveServerBook/loadServerBook round-trips the book", () => {
+  const book = {
+    servers: [
+      { id: "a", name: "home", hubUrl: "http://home", token: "t1" },
+      { id: "b", name: "office", hubUrl: "http://office", token: "t2" },
+    ],
+    activeId: "b",
+  };
+  saveServerBook(book);
+  expect(loadServerBook()).toEqual(book);
+});
 
+test("loadServerBook drops malformed entries and re-points a dangling activeId", () => {
+  backing.set(
+    SERVERS_KEY,
+    JSON.stringify({
+      servers: [
+        { id: "a", name: "ok", hubUrl: "http://a", token: "t" },
+        { id: "b" }, // missing fields
+        "junk", // not an object
+        { id: "", name: "x", hubUrl: "http://c", token: "t" }, // empty id
+        { id: "d", name: "x", hubUrl: "", token: "t" }, // empty hubUrl
+      ],
+      activeId: "nope",
+    }),
+  );
+  const book = loadServerBook();
+  expect(book?.servers).toEqual([
+    { id: "a", name: "ok", hubUrl: "http://a", token: "t" },
+  ]);
+  expect(book?.activeId).toBe("a");
+});
+
+test("loadServerBook returns null for corrupt JSON or an empty book", () => {
+  backing.set(SERVERS_KEY, "{oops");
+  expect(loadServerBook()).toBeNull();
+  backing.set(SERVERS_KEY, JSON.stringify({ servers: [], activeId: null }));
+  expect(loadServerBook()).toBeNull();
+});
+
+test("loadServerBook returns null with no key and no legacy profile", () => {
+  expect(loadServerBook()).toBeNull();
+});
+
+test("legacy single profile migrates into a one-entry book; the old key is removed", () => {
+  backing.set(
+    PROFILE_KEY,
+    JSON.stringify({ hubUrl: "http://hub.example.com:8912/", token: "secret" }),
+  );
+  const book = loadServerBook();
+  expect(book?.servers).toHaveLength(1);
+  const s = book!.servers[0];
+  expect(s.hubUrl).toBe("http://hub.example.com:8912");
+  expect(s.name).toBe("hub.example.com:8912");
+  expect(s.token).toBe("secret");
+  expect(book?.activeId).toBe(s.id);
+  expect(backing.has(PROFILE_KEY)).toBe(false);
+  expect(backing.has(SERVERS_KEY)).toBe(true);
+});
+
+test("legacy migration ignores a garbage profile and keeps it untouched", () => {
   backing.set(PROFILE_KEY, JSON.stringify({ hubUrl: "http://hub" }));
-  expect(loadProfile()).toBeNull();
+  expect(loadServerBook()).toBeNull();
+  expect(backing.has(PROFILE_KEY)).toBe(true);
+  expect(backing.has(SERVERS_KEY)).toBe(false);
+});
 
-  backing.set(PROFILE_KEY, "{oops");
-  expect(loadProfile()).toBeNull();
+test("defaultServerName falls back to the raw URL", () => {
+  expect(defaultServerName("http://hub:1234")).toBe("hub:1234");
+  expect(defaultServerName("not a url")).toBe("not a url");
+});
+
+test("newServerId yields unique non-empty ids", () => {
+  const ids = new Set(Array.from({ length: 50 }, () => newServerId()));
+  expect(ids.size).toBe(50);
 });

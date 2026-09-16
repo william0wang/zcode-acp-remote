@@ -11,8 +11,11 @@ Session Authority) are defined by the server glossary at
 `../zcode-acp-server/CONTEXT.md`; this app inherits them unchanged.
 
 **Connection Profile**:
-The saved Hub URL and bearer token the app dials. Exactly one active profile
-in v1.
+The saved Hub URL and bearer token the app dials. Persisted as a multi-server
+book (`zcode-acp:servers`): many saved profiles, exactly one active —
+`profile` mirrors the active entry. The connect screen doubles as the server
+manager (switch / edit / delete); the legacy single-profile key migrates on
+first load.
 _Avoid_: server config, account
 
 **Active Session**:

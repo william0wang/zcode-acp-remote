@@ -2,15 +2,16 @@ import { create } from "zustand";
 import { AcpConnection } from "../lib/acp";
 import { HubApiError, HubClient } from "../lib/hub";
 import {
-  clearProfileStorage,
+  defaultServerName,
   loadFontSize,
   loadLang,
   loadPending,
-  loadProfile,
+  loadServerBook,
+  newServerId,
   saveFontSize,
   saveLang,
   savePending,
-  saveProfile as persistProfile,
+  saveServerBook,
   type FontSize,
   type Lang,
 } from "../lib/storage";
@@ -34,6 +35,7 @@ import {
   type HubUpgradeResult,
   type PromptDraft,
   type QuotaItem,
+  type SavedServer,
   type SessionUpdate,
   type SlashCommand,
   type ToolCallPart,
@@ -170,6 +172,10 @@ export interface PlanEntry {
 
 interface AppState {
   profile: ConnectionProfile | null;
+  // Multi-server book: every saved Hub URL + token pair and the active one.
+  // `profile` mirrors the active entry (null when nothing is active).
+  savedServers: SavedServer[];
+  activeServerId: string | null;
   lang: Lang;
   fontSize: FontSize;
   instances: HubInstance[];
@@ -229,8 +235,25 @@ interface AppState {
   loadingSession: boolean;
 
   init: () => void;
-  connectToHub: (profile: ConnectionProfile) => void;
-  forgetHub: () => void;
+  // Upserts by normalized hubUrl: an existing entry gets the new token and
+  // becomes active; otherwise a new entry is appended (name defaults to the
+  // URL host). Connecting NEVER drops the other saved servers.
+  connectToHub: (input: {
+    hubUrl: string;
+    token: string;
+    name?: string;
+  }) => void;
+  // Tears the connection down and clears the active selection; the saved
+  // server list itself is kept (the manager screen lists them).
+  disconnectHub: () => void;
+  // Switches the active server: full connection teardown, then fresh polling
+  // against the target entry. No health gate — the hubOffline banner covers
+  // a down hub and polling heals when it comes back.
+  switchServer: (id: string) => void;
+  // In-place edit of one saved entry; editing the ACTIVE one reconnects.
+  saveServer: (entry: SavedServer) => void;
+  // Removes one entry; deleting the ACTIVE one disconnects to the manager.
+  deleteServer: (id: string) => void;
   setLang: (lang: Lang) => void;
   setFontSize: (size: FontSize) => void;
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
@@ -381,6 +404,47 @@ function mergeCreatedSession(
   return next;
 }
 
+// The profile matching the book's active entry (first entry as fallback).
+function activeProfile(
+  servers: SavedServer[],
+  activeId: string | null,
+): ConnectionProfile | null {
+  const s = servers.find((x) => x.id === activeId) ?? servers[0];
+  return s ? { hubUrl: s.hubUrl, token: s.token } : null;
+}
+
+// Session/connection-scoped reset shared by disconnect, server switch and
+// active-server delete. Quota data clears too — it belongs to the hub being
+// left, not to the instance connection.
+function connectionResetPatch(): Partial<AppState> {
+  return {
+    connState: "idle",
+    instanceId: null,
+    activeSessionId: null,
+    messages: [],
+    pendingPrompts: {},
+    planEntries: null,
+    permissions: {},
+    elicitations: {},
+    notice: null,
+    replayCursor: null,
+    hasMore: false,
+    totalMessages: null,
+    loadingEarlier: false,
+    configOptions: [],
+    currentModeId: null,
+    usage: null,
+    availableCommands: [],
+    usageStats: null,
+    usageStatsAt: null,
+    sessionStates: {},
+    quotaUnavailable: false,
+    fsCapable: false,
+    loadingSession: false,
+    isRunning: false,
+  };
+}
+
 export const useAppStore = create<AppState>((set, get) => {
   function hub(): HubClient | null {
     const p = get().profile;
@@ -448,6 +512,21 @@ export const useAppStore = create<AppState>((set, get) => {
       clearInterval(pollTimer);
       pollTimer = null;
     }
+  }
+
+  // Shared connection teardown for the hub-level transitions (disconnect /
+  // switch server / delete active server): everything those paths do besides
+  // their own state reset.
+  function teardownConnection(): void {
+    stopPolling();
+    stopReconnect();
+    connSeq++; // invalidate any in-flight connection events
+    acp?.close();
+    acp = null;
+    pendingResponds.clear();
+    pendingElicitResponds.clear();
+    reconnectAttempt = 0;
+    dropQueuedUpdates();
   }
 
   // ---- session/update -> chat model ----
@@ -1335,6 +1414,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
   return {
     profile: null,
+    savedServers: [],
+    activeServerId: null,
     lang: "en",
     fontSize: "small" as FontSize,
     instances: [],
@@ -1366,64 +1447,140 @@ export const useAppStore = create<AppState>((set, get) => {
     loadingSession: false,
 
     init: () => {
-      const profile = loadProfile();
+      const book = loadServerBook();
       const fontSize = loadFontSize();
       applyFontSize(fontSize);
-      set({ profile, lang: loadLang(), fontSize });
-      if (profile) {
+      set({
+        savedServers: book?.servers ?? [],
+        activeServerId: book?.activeId ?? null,
+        profile: book ? activeProfile(book.servers, book.activeId) : null,
+        lang: loadLang(),
+        fontSize,
+      });
+      if (book) {
         startPolling();
         // Plain HTTP (no instance connection needed); slow-moving data.
         void get().refreshUsageStats();
       }
     },
 
-    connectToHub: (profile) => {
-      persistProfile(profile);
+    connectToHub: (input) => {
+      // Normalize before the upsert so "http://hub" and "http://hub/" land
+      // on the same entry instead of duplicating it.
+      const hubUrl = input.hubUrl.trim().replace(/\/+$/, "");
+      const token = input.token.trim();
+      const label = input.name?.trim();
+      const servers = [...get().savedServers];
+      const idx = servers.findIndex((x) => x.hubUrl === hubUrl);
+      let activeId: string;
+      if (idx >= 0) {
+        // An empty name keeps the entry's own — reconnecting to a saved URL
+        // must not clobber a custom display name with the host default.
+        servers[idx] = {
+          ...servers[idx],
+          hubUrl,
+          token,
+          ...(label ? { name: label } : {}),
+        };
+        activeId = servers[idx].id;
+      } else {
+        const server: SavedServer = {
+          id: newServerId(),
+          name: label || defaultServerName(hubUrl),
+          hubUrl,
+          token,
+        };
+        servers.push(server);
+        activeId = server.id;
+      }
+      saveServerBook({ servers, activeId });
       discoveryFailures = 0;
-      set({ profile, instances: [], instancesError: null, hubOffline: false });
+      set({
+        savedServers: servers,
+        activeServerId: activeId,
+        profile: { hubUrl, token },
+        instances: [],
+        instancesError: null,
+        hubOffline: false,
+      });
       startPolling();
       void get().refreshUsageStats();
     },
 
-    forgetHub: () => {
-      stopPolling();
-      stopReconnect();
-      connSeq++; // invalidate any in-flight connection events
-      acp?.close();
-      acp = null;
-      pendingResponds.clear();
-      pendingElicitResponds.clear();
-      reconnectAttempt = 0;
-      dropQueuedUpdates();
-      clearProfileStorage();
+    disconnectHub: () => {
+      teardownConnection();
+      saveServerBook({ servers: get().savedServers, activeId: null });
       savePending({});
       set({
+        activeServerId: null,
         profile: null,
         instances: [],
         instancesError: null,
         hubOffline: false,
-        connState: "idle",
-        instanceId: null,
-        activeSessionId: null,
-        messages: [],
-        pendingPrompts: {},
-        planEntries: null,
-        permissions: {},
-        elicitations: {},
-        notice: null,
-        replayCursor: null,
-        hasMore: false,
-        totalMessages: null,
-        loadingEarlier: false,
-        configOptions: [],
-        currentModeId: null,
-        usage: null,
-        availableCommands: [],
-        usageStats: null,
-        usageStatsAt: null,
-        sessionStates: {},
-        quotaUnavailable: false,
-        loadingSession: false,
+        ...connectionResetPatch(),
+      });
+    },
+
+    switchServer: (id) => {
+      const target = get().savedServers.find((x) => x.id === id);
+      if (!target) return;
+      teardownConnection();
+      saveServerBook({ servers: get().savedServers, activeId: id });
+      savePending({});
+      discoveryFailures = 0;
+      set({
+        activeServerId: id,
+        profile: { hubUrl: target.hubUrl, token: target.token },
+        instances: [],
+        instancesError: null,
+        hubOffline: false,
+        ...connectionResetPatch(),
+      });
+      startPolling();
+      void get().refreshUsageStats();
+    },
+
+    saveServer: (entry) => {
+      const s = get();
+      const idx = s.savedServers.findIndex((x) => x.id === entry.id);
+      if (idx === -1) return;
+      const hubUrl = entry.hubUrl.trim().replace(/\/+$/, "");
+      const servers = [...s.savedServers];
+      servers[idx] = {
+        ...entry,
+        hubUrl,
+        name: entry.name.trim() || defaultServerName(hubUrl),
+      };
+      saveServerBook({ servers, activeId: s.activeServerId });
+      set({ savedServers: servers });
+      if (entry.id === s.activeServerId) {
+        // The live connection still points at the old URL/token — re-run the
+        // switch path so the edit takes effect immediately.
+        get().switchServer(entry.id);
+      }
+    },
+
+    deleteServer: (id) => {
+      const s = get();
+      const servers = s.savedServers.filter((x) => x.id !== id);
+      if (servers.length === s.savedServers.length) return;
+      if (s.activeServerId !== id) {
+        saveServerBook({ servers, activeId: s.activeServerId });
+        set({ savedServers: servers });
+        return;
+      }
+      // Deleting the active server: disconnect back to the manager screen.
+      teardownConnection();
+      saveServerBook({ servers, activeId: null });
+      savePending({});
+      set({
+        savedServers: servers,
+        activeServerId: null,
+        profile: null,
+        instances: [],
+        instancesError: null,
+        hubOffline: false,
+        ...connectionResetPatch(),
       });
     },
 

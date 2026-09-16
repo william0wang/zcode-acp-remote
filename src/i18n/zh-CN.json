@@ -5,7 +5,15 @@
     "token": "访问令牌",
     "connect": "连接",
     "testing": "测试中…",
-    "invalidUrl": "请输入有效的 http(s) 地址"
+    "invalidUrl": "请输入有效的 http(s) 地址",
+    "savedServers": "服务器",
+    "addServer": "添加服务器",
+    "editServer": "编辑服务器",
+    "serverName": "名称",
+    "namePlaceholder": "可选,默认取主机名",
+    "deleteServer": "删除服务器",
+    "deleteConfirm": "再点一次确认删除",
+    "saveServer": "保存"
   },
   "picker": {
     "title": "会话",
@@ -70,9 +78,9 @@
     "fontSizeMedium": "中",
     "fontSizeLarge": "大",
     "server": "服务器",
-    "changeServer": "更换服务器",
+    "changeServer": "切换服务器",
     "changeServerConfirm": "再点一次确认",
-    "changeServerHint": "断开连接并清除已保存的地址和令牌",
+    "changeServerHint": "断开连接并返回服务器列表,已保存的服务器会保留",
     "upgrade": "检查 Hub 更新",
     "upgradeBusy": "检查/重启中…",
     "upgradeLatest": "Hub 已是最新 ({{version}})",

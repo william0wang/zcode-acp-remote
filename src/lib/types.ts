@@ -76,6 +76,16 @@ export interface ConnectionProfile {
   token: string;
 }
 
+// One entry of the persisted multi-server book: the connection pair plus a
+// user-editable display name. Exactly one entry is active at a time;
+// `profile` in the store mirrors that entry.
+export interface SavedServer {
+  id: string;
+  name: string;
+  hubUrl: string;
+  token: string;
+}
+
 // POST /api/upgrade (bridge 0.11.7): the hub's own staleness-check verdict.
 // `restarting` means IT decided the on-disk code is newer — the client only
 // triggered the check; the decision was never ours to make.
