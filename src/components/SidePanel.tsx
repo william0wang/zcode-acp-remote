@@ -51,7 +51,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const savedServers = useAppStore((s) => s.savedServers);
   const activeServerId = useAppStore((s) => s.activeServerId);
   const switchServer = useAppStore((s) => s.switchServer);
-  const disconnectHub = useAppStore((s) => s.disconnectHub);
+  const openServerManager = useAppStore((s) => s.openServerManager);
   const setLang = useAppStore((s) => s.setLang);
   const fontSize = useAppStore((s) => s.fontSize);
   const setFontSize = useAppStore((s) => s.setFontSize);
@@ -173,7 +173,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             })}
           </div>
           <button
-            onClick={disconnectHub}
+            onClick={openServerManager}
             className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-raised px-3 py-2 text-xs font-medium text-dim active:bg-white/[0.07]"
           >
             <Pencil className="size-3.5" />

@@ -15,6 +15,8 @@ const ChatScreen = lazy(() =>
 export default function App() {
   const init = useAppStore((s) => s.init);
   const profile = useAppStore((s) => s.profile);
+  const manageOpen = useAppStore((s) => s.manageOpen);
+  const closeServerManager = useAppStore((s) => s.closeServerManager);
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
 
@@ -23,6 +25,9 @@ export default function App() {
   }, [init]);
 
   if (!profile) return <ConnectScreen />;
+  // Server manager overlay: browses/edits saved servers WITHOUT dropping the
+  // live connection; switching or adding a server clears manageOpen itself.
+  if (manageOpen) return <ConnectScreen onClose={closeServerManager} />;
   // The instance connection outlives the open session (closeSession keeps
   // it so the list keeps receiving broadcast activity) — the chat screen
   // needs BOTH an instance and an attached session.

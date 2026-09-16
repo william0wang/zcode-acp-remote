@@ -254,6 +254,12 @@ interface AppState {
   saveServer: (entry: SavedServer) => void;
   // Removes one entry; deleting the ACTIVE one disconnects to the manager.
   deleteServer: (id: string) => void;
+  // Full-screen server manager overlay (opened from settings). Browsing and
+  // editing happens WITHOUT dropping the current connection; switching or
+  // adding a server closes it (the chosen hub's session list takes over).
+  manageOpen: boolean;
+  openServerManager: () => void;
+  closeServerManager: () => void;
   setLang: (lang: Lang) => void;
   setFontSize: (size: FontSize) => void;
   refreshInstances: (opts?: { probe?: boolean }) => Promise<void>;
@@ -1416,6 +1422,7 @@ export const useAppStore = create<AppState>((set, get) => {
     profile: null,
     savedServers: [],
     activeServerId: null,
+    manageOpen: false,
     lang: "en",
     fontSize: "small" as FontSize,
     instances: [],
@@ -1502,6 +1509,7 @@ export const useAppStore = create<AppState>((set, get) => {
         instances: [],
         instancesError: null,
         hubOffline: false,
+        manageOpen: false,
       });
       startPolling();
       void get().refreshUsageStats();
@@ -1517,6 +1525,7 @@ export const useAppStore = create<AppState>((set, get) => {
         instances: [],
         instancesError: null,
         hubOffline: false,
+        manageOpen: false,
         ...connectionResetPatch(),
       });
     },
@@ -1534,6 +1543,7 @@ export const useAppStore = create<AppState>((set, get) => {
         instances: [],
         instancesError: null,
         hubOffline: false,
+        manageOpen: false,
         ...connectionResetPatch(),
       });
       startPolling();
@@ -1580,9 +1590,14 @@ export const useAppStore = create<AppState>((set, get) => {
         instances: [],
         instancesError: null,
         hubOffline: false,
+        manageOpen: false,
         ...connectionResetPatch(),
       });
     },
+
+    openServerManager: () => set({ manageOpen: true }),
+
+    closeServerManager: () => set({ manageOpen: false }),
 
     setLang: (lang) => {
       saveLang(lang);

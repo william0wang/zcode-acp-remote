@@ -142,7 +142,8 @@
   },
   "common": {
     "cancel": "取消",
-    "close": "关闭"
+    "close": "关闭",
+    "back": "返回"
   },
   "error": {
     "title": "出错了",

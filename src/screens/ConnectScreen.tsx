@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Pencil, Plus } from "lucide-react";
+import { Check, ChevronLeft, Pencil, Plus } from "lucide-react";
 import { HubClient } from "../lib/hub";
 import { useAppStore } from "../store/appStore";
 import type { SavedServer } from "../lib/types";
@@ -167,8 +167,10 @@ function ServerForm({
 
 // Server manager: lists every saved server (tap a row to switch, pencil to
 // edit/delete) plus the add form. A fresh install lands directly on the add
-// form — which is the original single-server connect screen.
-export function ConnectScreen() {
+// form — which is the original single-server connect screen. With onClose
+// (settings' "manage servers" entry) it renders over a LIVE connection and
+// the back button returns to the app without disconnecting.
+export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const { t } = useTranslation();
   const savedServers = useAppStore((s) => s.savedServers);
   const activeServerId = useAppStore((s) => s.activeServerId);
@@ -184,7 +186,16 @@ export function ConnectScreen() {
 
   return (
     <div className="h-full overflow-y-auto bg-canvas px-6 text-ink">
-      <div className="mx-auto w-full max-w-sm py-10">
+      <div className="relative mx-auto w-full max-w-sm py-10">
+        {onClose && (
+          <button
+            onClick={onClose}
+            aria-label={t("common.back")}
+            className="absolute left-0 top-10 flex size-9 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <ChevronLeft className="size-5" />
+          </button>
+        )}
         <h1 className="text-center text-2xl font-semibold tracking-tight">
           ZCode ACP
         </h1>
