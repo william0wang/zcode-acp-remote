@@ -41,11 +41,12 @@ export function PanelShell({
   );
 }
 
-// Global settings, shown OUTSIDE any session (entry screen): language, an
-// entry row into the server manager (switch/add/edit live in ConnectScreen),
-// the hub upgrade trigger, and the account quota card (connection-level
-// data — the list screen keeps the instance WS alive, so it renders here
-// too). Session-scoped controls live in SessionPanel.
+// Global settings, shown OUTSIDE any session (entry screen): an entry row
+// into the server manager (switch/add/edit live in ConnectScreen), the hub
+// upgrade trigger, and the account quota card (connection-level data — the
+// list screen keeps the instance WS alive, so it renders here too).
+// Rarely-touched language/font preferences sit at the very bottom.
+// Session-scoped controls live in SessionPanel.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const savedServers = useAppStore((s) => s.savedServers);
@@ -96,48 +97,6 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="space-y-5 px-4 pb-[max(var(--safe-bottom),1rem)] pt-2">
         <div>
           <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
-            {t("panel.language")}
-          </h3>
-          <div className="flex gap-2 rounded-xl bg-raised p-1">
-            {(["en", "zh-CN"] as const).map((lang) => (
-              <button
-                key={lang}
-                onClick={() => switchLang(lang)}
-                className={`flex-1 rounded-lg px-3 py-1.5 text-xs transition ${
-                  i18n.language === lang
-                    ? "bg-white/[0.1] font-medium text-ink"
-                    : "text-faint"
-                }`}
-              >
-                {lang === "en" ? "English" : "中文"}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
-            {t("panel.fontSize")}
-          </h3>
-          <div className="flex gap-2 rounded-xl bg-raised p-1">
-            {(["small", "medium", "large"] as const).map((size) => (
-              <button
-                key={size}
-                onClick={() => setFontSize(size)}
-                className={`flex-1 rounded-lg px-3 py-1.5 text-xs transition ${
-                  fontSize === size
-                    ? "bg-white/[0.1] font-medium text-ink"
-                    : "text-faint"
-                }`}
-              >
-                {t(`panel.fontSize${size.charAt(0).toUpperCase() + size.slice(1)}`)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
             {t("panel.server")}
           </h3>
           {/* Entry row only — switching/add/edit all happen inside the
@@ -177,6 +136,51 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       {/* Sibling, not inside the px-4 wrapper: rows carry their own padding
           and the section's top divider must span the full panel width. */}
       <QuotaSection />
+
+      {/* Rarely-touched preferences sit at the very bottom of the panel. */}
+      <div className="space-y-5 px-4 pb-[max(var(--safe-bottom),1rem)] pt-2">
+        <div>
+          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+            {t("panel.language")}
+          </h3>
+          <div className="flex gap-2 rounded-xl bg-raised p-1">
+            {(["en", "zh-CN"] as const).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => switchLang(lang)}
+                className={`flex-1 rounded-lg px-3 py-1.5 text-xs transition ${
+                  i18n.language === lang
+                    ? "bg-white/[0.1] font-medium text-ink"
+                    : "text-faint"
+                }`}
+              >
+                {lang === "en" ? "English" : "中文"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+            {t("panel.fontSize")}
+          </h3>
+          <div className="flex gap-2 rounded-xl bg-raised p-1">
+            {(["small", "medium", "large"] as const).map((size) => (
+              <button
+                key={size}
+                onClick={() => setFontSize(size)}
+                className={`flex-1 rounded-lg px-3 py-1.5 text-xs transition ${
+                  fontSize === size
+                    ? "bg-white/[0.1] font-medium text-ink"
+                    : "text-faint"
+                }`}
+              >
+                {t(`panel.fontSize${size.charAt(0).toUpperCase() + size.slice(1)}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
       <p className="px-4 pb-[max(var(--safe-bottom),1rem)] pt-4 text-center text-[11px] text-faint">
         v{__APP_VERSION__}
