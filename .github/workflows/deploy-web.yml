@@ -25,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version input: the action resolves pnpm from devEngines
+      # .packageManager in package.json (">=10" — minimum, not a pin).
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4

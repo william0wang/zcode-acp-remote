@@ -1,0 +1,6 @@
+# pnpm settings live here since v11 (the package.json "pnpm" field is no
+# longer read). allowBuilds replaced onlyBuiltDependencies in v11; pnpm
+# >=10.26 reads this same map, so CI (10.x) and local (12.x) agree.
+allowBuilds:
+  esbuild: true
+  workerd: true

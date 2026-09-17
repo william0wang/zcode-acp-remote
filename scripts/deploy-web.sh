@@ -19,5 +19,8 @@ fi
 pnpm build
 # First run creates the project; "already exists" errors are fine — any real
 # credential problem resurfaces in the deploy step right after.
-pnpm dlx wrangler@4 pages project create "$CF_PAGES_PROJECT" --production-branch main 2>/dev/null || true
-pnpm dlx wrangler@4 pages deploy dist --project-name="$CF_PAGES_PROJECT" --branch main
+# --allow-build: pnpm >=11 hard-fails dlx installs on unapproved postinstall
+# scripts (esbuild/workerd ride along with wrangler); the project workspace
+# file can't cover the dlx temp dir, so approve them on the command line.
+pnpm dlx --allow-build=esbuild --allow-build=workerd wrangler@4 pages project create "$CF_PAGES_PROJECT" --production-branch main 2>/dev/null || true
+pnpm dlx --allow-build=esbuild --allow-build=workerd wrangler@4 pages deploy dist --project-name="$CF_PAGES_PROJECT" --branch main

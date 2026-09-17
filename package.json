@@ -3,7 +3,12 @@
   "private": true,
   "version": "0.8.3",
   "license": "MIT",
-  "packageManager": "pnpm@10.34.3",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": ">=10"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/william0wang/zcode-acp-remote.git"
