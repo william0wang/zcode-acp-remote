@@ -78,8 +78,6 @@
     "fontSizeMedium": "Medium",
     "fontSizeLarge": "Large",
     "server": "Server",
-    "serverHint": "Tap a server to switch — saved servers are kept",
-    "manageServers": "Add / manage servers",
     "upgrade": "Check hub update",
     "upgradeBusy": "Checking / restarting…",
     "upgradeLatest": "Hub is up to date ({{version}})",

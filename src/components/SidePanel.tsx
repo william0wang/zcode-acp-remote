@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Pencil, RefreshCw, X } from "lucide-react";
+import { Pencil, RefreshCw, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
 
@@ -41,16 +41,15 @@ export function PanelShell({
   );
 }
 
-// Global settings, shown OUTSIDE any session (entry screen): language, the
-// saved-server list (tap a row to switch instantly), the hub upgrade
-// trigger, and the account quota card (connection-level data — the list
-// screen keeps the instance WS alive, so it renders here too).
-// Session-scoped controls live in SessionPanel.
+// Global settings, shown OUTSIDE any session (entry screen): language, an
+// entry row into the server manager (switch/add/edit live in ConnectScreen),
+// the hub upgrade trigger, and the account quota card (connection-level
+// data — the list screen keeps the instance WS alive, so it renders here
+// too). Session-scoped controls live in SessionPanel.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const savedServers = useAppStore((s) => s.savedServers);
   const activeServerId = useAppStore((s) => s.activeServerId);
-  const switchServer = useAppStore((s) => s.switchServer);
   const openServerManager = useAppStore((s) => s.openServerManager);
   const setLang = useAppStore((s) => s.setLang);
   const fontSize = useAppStore((s) => s.fontSize);
@@ -89,6 +88,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     setLang(lang);
     void i18n.changeLanguage(lang);
   }
+
+  const activeServer = savedServers.find((s) => s.id === activeServerId);
 
   return (
     <PanelShell title={t("panel.title")} onClose={onClose}>
@@ -139,45 +140,21 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
             {t("panel.server")}
           </h3>
-          <p className="pb-2 text-[11px] text-faint">
-            {t("panel.serverHint")}
-          </p>
-          <div className="space-y-1">
-            {savedServers.map((s) => {
-              const active = s.id === activeServerId;
-              return (
-                <button
-                  key={s.id}
-                  onClick={() => {
-                    if (!active) switchServer(s.id);
-                  }}
-                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left ${
-                    active ? "bg-white/[0.07]" : "active:bg-white/[0.05]"
-                  }`}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={`block truncate text-sm ${
-                        active ? "font-medium text-ink" : "text-dim"
-                      }`}
-                    >
-                      {s.name}
-                    </span>
-                    <span className="block truncate font-mono text-[11px] text-faint">
-                      {s.hubUrl}
-                    </span>
-                  </span>
-                  {active && <Check className="size-4 shrink-0 text-dim" />}
-                </button>
-              );
-            })}
-          </div>
+          {/* Entry row only — switching/add/edit all happen inside the
+              server manager page (ConnectScreen). */}
           <button
             onClick={openServerManager}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-raised px-3 py-2 text-xs font-medium text-dim active:bg-white/[0.07]"
+            className="flex w-full items-center gap-2 rounded-xl bg-raised px-3 py-2.5 text-left active:bg-white/[0.05]"
           >
-            <Pencil className="size-3.5" />
-            {t("panel.manageServers")}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm text-dim">
+                {activeServer?.name ?? "—"}
+              </span>
+              <span className="block truncate font-mono text-[11px] text-faint">
+                {activeServer?.hubUrl}
+              </span>
+            </span>
+            <Pencil className="size-4 shrink-0 text-faint" />
           </button>
           <button
             onClick={() => void checkHubUpgrade()}

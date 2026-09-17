@@ -78,8 +78,6 @@
     "fontSizeMedium": "中",
     "fontSizeLarge": "大",
     "server": "服务器",
-    "serverHint": "点一下服务器即可切换,已保存的服务器会保留",
-    "manageServers": "添加 / 管理服务器",
     "upgrade": "检查 Hub 更新",
     "upgradeBusy": "检查/重启中…",
     "upgradeLatest": "Hub 已是最新 ({{version}})",
