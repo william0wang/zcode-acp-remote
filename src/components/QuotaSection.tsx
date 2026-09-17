@@ -28,6 +28,13 @@ function capitalise(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+// CLI parity (zcode-quota's roundTenth): the hub ships raw percents (Ollama
+// is `fraction * 100`, unrounded), so cap the display at one decimal — `12.3`,
+// not `12.34567`; integral values print without the trailing `.0`.
+function fmtPercent(pct: number): string {
+  return String(Math.round(pct * 10) / 10);
+}
+
 // Status lines, verbatim from the CLI card's non-success prose.
 const GLM_STATUS: Record<string, string> = {
   auth_error: "🔒 Quota auth expired — re-login in the ZCode app",
@@ -83,7 +90,9 @@ function QuotaRow({
         {/* `used / total` when the API carries counts (GLM); the Go source
             only exposes a percentage, so those rows stay on `NN%`. */}
         <span className="shrink-0 truncate text-xs tabular-nums text-faint">
-          {used != null && total != null ? `${used} / ${total}` : `${percent}%`}
+          {used != null && total != null
+            ? `${used} / ${total}`
+            : `${fmtPercent(percent)}%`}
           {resetMs != null && ` · ${fmtResetTime(resetMs)}`}
         </span>
       </div>
