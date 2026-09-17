@@ -124,7 +124,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <button
                 key={size}
                 onClick={() => setFontSize(size)}
-                className={`flex-1 rounded-lg px-3 py-1.5 transition ${
+                className={`flex-1 rounded-lg px-3 py-1.5 text-xs transition ${
                   fontSize === size
                     ? "bg-white/[0.1] font-medium text-ink"
                     : "text-faint"
