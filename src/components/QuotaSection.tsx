@@ -214,6 +214,7 @@ export function QuotaSection() {
                       key={w.key}
                       label={w.label}
                       percent={w.usagePercent}
+                      resetMs={w.resetsAt}
                     />
                   ))
                 ) : (

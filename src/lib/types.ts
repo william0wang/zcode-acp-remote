@@ -162,11 +162,13 @@ export interface GoUsageStats {
 
 // Ollama Cloud section (bridge 0.41.0): whichever windows the account's plan
 // exposes (legacy: 5h + Week; credit plans: Month). ollama.com returns
-// fractions only — no reset timestamps, so there is no resetsAt.
+// fractions only — the reset moments are derived hub-side (bridge 0.42.0)
+// and ride along when available (monthly drops out when its lookup fails).
 export interface OcWindowEntry {
   key: string;
   label: string;
   usagePercent: number;
+  resetsAt?: number;
 }
 
 export interface OllamaUsageStats {
