@@ -59,7 +59,7 @@
     "closeSession": "关闭会话",
     "closeSessionHint": "从列表中移除；编辑器中仍打开的会话会在下次使用时重新出现",
     "shutdownInstance": "关闭实例",
-    "shutdownInstanceHint": "终止该项目的后台 bridge。历史保留；重新打开会话会启动新的 bridge。",
+    "shutdownInstanceHint": "关闭运行该会话的终端窗口（或后台 bridge）。历史保留；重新打开会话会开新窗口。",
     "renameSession": "重命名",
     "renameSessionHint": "标题会同步显示在列表、编辑器和 ZCode 应用中",
     "renamePlaceholder": "会话名称",

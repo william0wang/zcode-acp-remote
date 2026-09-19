@@ -59,7 +59,7 @@
     "closeSession": "Close session",
     "closeSessionHint": "Removes it from this list. A conversation still open in the editor reappears on its next use.",
     "shutdownInstance": "Shut down instance",
-    "shutdownInstanceHint": "Terminates the background bridge for this project. History stays; re-opening a session starts a new bridge.",
+    "shutdownInstanceHint": "Closes the terminal window running this session (or its background bridge). History stays; re-opening a session starts a new window.",
     "renameSession": "Rename",
     "renameSessionHint": "The title shows here, in the editor, and in the ZCode app.",
     "renamePlaceholder": "Session name",

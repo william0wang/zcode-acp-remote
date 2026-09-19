@@ -284,8 +284,10 @@ export function SessionList({
                 {actionTarget.title || t("chat.untitled")}
               </h2>
               <p className="mt-1 text-xs text-faint">
-                {renaming
-                  ? t("chat.renameSessionHint")
+              {renaming
+                ? t("chat.renameSessionHint")
+                : actionTarget.origin === "serve"
+                  ? t("chat.shutdownInstanceHint")
                   : t("chat.closeSessionHint")}
               </p>
             </div>
@@ -332,17 +334,10 @@ export function SessionList({
                 >
                   {t("chat.renameSession")}
                 </button>
-                <button
-                  onClick={() => {
-                    const { instanceId, sessionId } = actionTarget;
-                    setActionTarget(null);
-                    void closeRemoteSession(instanceId, sessionId);
-                  }}
-                  className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
-                >
-                  {t("chat.closeSession")}
-                </button>
-                {actionTarget.origin === "serve" && (
+                {/* One destructive action per origin: app-incubated instances
+                    (serve) shut the whole window/bridge down — that IS the
+                    close; editor conversations only retire from this list. */}
+                {actionTarget.origin === "serve" ? (
                   <button
                     onClick={() => {
                       const { instanceId } = actionTarget;
@@ -352,6 +347,17 @@ export function SessionList({
                     className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
                   >
                     {t("chat.shutdownInstance")}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      const { instanceId, sessionId } = actionTarget;
+                      setActionTarget(null);
+                      void closeRemoteSession(instanceId, sessionId);
+                    }}
+                    className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+                  >
+                    {t("chat.closeSession")}
                   </button>
                 )}
                 <button
