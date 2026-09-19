@@ -68,6 +68,28 @@ function readReplayMeta(result: unknown): ReplayMeta | null {
     : null;
 }
 
+// zcode-acp-server version that started marking load_earlier page updates
+// `_meta.zcode.earlierPage` — the floor for the marker-based page routing.
+const PAGE_MARKER_BRIDGE_VERSION = "0.44.1";
+
+// Semver-ish floor check on the bridge's advertised agentInfo.version.
+// Unparseable versions read as NOT capable: the fallback (pre-marker
+// buffer-everything collection) is the safe behavior on any bridge.
+function bridgeSupportsPageMarker(version: unknown): boolean {
+  if (typeof version !== "string") return false;
+  const parts = version.split(".");
+  if (parts.length < 3) return false;
+  const nums = parts.slice(0, 3).map((p) => Number.parseInt(p, 10));
+  if (nums.some((n) => Number.isNaN(n))) return false;
+  const [major, minor, patch] = nums;
+  const floor = PAGE_MARKER_BRIDGE_VERSION.split(".").map((p) =>
+    Number.parseInt(p, 10),
+  ) as [number, number, number];
+  if (major !== floor[0]) return major > floor[0];
+  if (minor !== floor[1]) return minor > floor[1];
+  return patch >= floor[2];
+}
+
 // Validates an account/usage_stats result into the combined GLM + Opencode
 // Go + Ollama Cloud shape; null when the payload doesn't fit (treated like a
 // failed fetch). glm/opencode stay required, ollama is optional (older hubs).
@@ -262,6 +284,11 @@ interface AppState {
   // Bridge advertised session file access (initialize agentCapabilities
   // `_meta.zcode.fs`, server 0.7.0+); gates the file browser entry (ADR-0005).
   fsCapable: boolean;
+  // Bridge marks load_earlier page updates `_meta.zcode.earlierPage`
+  // (zcode-acp-server 0.44.1+); gates the marker-based page routing. Against
+  // an older bridge the unmarked pages fall back to the pre-marker
+  // buffer-everything collection.
+  pageMarkerCapable: boolean;
   loadingSession: boolean;
 
   init: () => void;
@@ -476,6 +503,7 @@ function connectionResetPatch(): Partial<AppState> {
     sessionStates: {},
     quotaUnavailable: false,
     fsCapable: false,
+    pageMarkerCapable: false,
     loadingSession: false,
     isRunning: false,
   };
@@ -649,6 +677,21 @@ export const useAppStore = create<AppState>((set, get) => {
     const zcode = (meta as { zcode?: { collapsed?: unknown } }).zcode;
     return (
       typeof zcode === "object" && zcode !== null && zcode.collapsed === true
+    );
+  }
+
+  // `_meta.zcode.earlierPage` on session/load_earlier paged updates — the
+  // bridge marks page replays so live-turn updates streaming while the page
+  // request is in flight can be told apart (they must append, not ride the
+  // prepend). Only consulted while pageMarkerCapable is true; older bridges
+  // fall back to buffering everything during the collection window.
+  function isEarlierPageMeta(meta: unknown): boolean {
+    if (typeof meta !== "object" || meta === null) return false;
+    const zcode = (meta as { zcode?: { earlierPage?: unknown } }).zcode;
+    return (
+      typeof zcode === "object" &&
+      zcode !== null &&
+      zcode.earlierPage === true
     );
   }
 
@@ -1252,6 +1295,7 @@ export const useAppStore = create<AppState>((set, get) => {
         elicitations: {},
         notice: "notice.instanceGone",
         fsCapable: false,
+        pageMarkerCapable: false,
         replayCursor: null,
         hasMore: false,
         totalMessages: null,
@@ -1311,7 +1355,19 @@ export const useAppStore = create<AppState>((set, get) => {
       },
       onUpdate: (sessionId, update, meta) => {
         if (stale()) return;
-        if (collectingEarlier && sessionId === get().activeSessionId) {
+        // Page updates ride the earlier buffer; live-turn updates streaming
+        // during the page request append normally instead of being prepended
+        // to the top with the page. On a marker-capable bridge (0.44.1+) the
+        // bridge marks pages on the update's own _meta (same placement as the
+        // tool-fold flags; notification-level meta as a fallback); an older
+        // bridge sends unmarked pages, so everything buffers as before.
+        if (
+          collectingEarlier &&
+          sessionId === get().activeSessionId &&
+          (!get().pageMarkerCapable ||
+            isEarlierPageMeta((update as { _meta?: unknown })._meta) ||
+            isEarlierPageMeta(meta))
+        ) {
           earlierBuffer.push({ sessionId, u: update, meta });
           return;
         }
@@ -1425,7 +1481,12 @@ export const useAppStore = create<AppState>((set, get) => {
       const init = await conn.connect();
       if (stale()) return;
       connectingSince = 0;
-      set({ fsCapable: init.agentCapabilities?._meta?.zcode?.fs === true });
+      set({
+        fsCapable: init.agentCapabilities?._meta?.zcode?.fs === true,
+        pageMarkerCapable: bridgeSupportsPageMarker(
+          (init.agentInfo as { version?: unknown } | undefined)?.version,
+        ),
+      });
       const active = get().activeSessionId;
       if (active) {
         // Replay is the catch-up mechanism after any disconnect.
@@ -1481,6 +1542,7 @@ export const useAppStore = create<AppState>((set, get) => {
     sessionStates: {},
     quotaUnavailable: false,
     fsCapable: false,
+    pageMarkerCapable: false,
     loadingSession: false,
 
     init: () => {
@@ -1722,6 +1784,7 @@ export const useAppStore = create<AppState>((set, get) => {
         usage: null,
         availableCommands: [],
         fsCapable: false,
+        pageMarkerCapable: false,
         // usageStats stays: quota is hub-level (/api/quota), not tied to the
         // instance connection — switching instances must not blank the card.
         sessionStates: {},
@@ -1940,6 +2003,7 @@ export const useAppStore = create<AppState>((set, get) => {
         elicitations: {},
         notice: "notice.instanceShutdown",
         fsCapable: false,
+        pageMarkerCapable: false,
         replayCursor: null,
         hasMore: false,
         totalMessages: null,
