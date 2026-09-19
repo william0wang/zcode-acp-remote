@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 import { ChatView } from "../chat/ChatView";
 import { Drawer } from "../components/Drawer";
+import { ProjectCreateDialog } from "../components/ProjectCreateDialog";
+import { ProjectHistoryDialog } from "../components/ProjectHistoryDialog";
+import { SettingsPanel } from "../components/SidePanel";
 import { SessionPanel } from "../components/SessionPanel";
 import { FileBrowser } from "../components/FileBrowser";
 import { PermissionDialog } from "../components/PermissionDialog";
@@ -70,6 +73,11 @@ export function ChatScreen() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  // Session-independent overlays reachable from the drawer: they live here,
+  // not in the drawer, which unmounts (and would take them down) on close.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const instances = useAppStore((s) => s.instances);
   const instanceId = useAppStore((s) => s.instanceId);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -213,8 +221,24 @@ export function ChatScreen() {
         <ChatView />
       </div>
 
-      {drawerOpen && <Drawer onClose={() => setDrawerOpen(false)} />}
+      {drawerOpen && (
+        <Drawer
+          onClose={() => setDrawerOpen(false)}
+          onCreate={() => setCreateOpen(true)}
+          onHistory={() => setHistoryOpen(true)}
+          onSettings={() => setSettingsOpen(true)}
+        />
+      )}
       {panelOpen && <SessionPanel onClose={() => setPanelOpen(false)} />}
+      {createOpen && (
+        <ProjectCreateDialog onClose={() => setCreateOpen(false)} />
+      )}
+      {historyOpen && (
+        <ProjectHistoryDialog onClose={() => setHistoryOpen(false)} />
+      )}
+      {settingsOpen && (
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      )}
       {filesOpen && <FileBrowser onClose={() => setFilesOpen(false)} />}
       <PermissionDialog />
       <ElicitationDialog />

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderPlus, Loader2, Search } from "lucide-react";
 import { HubApiError, HubClient } from "../lib/hub";
@@ -25,6 +25,18 @@ export function ProjectCreateDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState<string | null>(null);
+
+  // This sheet now also opens from inside a session. A post-connect failure
+  // leaves activeSessionId null, so the route to InstancePicker takes over and
+  // unmounts us before the action resolves — consuming the notice here would
+  // swallow it. When we are already gone, let the destination banner show it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!profile) return;
@@ -53,15 +65,22 @@ export function ProjectCreateDialog({ onClose }: { onClose: () => void }) {
     if (creating) return;
     setCreating(workspacePath);
     setError(null);
-    await createProjectSession(workspacePath);
-    // Success swaps the route to ChatScreen and unmounts this dialog with
-    // the picker. Failure sets `notice` — surface it HERE as well: this
-    // dialog's full-screen overlay hides the picker's notice banner.
-    if (useAppStore.getState().activeSessionId) return;
+    // The action reports success itself: this sheet can open from the entry
+    // screen (route swap unmounts it) OR from the in-session drawer, where
+    // nothing unmounts and a route-swap heuristic would misread the result.
+    const ok = await createProjectSession(workspacePath);
+    if (ok) {
+      onClose();
+      return;
+    }
+    // Unmounted mid-flight: the destination screen owns the notice.
+    if (!mounted.current) return;
+    // Failure sets `notice` — surface it HERE as well: this dialog's
+    // full-screen overlay hides the picker's (or the chat's) notice banner.
     const n = useAppStore.getState().notice;
     if (n) {
       setError(n.startsWith("notice.") ? t(n) : n);
-      // Consumed here — don't repeat it on the picker banner after close.
+      // Consumed here — don't repeat it on the banner after close.
       useAppStore.getState().dismissNotice();
     }
     setCreating(null);

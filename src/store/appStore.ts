@@ -328,15 +328,19 @@ interface AppState {
   ) => Promise<void>;
   // Remote session-create (bridge 0.17.0, ADR-0014): create/reuse a headless
   // serve bridge for a known project and open a FRESH session in it.
-  createProjectSession: (workspacePath: string) => Promise<void>;
+  // Resolves true only when the session is actually the active one — callers
+  // cannot infer it from a route swap (the sheet may open from inside a
+  // session too, where nothing unmounts).
+  createProjectSession: (workspacePath: string) => Promise<boolean>;
   // Resume a CLOSED session from the project history listing (bridge 0.19.0,
   // ADR-0015): create/reuse the workspace's serve bridge (usually reused:true
   // with the listing's instance), then attach and session/load the store id —
-  // the normal connect path replays the history.
+  // the normal connect path replays the history. Resolves true only on a
+  // successful attach (see createProjectSession).
   resumeProjectSession: (
     workspacePath: string,
     sessionId: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Foreground wake hook: proves the WS pipe is actually alive (Android deep
   // sleep leaves zombie sockets that never fire onclose) and reconnects if
@@ -1818,7 +1822,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // prompt lands it in discovery — normal, not an error.
     createProjectSession: async (workspacePath) => {
       const client = hub();
-      if (!client) return;
+      if (!client) return false;
       let created: HubCreateInstanceResult;
       try {
         created = await client.createInstance(workspacePath);
@@ -1829,7 +1833,7 @@ export const useAppStore = create<AppState>((set, get) => {
               ? "notice.projectUnknown"
               : `create session failed: ${e instanceof Error ? e.message : String(e)}`,
         });
-        return;
+        return false;
       }
       // Discovery refresh (best-effort) so the new instance shows in the
       // list; the connection itself does not depend on it.
@@ -1842,7 +1846,7 @@ export const useAppStore = create<AppState>((set, get) => {
         // between registration and connect); scheduleReconnect owns the
         // retry. Surface it or pick() silently restores its buttons.
         set({ notice: "create session failed: instance connection failed" });
-        return;
+        return false;
       }
       try {
         // cwd is REQUIRED by the ACP schema — a request without it is
@@ -1869,10 +1873,12 @@ export const useAppStore = create<AppState>((set, get) => {
             workspace: workspacePath,
           }),
         }));
+        return true;
       } catch (e) {
         set({
           notice: `create session failed: ${e instanceof Error ? e.message : String(e)}`,
         });
+        return false;
       }
     },
 
@@ -1884,7 +1890,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // instance, sharing the bridge (and backend process) with the window.
     resumeProjectSession: async (workspacePath, sessionId) => {
       const client = hub();
-      if (!client) return;
+      if (!client) return false;
       let created: HubCreateInstanceResult;
       try {
         created = await client.createInstance(workspacePath, sessionId);
@@ -1895,18 +1901,23 @@ export const useAppStore = create<AppState>((set, get) => {
               ? "notice.projectUnknown"
               : `resume session failed: ${e instanceof Error ? e.message : String(e)}`,
         });
-        return;
+        return false;
       }
       // Discovery refresh (best-effort) so the instance shows in the lists.
       void get()
         .refreshInstances()
         .catch(() => undefined);
       await get().connectInstance(created.id, sessionId);
-      if (get().connState !== "open") {
+      // The attach (session/load) sets activeSessionId synchronously before it
+      // issues the request, so a non-null id is the same signal the old caller
+      // used — kept explicit here rather than inferred from the route swap.
+      if (get().connState !== "open" || !get().activeSessionId) {
         // POST succeeded but the WS never opened; scheduleReconnect owns the
         // retry. Surface it or pick() silently restores its buttons.
         set({ notice: "resume session failed: instance connection failed" });
+        return false;
       }
+      return true;
     },
 
     // One tap from the flat session list: may need to switch bridge instance

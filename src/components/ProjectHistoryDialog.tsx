@@ -46,6 +46,18 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
   // cursor would corrupt the new project's pagination.
   const listSeq = useRef(0);
 
+  // This sheet now also opens from inside a session. A post-connect failure
+  // leaves activeSessionId null, so the route to InstancePicker takes over and
+  // unmounts us before the action resolves — consuming the notice here would
+  // swallow it. When we are already gone, let the destination banner show it.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!profile) return;
     const client = new HubClient(profile.hubUrl, profile.token);
@@ -125,15 +137,22 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     if (resuming || !selected) return;
     setResuming(sessionId);
     setListError(null);
-    await resumeProjectSession(selected, sessionId);
-    // Success swaps the route to ChatScreen and unmounts this dialog with
-    // the picker. Failure sets `notice` — surface it HERE as well: this
-    // dialog's full-screen overlay hides the picker's notice banner.
-    if (useAppStore.getState().activeSessionId) return;
+    // The action reports success itself: this sheet can open from the entry
+    // screen (route swap unmounts it) OR from the in-session drawer, where
+    // nothing unmounts and a route-swap heuristic would misread the result.
+    const ok = await resumeProjectSession(selected, sessionId);
+    if (ok) {
+      onClose();
+      return;
+    }
+    // Unmounted mid-flight: the destination screen owns the notice.
+    if (!mounted.current) return;
+    // Failure sets `notice` — surface it HERE as well: this dialog's
+    // full-screen overlay hides the picker's (or the chat's) notice banner.
     const n = useAppStore.getState().notice;
     if (n) {
       setListError(n.startsWith("notice.") ? t(n) : n);
-      // Consumed here — don't repeat it on the picker banner after close.
+      // Consumed here — don't repeat it on the banner after close.
       useAppStore.getState().dismissNotice();
     }
     setResuming(null);

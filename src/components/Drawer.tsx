@@ -1,12 +1,33 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { List, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft,
+  FolderPlus,
+  History,
+  RefreshCw,
+  SlidersHorizontal,
+} from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { SessionList } from "./SessionList";
 
-// Left drawer = session switching only. Config, quota and language live in
-// the right-side SidePanel so this list stays scannable.
-export function Drawer({ onClose }: { onClose: () => void }) {
+// Left drawer = session switching plus the session-independent actions
+// (create / resume / global settings) that used to be reachable only after
+// leaving the session: they are entry-screen features, not session features,
+// so there is no reason to force a trip back to the picker for them.
+// Config and quota stay in the right-side SessionPanel.
+// The overlays themselves are owned by ChatScreen: this drawer unmounts on
+// close, so any dialog mounted here would die with it.
+export function Drawer({
+  onClose,
+  onCreate,
+  onHistory,
+  onSettings,
+}: {
+  onClose: () => void;
+  onCreate: () => void;
+  onHistory: () => void;
+  onSettings: () => void;
+}) {
   const { t } = useTranslation();
   const instances = useAppStore((s) => s.instances);
   const instanceId = useAppStore((s) => s.instanceId);
@@ -36,16 +57,60 @@ export function Drawer({ onClose }: { onClose: () => void }) {
         className="flex h-full w-80 max-w-[85%] flex-col overflow-hidden border-r border-hairline bg-surface pt-[max(var(--safe-top),0.75rem)] text-ink"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 items-center justify-between px-4 pb-1">
-          <h2 className="text-[11px] font-medium uppercase tracking-wide text-faint">
-            {t("chat.sessions")}
-          </h2>
+        {/* Header carries every drawer action as icons: back-to-list on the
+            left, then the session-independent set the entry screen shows. No
+            title (the list below is all sessions) and no footer rows — the
+            icons get full-size touch targets and the list owns the rest of
+            the height. Each action closes this drawer first so its overlay
+            opens alone (single-overlay handoff, same as the session rows). */}
+        <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
+          <button
+            onClick={() => {
+              onClose();
+              closeSession();
+            }}
+            aria-label={t("chat.backToSessions")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <ArrowLeft className="size-4.5" />
+          </button>
+          <span className="flex-1" />
+          <button
+            onClick={() => {
+              onClose();
+              onHistory();
+            }}
+            aria-label={t("historyDialog.title")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <History className="size-4.5" />
+          </button>
+          <button
+            onClick={() => {
+              onClose();
+              onCreate();
+            }}
+            aria-label={t("projectDialog.title")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <FolderPlus className="size-4.5" />
+          </button>
           <button
             onClick={() => void refreshInstances({ probe: true })}
             aria-label={t("picker.refresh")}
-            className="flex size-8 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
           >
-            <RefreshCw className="size-4" />
+            <RefreshCw className="size-4.5" />
+          </button>
+          <button
+            onClick={() => {
+              onClose();
+              onSettings();
+            }}
+            aria-label={t("panel.title")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <SlidersHorizontal className="size-4.5" />
           </button>
         </div>
         <SessionList
@@ -61,19 +126,6 @@ export function Drawer({ onClose }: { onClose: () => void }) {
           }}
           emptyHint={t("chat.noSessions")}
         />
-
-        {/* Full-screen list entry: leaving the session belongs here, not in
-            the chat header. */}
-        <button
-          onClick={() => {
-            onClose();
-            closeSession();
-          }}
-          className="flex shrink-0 items-center gap-2 border-t border-hairline bg-surface px-4 py-3 text-left active:bg-white/[0.05]"
-        >
-          <List className="size-4 shrink-0 text-faint" />
-          <span className="text-sm text-dim">{t("chat.backToSessions")}</span>
-        </button>
       </aside>
     </div>
   );
