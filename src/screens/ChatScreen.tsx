@@ -89,15 +89,16 @@ export function ChatScreen() {
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const notify = useAppStore((s) => s.notify);
 
-  // Android download feedback (MainActivity): the WebView hands file
-  // downloads to the system DownloadManager, which the page cannot observe
-  // directly — the native side reports started/done/failed over this DOM
-  // event. Lives here, not in FileViewer, because a download can finish
+  // Android download feedback (MainActivity): the fallback path (pre-Android
+  // 10) hands file downloads to the system DownloadManager, which the page
+  // cannot observe directly — the native side reports started/done/failed
+  // over this DOM event, with the DownloadManager failure reason attached.
+  // Lives here, not in FileViewer, because a download can finish
   // after the viewer has closed.
   useEffect(() => {
     const onDownload = (e: Event) => {
-      const { name, state } = (
-        e as CustomEvent<{ name: string; state: string }>
+      const { name, state, reason } = (
+        e as CustomEvent<{ name: string; state: string; reason?: string | null }>
       ).detail;
       if (!name) return;
       notify(
@@ -105,7 +106,9 @@ export function ChatScreen() {
           ? t("viewer.downloadStarted", { name })
           : state === "done"
             ? t("viewer.downloadDone", { name })
-            : t("viewer.downloadFailed", { name }),
+            : t("viewer.downloadFailed", {
+                name: reason ? `${name} (${reason})` : name,
+              }),
       );
     };
     window.addEventListener("zcode:download", onDownload);

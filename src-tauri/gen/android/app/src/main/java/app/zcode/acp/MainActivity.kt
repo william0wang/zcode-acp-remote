@@ -38,7 +38,11 @@ class MainActivity : TauriActivity() {
         override fun onReceive(ctx: Context, intent: Intent) {
           val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
           val name = downloadNames.remove(id) ?: return
-          emitDownloadEvent(name, if (downloadSucceeded(id)) "done" else "failed")
+          if (downloadSucceeded(id)) {
+            emitDownloadEvent(name, "done")
+          } else {
+            emitDownloadEvent(name, "failed", downloadFailureReason(id))
+          }
         }
       },
       IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
@@ -113,10 +117,39 @@ class MainActivity : TauriActivity() {
     false
   }
 
+  // Short, stable reason token for failure toasts — DownloadManager failures
+  // (e.g. its own network stack being unable to reach the server) would
+  // otherwise be indistinguishable from a generic "failed".
+  private fun downloadFailureReason(id: Long): String = try {
+    val cursor = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager)
+      .query(DownloadManager.Query().setFilterById(id))
+    cursor.use { c ->
+      if (!c.moveToFirst()) return "UNKNOWN"
+      val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+      val code = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+      when {
+        code == DownloadManager.STATUS_FAILED -> when (reason) {
+          DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "FILE_ALREADY_EXISTS"
+          DownloadManager.ERROR_INSUFFICIENT_SPACE -> "INSUFFICIENT_SPACE"
+          DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "UNHANDLED_HTTP_CODE"
+          DownloadManager.ERROR_HTTP_DATA_ERROR -> "HTTP_DATA_ERROR"
+          else -> "ERROR_$reason"
+        }
+        else -> "STATUS_$code"
+      }
+    }
+  } catch (e: Exception) {
+    "UNKNOWN"
+  }
+
   // The payload is a JSON object literal spliced into JS source, so any
   // filename survives the crossing escaped.
-  private fun emitDownloadEvent(name: String, state: String) {
-    val payload = JSONObject().put("name", name).put("state", state).toString()
+  private fun emitDownloadEvent(name: String, state: String, reason: String? = null) {
+    val payload = JSONObject()
+      .put("name", name)
+      .put("state", state)
+      .put("reason", reason ?: JSONObject.NULL)
+      .toString()
     appWebView?.post {
       appWebView?.evaluateJavascript(
         "window.dispatchEvent(new CustomEvent('zcode:download',{detail:$payload}))",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 // core + registered subset instead of lib/common: the full common set adds
 // ~200 KB minified to the APK for languages this viewer never renders.
@@ -481,6 +482,7 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   const fsFileUrl = useAppStore((s) => s.fsFileUrl);
   const notify = useAppStore((s) => s.notify);
   const [sharing, setSharing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   // Unknown kinds AND oversized text files can be forced into the text
   // viewer — binary content shows as garbage, which the user can see and
   // back out of.
@@ -533,21 +535,53 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
     }
   };
 
-  // dl=1 makes the bridge answer with Content-Disposition: attachment, so
-  // the WebView fires its DownloadListener (MainActivity routes it into the
-  // system DownloadManager) instead of navigating to the file. Needs bridge
-  // 0.11.8+; an older bridge ignores the flag and the WebView renders the
-  // file inline — the system back button returns to the app. MainActivity
-  // reports started/done/failed via the zcode:download event (toasted in
-  // ChatScreen) — this click itself stays fire-and-forget.
-  const downloadFile = () => {
-    if (!url) return;
+  // The invoke bridge only exists inside the Tauri app shell; the web build
+  // (deployed for iOS/desktop browsers) has no __TAURI_INTERNALS__ and must
+  // take the anchor path directly — invoke() would throw a bare TypeError.
+  const canInvoke =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  // Primary download path: fetch and save inside the app process (Rust
+  // download_file command → DownloadBridge plugin → MediaStore). The system
+  // DownloadManager runs in its own process with its own network stack — on
+  // split-tunnel VPNs it cannot reach the intranet hub the app itself can,
+  // so its downloads fail with a generic toast. Result toasts here are
+  // direct; no zcode:download event round-trip.
+  const anchorDownload = () => {
+    // Browsers honor Content-Disposition: attachment natively; on Android
+    // (<10 or DM_FALLBACK) MainActivity hands it to the system
+    // DownloadManager instead. Needs bridge 0.11.8+ for the dl=1 flag; an
+    // older bridge renders the file inline — back returns to the app.
     const a = document.createElement("a");
     a.href = `${url}&dl=1`;
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const downloadFile = async () => {
+    if (!url || downloading) return;
+    if (!canInvoke) {
+      anchorDownload();
+      return;
+    }
+    setDownloading(true);
+    notify(t("viewer.downloadStarted", { name: file.name }));
+    try {
+      const saved = await invoke<string>("download_file", { url, name: file.name });
+      notify(t("viewer.downloadDone", { name: saved || file.name }));
+    } catch (e) {
+      // Pre-Android-10: MediaStore.Downloads is unavailable, so hand the
+      // URL to the system DownloadManager via an anchor click.
+      if (String(e).includes("DM_FALLBACK")) {
+        anchorDownload();
+      } else {
+        notify(t("viewer.downloadFailed", { name: file.name }));
+      }
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -618,9 +652,14 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
             <div className="flex items-center gap-2">
               <button
                 onClick={downloadFile}
-                className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2 text-sm text-white active:bg-blue-500"
+                disabled={downloading}
+                className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2 text-sm text-white active:bg-blue-500 disabled:opacity-50"
               >
-                <Download className="size-4" />
+                {downloading ? (
+                  <Spinner className="size-4" />
+                ) : (
+                  <Download className="size-4" />
+                )}
                 {t("viewer.download")}
               </button>
               {canShareFiles && (
