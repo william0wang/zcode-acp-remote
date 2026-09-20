@@ -2177,14 +2177,22 @@ export const useAppStore = create<AppState>((set, get) => {
         // turnState end event does the flushing then).
         flushPending();
       } catch (e) {
-        set({
+        // Drop the in-flight batch AND the partially-applied replay: the
+        // wire may have delivered half the tail notifications before the
+        // failure, and flushing (or keeping) them paints a mid-conversation
+        // stub that reads as reordered history until the next reload. The
+        // reconnect replay is the only catch-up — until it lands, show
+        // nothing rather than a half.
+        dropQueuedUpdates();
+        set((s) => ({
           // Transient connection failures stay quiet: the reconnect banner
           // owns them, and the post-reconnect replay supersedes this error.
           ...(isTransientConnError(e)
             ? null
             : { notice: `session/load failed: ${(e as Error).message}` }),
           loadingSession: false,
-        });
+          ...(s.activeSessionId === sessionId ? { messages: [] } : {}),
+        }));
       }
     },
 
