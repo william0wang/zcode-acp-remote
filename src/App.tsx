@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect } from "react";
+import type { ReactNode } from "react";
 import { useAppStore } from "./store/appStore";
 import { ConnectScreen } from "./screens/ConnectScreen";
 import { InstancePicker } from "./screens/InstancePicker";
+import { NoticeToast } from "./components/NoticeToast";
 import { Spinner } from "./components/Spinner";
 
 // ChatScreen carries the chat engine + diff/lightbox/highlight stack (~63%
@@ -24,23 +26,32 @@ export default function App() {
     init();
   }, [init]);
 
-  if (!profile) return <ConnectScreen />;
+  let body: ReactNode;
+  if (!profile) body = <ConnectScreen />;
   // Server manager overlay: browses/edits saved servers WITHOUT dropping the
   // live connection; switching or adding a server clears manageOpen itself.
-  if (manageOpen) return <ConnectScreen onClose={closeServerManager} />;
+  else if (manageOpen) body = <ConnectScreen onClose={closeServerManager} />;
   // The instance connection outlives the open session (closeSession keeps
   // it so the list keeps receiving broadcast activity) — the chat screen
   // needs BOTH an instance and an attached session.
-  if (!instanceId || !activeSessionId) return <InstancePicker />;
+  else if (!instanceId || !activeSessionId) body = <InstancePicker />;
+  else
+    body = (
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center bg-canvas">
+            <Spinner className="size-6" />
+          </div>
+        }
+      >
+        <ChatScreen />
+      </Suspense>
+    );
+  // Toasts live above every screen (including the z-50 file overlays).
   return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center bg-canvas">
-          <Spinner className="size-6" />
-        </div>
-      }
-    >
-      <ChatScreen />
-    </Suspense>
+    <>
+      {body}
+      <NoticeToast />
+    </>
   );
 }

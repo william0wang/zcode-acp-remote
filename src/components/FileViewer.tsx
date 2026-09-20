@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 // core + registered subset instead of lib/common: the full common set adds
 // ~200 KB minified to the APK for languages this viewer never renders.
@@ -477,12 +477,22 @@ interface FileViewerProps {
   onExit?: () => void;
 }
 
+// invoke() rejections carry the native error string; keep it short enough
+// for a toast line.
+function reasonOf(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e);
+  return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+}
+
 export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   const { t } = useTranslation();
   const fsFileUrl = useAppStore((s) => s.fsFileUrl);
   const notify = useAppStore((s) => s.notify);
   const [sharing, setSharing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Percent (0-99) reported by the native download; null = unknown size or
+  // no native progress (spinner fallback).
+  const [progress, setProgress] = useState<number | null>(null);
   // Unknown kinds AND oversized text files can be forced into the text
   // viewer — binary content shows as garbage, which the user can see and
   // back out of.
@@ -541,6 +551,37 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   const canInvoke =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+  // Native download progress from the DownloadBridge plugin. Only registered
+  // under the Tauri shell — the web build has no plugin layer.
+  useEffect(() => {
+    if (!canInvoke) return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    addPluginListener<{ received: number; total: number }>(
+      "download",
+      "progress",
+      ({ received, total }) => {
+        setProgress(
+          total > 0
+            ? Math.min(99, Math.floor((received / total) * 100))
+            : null,
+        );
+      },
+    ).then(
+      (l) => {
+        if (alive) unlisten = () => l.unregister();
+        else l.unregister();
+      },
+      // Desktop shell: an unregistered listener must not surface as an
+      // unhandled rejection.
+      () => {},
+    );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [canInvoke]);
+
   // Primary download path: fetch and save inside the app process (Rust
   // download_file command → DownloadBridge plugin → MediaStore). The system
   // DownloadManager runs in its own process with its own network stack — on
@@ -577,10 +618,18 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
       if (String(e).includes("DM_FALLBACK")) {
         anchorDownload();
       } else {
-        notify(t("viewer.downloadFailed", { name: file.name }));
+        // Keep the underlying cause (HTTP status, timeout, TLS…) — the
+        // bare label left download failures undiagnosable from the phone.
+        notify(
+          t("viewer.downloadFailedReason", {
+            name: file.name,
+            reason: reasonOf(e),
+          }),
+        );
       }
     } finally {
       setDownloading(false);
+      setProgress(null);
     }
   };
 
@@ -660,7 +709,9 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
                 ) : (
                   <Download className="size-4" />
                 )}
-                {t("viewer.download")}
+                {downloading && progress !== null
+                  ? t("viewer.downloadProgress", { pct: progress })
+                  : t("viewer.download")}
               </button>
               {canShareFiles && (
                 <button

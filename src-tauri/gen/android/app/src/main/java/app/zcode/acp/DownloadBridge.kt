@@ -39,9 +39,27 @@ class DownloadBridge(private val activity: Activity) : Plugin(activity) {
       try {
         invoke.resolve(JSObject().put("name", downloadToDownloads(args.url, args.name)))
       } catch (e: Exception) {
-        invoke.reject(e.message ?: "download failed")
+        // Keep the exception class in the message — a bare message like
+        // "timeout" or a hostname alone is not diagnosable from a toast.
+        val msg = e.message
+        invoke.reject(
+          if (msg.isNullOrBlank()) e.javaClass.simpleName
+          else "${e.javaClass.simpleName}: $msg"
+        )
       }
     }.start()
+  }
+
+  // Progress goes to the page as plugin events ("download" / "progress" via
+  // addPluginListener). Only whole-percent hops are emitted so a large file
+  // doesn't flood the bridge. runOnUiThread: trigger touches the WebView.
+  private fun emitProgress(received: Long, total: Long) {
+    val data = JSObject()
+    data.put("received", received)
+    data.put("total", total)
+    activity.runOnUiThread {
+      trigger("progress", data)
+    }
   }
 
   // HttpURLConnection never follows cross-protocol (http<->https)
@@ -96,7 +114,25 @@ class DownloadBridge(private val activity: Activity) : Plugin(activity) {
         ?: throw IOException("MediaStore insert failed")
       try {
         resolver.openOutputStream(uri)?.use { out ->
-          conn.inputStream.use { it.copyTo(out, 64 * 1024) }
+          conn.inputStream.use { input ->
+            val total = conn.contentLengthLong
+            val buf = ByteArray(64 * 1024)
+            var n = input.read(buf)
+            var read = 0L
+            var lastPct = -1
+            while (n >= 0) {
+              out.write(buf, 0, n)
+              read += n
+              if (total > 0) {
+                val pct = ((read * 100) / total).toInt()
+                if (pct != lastPct && pct < 100) {
+                  lastPct = pct
+                  emitProgress(read, total)
+                }
+              }
+              n = input.read(buf)
+            }
+          }
         } ?: throw IOException("output stream unavailable")
         values.clear()
         values.put(MediaStore.Downloads.IS_PENDING, 0)

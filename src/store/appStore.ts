@@ -278,6 +278,12 @@ interface AppState {
   // once ANY client advertises elicitation.form — capabilities OR-merge).
   elicitations: Record<string, PendingElicitation>;
   notice: string | null;
+  // Ephemeral one-shot feedback (downloads, copies, share results) with its
+  // own auto-clear timer. Separate from `notice` because the banner only
+  // renders on the picker/chat screens — toasts raised inside the z-50
+  // full-screen overlays (FileBrowser/FileViewer) were invisible there,
+  // which read as "download failed with no feedback at all".
+  toast: { id: number; text: string } | null;
   // Pagination state from the attach response's replayMeta.
   replayCursor: string | null;
   hasMore: boolean;
@@ -420,13 +426,18 @@ interface AppState {
     content: Record<string, string | string[]> | null,
   ) => void;
   dismissNotice: () => void;
-  // Ephemeral UI feedback (copy confirmations etc.); auto-clears with the
-  // existing notice banner.
+  // Ephemeral UI feedback (download progress, copy confirmations); renders
+  // above every overlay and auto-clears.
   notify: (text: string) => void;
+  dismissToast: () => void;
 }
 
 // Module singletons: connection + timers live outside React state.
 let acp: AcpConnection | null = null;
+// Toast auto-clear; the id guards against a stale timer clearing a newer toast.
+const TOAST_MS = 4000;
+let toastSeq = 0;
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
 // Events from superseded connections must be ignored (their async onclose
 // can fire after a new connection to the SAME instance was started).
 let connSeq = 0;
@@ -1661,6 +1672,7 @@ export const useAppStore = create<AppState>((set, get) => {
     permissions: {},
     elicitations: {},
     notice: null,
+    toast: null,
     replayCursor: null,
     hasMore: false,
     totalMessages: null,
@@ -2667,7 +2679,24 @@ export const useAppStore = create<AppState>((set, get) => {
 
     dismissNotice: () => set({ notice: null }),
 
-    notify: (text) => set({ notice: text }),
+    notify: (text) => {
+      const id = ++toastSeq;
+      set({ toast: { id, text } });
+      if (toastTimer) clearTimeout(toastTimer);
+      // A newer toast (higher id) resets the timer; the stale one is a no-op.
+      toastTimer = setTimeout(() => {
+        toastTimer = null;
+        set((s) => (s.toast?.id === id ? { toast: null } : s));
+      }, TOAST_MS);
+    },
+
+    dismissToast: () => {
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      set({ toast: null });
+    },
   };
 });
 

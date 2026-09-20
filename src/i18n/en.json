@@ -176,8 +176,10 @@
     "lineCap": "Viewer limit reached (10,000 lines)",
     "longLines": "Long lines truncated",
     "downloadStarted": "Downloading {{name}}…",
+    "downloadProgress": "Downloading {{pct}}%",
     "downloadDone": "{{name}} saved to Downloads",
     "downloadFailed": "Download failed: {{name}}",
+    "downloadFailedReason": "Download failed: {{name}} ({{reason}})",
     "preview": "Preview",
     "source": "Source"
   }
