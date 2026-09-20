@@ -37,6 +37,7 @@
     "loadingSession": "正在加载会话…",
     "plan": "计划",
     "untitled": "未命名会话",
+    "cacheHit": "缓存 {{pct}}%",
     "thinking": "思考中…",
     "thought": "思考过程",
     "contextHandoff": "前序会话摘要",

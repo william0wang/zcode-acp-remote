@@ -90,6 +90,27 @@ function bridgeSupportsPageMarker(version: unknown): boolean {
   return patch >= floor[2];
 }
 
+// Last-turn prompt-cache hit rate (percent) from a session/prompt response
+// usage: cachedRead / (input + cachedRead + cachedWrite), the ACP de-facto
+// convention. inputTokens is already cache-exclusive — the bridge normalizes
+// the backend's OpenAI-style inclusive counts. Null when the turn reported
+// no cache numbers at all (caller keeps the previous rate then).
+function cacheHitRate(u: unknown): number | null {
+  const v = u as
+    | {
+        inputTokens?: unknown;
+        cachedReadTokens?: unknown;
+        cachedWriteTokens?: unknown;
+      }
+    | null;
+  if (!v || typeof v !== "object") return null;
+  if (typeof v.cachedReadTokens !== "number") return null;
+  const input = typeof v.inputTokens === "number" ? v.inputTokens : 0;
+  const write = typeof v.cachedWriteTokens === "number" ? v.cachedWriteTokens : 0;
+  const denom = input + v.cachedReadTokens + write;
+  return denom > 0 ? Math.round((v.cachedReadTokens / denom) * 100) : null;
+}
+
 // Validates an account/usage_stats result into the combined GLM + Opencode
 // Go + Ollama Cloud shape; null when the payload doesn't fit (treated like a
 // failed fetch). glm/opencode stay required, ollama is optional (older hubs).
@@ -267,6 +288,9 @@ interface AppState {
   configOptions: ConfigOption[];
   currentModeId: string | null;
   usage: ContextUsage | null;
+  // Last turn's prompt-cache hit rate (percent), from the session/prompt
+  // response usage. Null until a turn reports cache numbers.
+  cacheHit: number | null;
   // Slash commands from available_commands_update (overwrite semantics),
   // driving the "/" completion menu in the composer.
   availableCommands: SlashCommand[];
@@ -501,6 +525,7 @@ function connectionResetPatch(): Partial<AppState> {
     configOptions: [],
     currentModeId: null,
     usage: null,
+    cacheHit: null,
     availableCommands: [],
     usageStats: null,
     usageStatsAt: null,
@@ -1307,6 +1332,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        cacheHit: null,
         availableCommands: [],
         // usageStats stays (hub-level quota, not instance-scoped) — nothing
         // re-fetches it here, so clearing would blank the card until the
@@ -1540,6 +1566,7 @@ export const useAppStore = create<AppState>((set, get) => {
     configOptions: [],
     currentModeId: null,
     usage: null,
+    cacheHit: null,
     availableCommands: [],
     usageStats: null,
     usageStatsAt: null,
@@ -1786,6 +1813,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        cacheHit: null,
         availableCommands: [],
         fsCapable: false,
         pageMarkerCapable: false,
@@ -2022,6 +2050,7 @@ export const useAppStore = create<AppState>((set, get) => {
         configOptions: [],
         currentModeId: null,
         usage: null,
+        cacheHit: null,
         availableCommands: [],
         // usageStats stays (hub-level quota, not instance-scoped).
         sessionStates: {},
@@ -2096,6 +2125,7 @@ export const useAppStore = create<AppState>((set, get) => {
           configOptions: [],
           currentModeId: null,
           usage: null,
+          cacheHit: null,
           availableCommands: [],
           loadingSession: false,
           isRunning: false,
@@ -2132,6 +2162,7 @@ export const useAppStore = create<AppState>((set, get) => {
           configOptions: [],
           currentModeId: null,
           usage: null,
+          cacheHit: null,
           availableCommands: [],
           loadingSession: true,
         };
@@ -2412,7 +2443,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ isRunning: true });
       localPromptActive = true;
       try {
-        await acp.request("session/prompt", {
+        const result = (await acp.request("session/prompt", {
           sessionId,
           prompt: [
             ...(draft.text ? [{ type: "text", text: draft.text }] : []),
@@ -2422,7 +2453,14 @@ export const useAppStore = create<AppState>((set, get) => {
               mimeType: img.mimeType,
             })),
           ],
-        });
+        })) as { usage?: unknown } | null;
+        // Per-turn usage rides the prompt response (UNSTABLE ACP field).
+        // Turns that report no cache numbers keep the previous rate.
+        const hit = cacheHitRate(result?.usage);
+        if (hit !== null)
+          set((s) =>
+            s.activeSessionId === sessionId ? { cacheHit: hit } : {},
+          );
       } catch (e) {
         // A dropped connection kills the in-flight prompt, but the reconnect
         // replay rebuilds the truth — stay quiet and let the banner speak.

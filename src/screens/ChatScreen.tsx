@@ -121,6 +121,7 @@ export function ChatScreen() {
   );
   const workspace = baseName(instance?.workspace);
   const messages = useAppStore((s) => s.messages);
+  const cacheHit = useAppStore((s) => s.cacheHit);
 
   // Discovery titles are often absent; fall back to the first user message
   // of the replayed history, then to the placeholder.
@@ -166,6 +167,8 @@ export function ChatScreen() {
               {usage &&
                 usage.size > 0 &&
                 ` · ${fmtK(usage.used)}/${fmtK(usage.size)}`}
+              {cacheHit != null &&
+                ` · ${t("chat.cacheHit", { pct: cacheHit })}`}
             </div>
           )}
         </div>

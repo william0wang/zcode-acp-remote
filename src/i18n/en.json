@@ -37,6 +37,7 @@
     "loadingSession": "Loading session…",
     "plan": "Plan",
     "untitled": "Untitled session",
+    "cacheHit": "Cache {{pct}}%",
     "thinking": "Thinking…",
     "thought": "Thought",
     "contextHandoff": "Previous context summary",
