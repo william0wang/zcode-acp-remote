@@ -956,15 +956,66 @@ export const useAppStore = create<AppState>((set, get) => {
   let collectingEarlier = false;
   let earlierBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
     [];
+  // Page updates (marked earlierPage) arriving OUTSIDE the collection window
+  // — the load_earlier response already landed. They are replay content by
+  // construction, never live, so they must not fall into applyUpdate (that
+  // lands them at the tail: older messages appended after the newest ones).
+  // Hold them briefly so a burst coalesces into ONE prepended segment.
+  let latePageBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
+    [];
+  let latePageTimer: ReturnType<typeof setTimeout> | null = null;
 
   function dropQueuedUpdates(): void {
     updateQueue = [];
     collectingEarlier = false;
     earlierBuffer = [];
+    latePageBuffer = [];
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;
     }
+    if (latePageTimer) {
+      clearTimeout(latePageTimer);
+      latePageTimer = null;
+    }
+  }
+
+  // Prepends whatever late page updates accumulated as its own oldest-first
+  // segment, mirroring loadEarlier's assembly (messages only; same seam
+  // dedupe against the current head). Stale sessions are dropped.
+  function flushLatePage(): void {
+    latePageTimer = null;
+    const page = latePageBuffer;
+    latePageBuffer = [];
+    if (page.length === 0) return;
+    set((state) => {
+      const sid = state.activeSessionId;
+      if (!sid) return {};
+      let segment: ChatMessage[] = [];
+      let mine = false;
+      for (const { sessionId, u, meta } of page) {
+        if (sessionId !== sid) continue;
+        mine = true;
+        const r = applyOne(segment, u, meta);
+        if (r?.messages) segment = r.messages;
+      }
+      if (!mine || segment.length === 0) return {};
+      let rest = state.messages;
+      if (
+        rest.length &&
+        segment[segment.length - 1].id === rest[0].id
+      ) {
+        // Seam dedupe: the same message split across pages.
+        const seam = segment[segment.length - 1];
+        segment = segment.slice(0, -1);
+        if (segment.length === 0) return {};
+        rest = [
+          { ...seam, parts: [...seam.parts, ...rest[0].parts] },
+          ...rest.slice(1),
+        ];
+      }
+      return { messages: [...segment, ...rest] };
+    });
   }
 
   // Applies (or re-applies) whatever arrived since the last batch. Called by
@@ -1391,14 +1442,27 @@ export const useAppStore = create<AppState>((set, get) => {
         // bridge marks pages on the update's own _meta (same placement as the
         // tool-fold flags; notification-level meta as a fallback); an older
         // bridge sends unmarked pages, so everything buffers as before.
+        // Marked updates arriving OUTSIDE the window are still replay, never
+        // live — they take the late-page buffer (prepended), never the tail.
+        const marked =
+          isEarlierPageMeta((update as { _meta?: unknown })._meta) ||
+          isEarlierPageMeta(meta);
         if (
           collectingEarlier &&
           sessionId === get().activeSessionId &&
-          (!get().pageMarkerCapable ||
-            isEarlierPageMeta((update as { _meta?: unknown })._meta) ||
-            isEarlierPageMeta(meta))
+          (!get().pageMarkerCapable || marked)
         ) {
           earlierBuffer.push({ sessionId, u: update, meta });
+          return;
+        }
+        if (marked) {
+          latePageBuffer.push({ sessionId, u: update, meta });
+          if (!latePageTimer) {
+            latePageTimer = setTimeout(() => {
+              latePageTimer = null;
+              flushLatePage();
+            }, 120);
+          }
           return;
         }
         applyUpdate(sessionId, update, meta);
