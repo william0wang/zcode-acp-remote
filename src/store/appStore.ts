@@ -965,6 +965,19 @@ export const useAppStore = create<AppState>((set, get) => {
     [];
   let latePageTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Legacy bridges (< PAGE_MARKER_BRIDGE_VERSION) cannot mark page updates,
+  // and any bridge's load_earlier response may overtake its own page
+  // notifications on the wire (the bridge dispatches them fire-and-forget).
+  // On a marker-capable bridge the marker alone routes the stragglers into
+  // the late-page buffer (prepended). Without a marker the collection window
+  // must survive the response and stay open until the page's burst goes
+  // quiet — closing it on the response appends the rest of the page after the
+  // newest message, which reads as a middle chunk of an old session landing
+  // at the end.
+  const EARLIER_WINDOW_QUIET_MS = 600;
+  const EARLIER_WINDOW_CAP_MS = 20_000;
+  let earlierStreamLastAt = 0;
+
   function dropQueuedUpdates(): void {
     updateQueue = [];
     collectingEarlier = false;
@@ -1015,6 +1028,30 @@ export const useAppStore = create<AppState>((set, get) => {
         ];
       }
       return { messages: [...segment, ...rest] };
+    });
+  }
+
+  // Closes the legacy (unmarked-page) collection window once the update stream
+  // has gone quiet, the hard cap fires, or our own prompt starts — the page is
+  // over and anything still arriving is live content that must append. The
+  // caller assembles the buffered page after this resolves.
+  function settleEarlierWindow(): Promise<void> {
+    return new Promise((resolve) => {
+      const capAt = Date.now() + EARLIER_WINDOW_CAP_MS;
+      const step = () => {
+        const now = Date.now();
+        if (
+          now - earlierStreamLastAt >= EARLIER_WINDOW_QUIET_MS ||
+          now >= capAt ||
+          localPromptActive
+        ) {
+          collectingEarlier = false;
+          resolve();
+          return;
+        }
+        setTimeout(step, 200);
+      };
+      setTimeout(step, 200);
     });
   }
 
@@ -1453,6 +1490,7 @@ export const useAppStore = create<AppState>((set, get) => {
           (!get().pageMarkerCapable || marked)
         ) {
           earlierBuffer.push({ sessionId, u: update, meta });
+          earlierStreamLastAt = Date.now();
           return;
         }
         if (marked) {
@@ -2307,14 +2345,24 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ loadingEarlier: true });
       collectingEarlier = true;
       earlierBuffer = [];
+      earlierStreamLastAt = Date.now();
       try {
         const result = await acp.request("session/load_earlier", {
           sessionId,
           before: s.replayCursor,
           limit: EARLIER_PAGE_LIMIT,
         });
+        if (get().pageMarkerCapable) {
+          // Marked bridges close the window on the response: stragglers carry
+          // the marker and take the late-page buffer (still a prepend).
+          collectingEarlier = false;
+        } else {
+          // Legacy bridge: unmarked page updates and a response that can
+          // overtake them — hold the window until the burst settles so the
+          // whole page prepends instead of its tail appending.
+          await settleEarlierWindow();
+        }
         const page = earlierBuffer;
-        collectingEarlier = false;
         earlierBuffer = [];
         // Build the page as its own segment (oldest -> newest), then prepend.
         set((state) => {

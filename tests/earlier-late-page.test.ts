@@ -20,13 +20,20 @@ type Mode = "ordered" | "response-first";
 class FakeWebSocket {
   static OPEN = 1;
   static current: FakeWebSocket | null = null;
+  // Drives the agentInfo version the app reads for pageMarkerCapable.
+  static legacy = false;
   readyState = FakeWebSocket.OPEN;
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   mode: Mode = "ordered";
+  // Legacy "response-first": how long after the response the page's unmarked
+  // frames land (the bridge dispatches replay fire-and-forget, so the
+  // response can overtake them on the wire).
+  holdDelayMs = 300;
   private held: (() => void)[] = [];
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(_url: string) {
     FakeWebSocket.current = this;
@@ -39,7 +46,10 @@ class FakeWebSocket {
       this.reply(frame.id, {
         protocolVersion: 1,
         agentCapabilities: {},
-        agentInfo: { name: "zcode-acp-server", version: "0.44.1" },
+        agentInfo: {
+          name: "zcode-acp-server",
+          version: FakeWebSocket.legacy ? "0.43.0" : "0.44.1",
+        },
       });
     } else if (frame.method === "session/load") {
       this.tail();
@@ -59,16 +69,20 @@ class FakeWebSocket {
       } else {
         respond();
         this.held = page.map((u) => () => this.update(u));
+        // Legacy bridges cannot mark the page, so the app must keep the
+        // collection window open past the response for these frames.
+        if (FakeWebSocket.legacy) {
+          this.holdTimer = setTimeout(() => this.flushHeld(), this.holdDelayMs);
+        }
       }
     }
   }
 
-  // The older page: two exchanges (msg_a older than msg_b), all marked.
+  // The older page: two exchanges (msg_a older than msg_b). Marked only on a
+  // marker-capable bridge — a legacy one sends the page unmarked.
   private page() {
-    const marked = (u: Record<string, unknown>) => ({
-      ...u,
-      _meta: { zcode: { earlierPage: true } },
-    });
+    const marked = (u: Record<string, unknown>) =>
+      FakeWebSocket.legacy ? u : { ...u, _meta: { zcode: { earlierPage: true } } };
     return [
       marked({ sessionUpdate: "user_message_chunk", messageId: "msg_a", content: { type: "text", text: "old q " } }),
       marked({ sessionUpdate: "agent_message_chunk", messageId: "msg_a", content: { type: "text", text: "old a " } }),
@@ -100,6 +114,10 @@ class FakeWebSocket {
   }
 
   flushHeld(): void {
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
     for (const f of this.held) f();
     this.held = [];
   }
@@ -114,10 +132,11 @@ class FakeWebSocket {
   }
 }
 
-async function boot() {
+async function boot(legacy = false) {
   // Fresh module per test: the store holds module-level connection state and
   // the second connect cycle on a shared instance never re-reaches "open".
   vi.resetModules();
+  FakeWebSocket.legacy = legacy;
   const { useAppStore } = await import("../src/store/appStore");
   const store = useAppStore;
   store.getState().connectToHub({ hubUrl: "http://hub", token: "t" });
@@ -192,5 +211,29 @@ test("late page updates prepend before the tail, never land at the end", async (
   // append after the newest messages.
   ws.flushHeld();
   await new Promise((r) => setTimeout(r, 400)); // past any coalescing timers
+  expect(ids(store)).toEqual(["msg_a", "msg_b", "msg_x", "msg_y"]);
+});
+
+// Legacy bridges (< 0.44.1) send pages UNMARKED, and their load_earlier
+// response can overtake the page's own notifications. Without a marker the
+// app must keep collecting past the response until the burst settles —
+// otherwise the whole page appends after the newest message, which is the
+// reported symptom: a middle chunk of an old session landing at the end.
+test("legacy bridge: unmarked page arriving after the response still prepends", async () => {
+  const store = await boot(true);
+  const ws = FakeWebSocket.current!;
+  ws.mode = "response-first";
+  const promise = store.getState().loadEarlier();
+  // The response lands first; the page's frames follow 300ms later.
+  await new Promise((r) => setTimeout(r, 60));
+  await promise;
+  // The settle window holds until the burst goes quiet, then prepends.
+  expect(ids(store)).toEqual(["msg_a", "msg_b", "msg_x", "msg_y"]);
+});
+
+test("legacy bridge: ordered pages still prepend", async () => {
+  const store = await boot(true);
+  const applied = await store.getState().loadEarlier();
+  expect(applied).toBe(true);
   expect(ids(store)).toEqual(["msg_a", "msg_b", "msg_x", "msg_y"]);
 });
