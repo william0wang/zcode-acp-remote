@@ -69,7 +69,10 @@ function heatColor(pct: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-function QuotaRow({
+// One quota bar line. Exported for the plan-quota configuration screen
+// (ADR-0009), which renders the same allowance with spend controls under it —
+// one row implementation, so the two surfaces cannot drift apart visually.
+export function QuotaRow({
   label,
   percent,
   resetMs,

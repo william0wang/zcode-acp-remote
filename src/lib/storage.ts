@@ -9,9 +9,15 @@ const SERVERS_KEY = "zcode-acp:servers";
 const LANG_KEY = "zcode-acp:lang";
 const FONT_SIZE_KEY = "zcode-acp:font-size";
 const PENDING_KEY = "zcode-acp:pending";
+const UPDATE_CHANNEL_KEY = "zcode-acp:update-channel";
 
 export type Lang = "en" | "zh-CN";
 export type FontSize = "small" | "medium" | "large";
+
+// Which ZCode desktop release stream the update screen follows. The bridge's
+// install route re-reads the manifest for the channel it is TOLD, so the check
+// and the install must agree or the install is refused.
+export type UpdateChannel = "stable" | "preview";
 
 // The persisted multi-server state: every saved Hub URL + token pair and
 // which one is active. activeId may be null (nothing connected); when set it
@@ -120,6 +126,14 @@ export function loadFontSize(): FontSize {
 
 export function saveFontSize(size: FontSize): void {
   localStorage.setItem(FONT_SIZE_KEY, size);
+}
+
+export function loadUpdateChannel(): UpdateChannel {
+  return localStorage.getItem(UPDATE_CHANNEL_KEY) === "preview" ? "preview" : "stable";
+}
+
+export function saveUpdateChannel(channel: UpdateChannel): void {
+  localStorage.setItem(UPDATE_CHANNEL_KEY, channel);
 }
 
 // Queued (pending) prompt drafts per session id — they must survive session

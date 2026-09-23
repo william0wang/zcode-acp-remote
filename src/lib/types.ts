@@ -141,7 +141,6 @@ export interface QuotaItem {
   nextResetTime?: number;
   detail?: { modelCode: string; usage: number }[];
 }
-
 export interface GlmUsageStats {
   kind: "success" | "auth_error" | "rate_limited" | "unavailable";
   level?: string;
@@ -311,6 +310,96 @@ export interface ChatMessage {
   parts: ChatPart[];
   createdAt: number;
   // Replay-only: harness-injected context handoff rendered collapsed instead
-  // of as a wall of user text (`_meta.zcode.collapsed` on the update).
+  // of a wall of user text (`_meta.zcode.collapsed` on the update).
   collapsed?: boolean;
 }
+
+// ---- ZCode configuration (bridge 0.47.0, server ADR-0025) ----
+//
+// The payloads are deliberately loose where the bridge is free to add fields
+// (models, skills, hooks, agents): unknown keys must survive a round trip, and
+// a strict client type would silently drop them on the way back out. Only the
+// fields the app reads or writes are named.
+
+/** What a configuration write costs to take effect. */
+export type Effect = "immediate" | "needs-restart";
+
+/** Every write answers with its effect class. */
+export interface WriteEffect {
+  ok: boolean;
+  effect?: Effect;
+  error?: string;
+}
+
+/**
+ * One-shot snapshot of every section, for a config page's first paint.
+ *
+ * The two optional sections degrade independently: a machine that never ran an
+ * agent has no local database, and one that never linked a coding plan has no
+ * decryptable credential store — both are normal, not errors.
+ */
+export interface SettingsAll {
+  ok: boolean;
+  models: unknown;
+  skills: unknown;
+  mcp: unknown;
+  hooks: unknown;
+  agents: unknown;
+  usage: SettingsUsage | null;
+  resetCards: { providers: string[]; credentials: boolean; reason?: string };
+}
+
+export interface SettingsUsage {
+  available: boolean;
+  range: "7d" | "30d" | "all";
+  summary: { totalTokens: number; requestCount: number; models: number };
+  models: Array<{
+    modelId: string;
+    totalTokens: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    cacheReadTokens?: number;
+    requestCount?: number;
+    share?: number;
+  }>;
+  daily: Array<{ date: string; models: Array<{ modelId: string; totalTokens: number }> }>;
+}
+
+/**
+ * The reset-card inventory. A card carries an expiry and nothing else — the
+ * API exposes no card number or denomination, so a list can only be counted
+ * and dated.
+ */
+export interface ResetCardStatus {
+  ok: boolean;
+  resetCards: {
+    availableFiveHour: Array<{ expireAt: number }>;
+    availableWeek: Array<{ expireAt: number }>;
+    latestFiveHour: { usedAt: number } | null;
+    latestWeek: { usedAt: number } | null;
+    hasUnreadHistory: boolean;
+    /** Send back verbatim with a spend; ties it to this status read. */
+    nonce: string;
+  };
+}
+
+/** The install outcome of an app update, as the bridge reports it. */
+export type AppUpdateStage =
+  | "idle"
+  | "downloading"
+  | "installing"
+  | "done"
+  | "needs-user-install"
+  | "failed";
+
+export interface AppUpdateState {
+  stage: AppUpdateStage;
+  version: string | null;
+  receivedBytes: number;
+  totalBytes: number | null;
+  restartRequired?: boolean;
+  artifactPath?: string;
+  error?: string;
+}
+

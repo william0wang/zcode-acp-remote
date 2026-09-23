@@ -96,3 +96,62 @@ A user-supplied image riding a prompt into the session (gallery pick, camera
 shot, or web paste). Travels in-band as an ACP image block, unlike Session
 Files which the agent reads and writes in the Session Root.
 _Avoid_: upload, media message
+
+## ZCode Configuration
+
+Terms for the screens that read and write the machine's ZCode configuration
+(ADR-0009). The data is machine-level — one hub, one configuration — so these
+screens are independent of any session.
+
+**Configuration Screen**:
+The full-screen section of the app that manages the machine's ZCode
+configuration: models, skills, MCP servers, hooks, subagents, plan quota with
+its reset cards, usage statistics, config backups and app updates. Reached
+from the settings panel and from the instance picker; its sections are
+themselves full-screen pages, not rows in one long list.
+_Avoid_: settings page, admin panel
+
+**Effect Class**:
+What a configuration write costs to take effect. `immediate` writes apply at
+once; `needs-restart` writes only land after the bridge's backend is
+restarted, which cancels in-flight turns. Every write response carries one,
+and the app surfaces it instead of assuming.
+_Avoid_: restart flag, dirty state
+
+**Backend Restart**:
+The bridge-side operation that applies a `needs-restart` write: cancel the
+running turns, close the backend subprocess, let the next use respawn it.
+Addressed per instance, because restarting requires naming the bridge to
+disturb. Never triggered automatically by a write.
+_Avoid_: reload, refresh backend
+
+**Plan Quota**:
+The account's coding-plan allowance: the 5-hour and weekly window
+percentages, plus the reset cards that clear them. Distinct from Usage
+Statistics, which counts tokens this machine actually spent.
+_Avoid_: quota, credits, balance
+
+**Reset Card**:
+A single consumable that clears one quota window, carrying an expiry date and
+nothing else — the API exposes no card number or denomination. Spending one is
+irreversible, so it is gated on the highest quota window reaching 90%,
+confirmed with the card's type and expiry, and sent with a fresh status nonce
+and an idempotency key.
+_Avoid_: quota reset, refill, coupon
+
+**Reset Opportunity**:
+The backend's answer to whether a reset would be granted right now. A denial
+is a normal answer carrying the next time to try, not an error — the screen
+shows a countdown.
+_Avoid_: reset eligibility, reset permission
+
+**Usage Statistics**:
+Per-model token counts read from the machine's local agent database, bucketed
+by day. Local and historical; it does not know about the account's allowance.
+_Avoid_: usage quota, token quota
+
+**Config Backup**:
+A timestamped copy the bridge keeps before rewriting one of its configuration
+files, restorable through the same API. Scoped per file — restoring one
+restores that file's state, not a machine-wide snapshot.
+_Avoid_: snapshot, restore point

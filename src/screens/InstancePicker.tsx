@@ -4,6 +4,7 @@ import {
   FolderPlus,
   History,
   RefreshCw,
+  Sliders,
   SlidersHorizontal,
 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -13,6 +14,7 @@ import { PermissionDialog } from "../components/PermissionDialog";
 import { ElicitationDialog } from "../components/ElicitationDialog";
 import { ProjectCreateDialog } from "../components/ProjectCreateDialog";
 import { ProjectHistoryDialog } from "../components/ProjectHistoryDialog";
+import { ConfigScreenHost } from "./ConfigScreenHost";
 
 // Entry screen = the same flat session list the left drawer shows: sessions
 // across every bridge instance, newest first. Tapping one connects its
@@ -27,6 +29,9 @@ export function InstancePicker() {
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
+  const configOpen = useAppStore((s) => s.configOpen);
+  const openConfig = useAppStore((s) => s.openConfig);
+  const pendingRestart = useAppStore((s) => s.pendingRestart);
   const [panelOpen, setPanelOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -47,6 +52,12 @@ export function InstancePicker() {
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
     [instances],
   );
+
+  // The configuration screen replaces the picker while it is open: a
+  // full-screen task, not a dialog over the list, and the picker's own state
+  // (the session list, the banners) survives underneath it. Placed after every
+  // hook so the hook order never changes with it.
+  if (configOpen) return <ConfigScreenHost />;
 
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
@@ -74,6 +85,19 @@ export function InstancePicker() {
           className="flex size-9 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
         >
           <RefreshCw className="size-4.5" />
+        </button>
+        {/* ZCode configuration (ADR-0009). The dot marks a needs-restart write
+            waiting to be applied — the same signal the settings panel row
+            carries, because this is the other way in. */}
+        <button
+          onClick={() => openConfig(null)}
+          aria-label={t("zconfig.title")}
+          className="relative ml-1 flex size-9 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+        >
+          <Sliders className="size-4.5" />
+          {pendingRestart && (
+            <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-amber-400" />
+          )}
         </button>
         <button
           onClick={() => setPanelOpen(true)}

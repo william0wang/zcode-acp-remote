@@ -19,6 +19,7 @@ import { FileBrowser } from "../components/FileBrowser";
 import { PermissionDialog } from "../components/PermissionDialog";
 import { ElicitationDialog } from "../components/ElicitationDialog";
 import { Spinner } from "../components/Spinner";
+import { ConfigScreenHost } from "./ConfigScreenHost";
 import { useAppStore, type PlanEntry } from "../store/appStore";
 
 function baseName(path: string | undefined): string {
@@ -88,6 +89,7 @@ export function ChatScreen() {
   const fsCapable = useAppStore((s) => s.fsCapable);
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const notify = useAppStore((s) => s.notify);
+  const configOpen = useAppStore((s) => s.configOpen);
 
   // Android download feedback (MainActivity): the fallback path (pre-Android
   // 10) hands file downloads to the system DownloadManager, which the page
@@ -148,6 +150,12 @@ export function ChatScreen() {
       ? t(notice)
       : notice
     : null;
+
+  // ZCode configuration (ADR-0009) takes over the whole screen: a
+  // full-screen task, not an overlay over a live chat. The session stays
+  // attached underneath — its WS keeps receiving broadcasts — and returning
+  // picks the transcript back up where it was. Placed after every hook.
+  if (configOpen) return <ConfigScreenHost />;
 
   return (
     <div className="relative flex h-full flex-col bg-canvas text-ink">
