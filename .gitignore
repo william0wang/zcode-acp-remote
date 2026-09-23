@@ -10,3 +10,6 @@ src-tauri/target/
 .playwright-mcp/
 /build/
 .tgrep/
+# Gradle build caches under the Tauri Android project (build logs, sessions).
+src-tauri/gen/android/**/.kotlin/
+src-tauri/gen/android/**/build/
