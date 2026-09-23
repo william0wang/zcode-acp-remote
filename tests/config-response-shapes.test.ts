@@ -14,7 +14,13 @@
 // first round shipped dead — so a copy is now impossible to write by accident.
 import { describe, expect, it } from "vitest";
 import { maxUsedPercent, isTeamPlan } from "../src/screens/config/QuotaPage";
-import { contextWindowFor } from "../src/screens/config/ModelsPage";
+import {
+  contextWindowFor,
+  decodeSubagentModel,
+  encodeSubagentModel,
+  modelOptions,
+  providerOptions,
+} from "../src/screens/config/ModelsPage";
 import { mcpServers } from "../src/screens/config/McpPage";
 import { flattenHooks, hooksEnabled } from "../src/screens/config/HooksPage";
 import {
@@ -137,6 +143,114 @@ describe("models payload", () => {
     expect(
       contextWindowFor(payload.models.available[1]!, payload.models.modelRules),
     ).toBeUndefined();
+  });
+
+  it("builds picker options with each model's reasoning levels", () => {
+    // The agent forms pick a model from this list; a rule that declares levels
+    // must reach the picker, or the level dropdown is empty on a model that
+    // supports reasoning.
+    const rules = [
+      ...payload.models.modelRules,
+      {
+        providerId: "builtin:bigmodel-coding-plan",
+        modelId: "glm-4.5-air",
+        reasoningLevels: ["high", "low"],
+      },
+    ];
+    const options = modelOptions({
+      ...payload,
+      models: { ...payload.models, modelRules: rules },
+    });
+    expect(options).toHaveLength(2);
+    expect(options[0]!.reasoningLevels).toEqual([]);
+    expect(options[1]!.reasoningLevels).toEqual(["high", "low"]);
+    // Duplicate entries (the union across providers) collapse on the key.
+    expect(
+      new Set(options.map((o) => `${o.providerId}/${o.modelId}`)).size,
+    ).toBe(2);
+  });
+
+  it("keeps a picker option for a provider the rules block omits", () => {
+    // The agent picker names models from `available`; an account plan provider
+    // that `providers` omits must still reach the model list, or the picker
+    // cannot express the session model.
+    const ids = modelOptions(payload).map((o) => o.providerId);
+    expect(ids).toContain("account:bigmodel-individual-coding-plan");
+    expect(ids).toContain("builtin:bigmodel-coding-plan");
+  });
+
+  it("leaves account providers out of the add-model picker", () => {
+    // The write route refuses `account:*` providers outright (their models come
+    // from the coding plan), so offering one only produces an unactionable 400.
+    const ids = providerOptions(payload).map((p) => p.id);
+    expect(ids).toContain("builtin:bigmodel-coding-plan");
+    expect(ids).not.toContain("account:bigmodel-individual-coding-plan");
+  });
+});
+
+// --- the frontmatter model spelling ----------------------------------------
+//
+// A personal agent's `model` is not `providerId/modelId` verbatim: a custom
+// endpoint's provider id contains `/`, which the runtime's own parser splits
+// at, so the desktop encodes it as `custom:<encoded provider>:<encoded model>`
+// (subagent-markdown-selection.ts). A form that writes the raw value produces
+// an agent the runtime reads as a different provider — or none.
+
+describe("subagent model encoding", () => {
+  it("keeps a plain id readable and encodes a colliding one", () => {
+    expect(encodeSubagentModel("builtin:bigmodel", "glm-4.6")).toBe(
+      "builtin:bigmodel/glm-4.6",
+    );
+    expect(
+      encodeSubagentModel(
+        "custom:account:bigmodel-individual-coding-plan",
+        "GLM-5.3",
+      ),
+    ).toBe("custom:custom%3Aaccount%3Abigmodel-individual-coding-plan:GLM-5.3");
+  });
+
+  it("decodes the desktop's custom: spelling back to ids", () => {
+    expect(
+      decodeSubagentModel(
+        "custom:account%3Abigmodel-individual-coding-plan:GLM-5.3",
+      ),
+    ).toEqual({
+      providerId: "account:bigmodel-individual-coding-plan",
+      modelId: "GLM-5.3",
+    });
+    expect(decodeSubagentModel("builtin:bigmodel/glm-4.6")).toEqual({
+      providerId: "builtin:bigmodel",
+      modelId: "glm-4.6",
+    });
+  });
+
+  it("reads the legacy custom:builtin: spelling the way the desktop does", () => {
+    // The provider id itself contains an UNENCODED colon, so the separator is
+    // not the first one — treating it as such yields providerId "builtin" and
+    // modelId "bigmodel-coding-plan:GLM-5.3", matching no picker option.
+    expect(
+      decodeSubagentModel("custom:builtin:bigmodel-coding-plan:GLM-5.3"),
+    ).toEqual({
+      providerId: "builtin:bigmodel-coding-plan",
+      modelId: "GLM-5.3",
+    });
+  });
+
+  it("round-trips through both spellings", () => {
+    const encoded = encodeSubagentModel("custom:a:b", "GLM-5.3");
+    expect(decodeSubagentModel(encoded)).toEqual({
+      providerId: "custom:a:b",
+      modelId: "GLM-5.3",
+    });
+  });
+
+  it("returns null for a value it cannot map onto a picker option", () => {
+    // The form then shows it read-only instead of substituting a model.
+    expect(decodeSubagentModel("")).toBeNull();
+    expect(decodeSubagentModel(undefined)).toBeNull();
+    expect(decodeSubagentModel("inherit")).toBeNull();
+    expect(decodeSubagentModel("noseparator")).toBeNull();
+    expect(decodeSubagentModel("custom:onlyprovider")).toBeNull();
   });
 });
 

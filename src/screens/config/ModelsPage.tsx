@@ -78,24 +78,159 @@ function ruleFor(model: ModelRef, rules: ModelRule[]): ModelRule | undefined {
 }
 
 /**
+ * Whether a typed context window is acceptable. The route requires a POSITIVE
+ * INTEGER and throws on anything else, so `1.5` or `0` or `abc` must be
+ * rejected here — a toast for a value the user can still fix in the form is a
+ * worse answer than a disabled save button.
+ */
+function contextWindowOk(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "") return true;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n > 0;
+}
+
+/**
  * Providers a new model may belong to: the rules block first, then any
- * provider the selectable list names that the block omits (an account plan,
- * typically) — the write accepts whatever provider id, but the picker should
+ * provider the selectable list names that the block omits — the picker should
  * offer the ones this machine actually uses.
+ *
+ * `account:*` providers are left out. The write route refuses them outright
+ * (their models come from the coding plan, not this file), so offering one
+ * would only produce a 400 the user cannot act on.
  */
 export function providerOptions(
   payload: ModelsPayload | null,
 ): Array<{ id: string; name: string }> {
   const out = new Map<string, string>();
   for (const p of payload?.models?.providers ?? []) {
-    if (p.providerId) out.set(p.providerId, p.providerName ?? p.providerId);
+    if (p.providerId && !isAccountProvider(p.providerId)) {
+      out.set(p.providerId, p.providerName ?? p.providerId);
+    }
   }
   for (const m of payload?.models?.available ?? []) {
-    if (m.providerId && !out.has(m.providerId)) {
+    if (
+      m.providerId &&
+      !out.has(m.providerId) &&
+      !isAccountProvider(m.providerId)
+    ) {
       out.set(m.providerId, m.providerName ?? m.providerId);
     }
   }
   return [...out].map(([id, name]) => ({ id, name }));
+}
+
+/** A coding-plan provider the desktop manages; its models are not ours to add. */
+export function isAccountProvider(providerId: string): boolean {
+  return providerId.startsWith("account:");
+}
+
+/**
+ * Every selectable model as a picker option: the value the runtime spells
+ * (`providerId/modelId`), the label, and the reasoning levels its rule
+ * carries. One list feeds both the built-in override picker and the personal
+ * agent's frontmatter model, so a value the runtime would reject never
+ * reaches the form.
+ */
+export function modelOptions(payload: ModelsPayload | null): Array<{
+  providerId: string;
+  modelId: string;
+  label: string;
+  reasoningLevels: string[];
+}> {
+  const rules = payload?.models?.modelRules ?? [];
+  const seen = new Set<string>();
+  const out: Array<{
+    providerId: string;
+    modelId: string;
+    label: string;
+    reasoningLevels: string[];
+  }> = [];
+  for (const m of payload?.models?.available ?? []) {
+    if (!m.providerId || !m.modelId) continue;
+    const key = `${m.providerId}/${m.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rule = rules.find(
+      (r) => r.providerId === m.providerId && r.modelId === m.modelId,
+    );
+    out.push({
+      providerId: m.providerId,
+      modelId: m.modelId,
+      label: `${m.providerName ?? m.providerId} · ${m.modelId}`,
+      reasoningLevels: rule?.reasoningLevels ?? [],
+    });
+  }
+  return out;
+}
+
+/**
+ * The frontmatter `model` value for one selection — the desktop's own
+ * encoding (subagent-markdown-selection.ts): a plain `providerId/modelId`
+ * stays readable, and anything the parser would misread (a provider id with
+ * `/` or the `custom:` prefix, which is where a custom endpoint's models
+ * live) travels as `custom:${encodeURIComponent(providerId)}:${…modelId}`.
+ */
+export function encodeSubagentModel(
+  providerId: string,
+  modelId: string,
+): string {
+  if (
+    providerId.startsWith("custom:") ||
+    providerId.includes("/") ||
+    modelId.includes("$")
+  ) {
+    return `custom:${encodeURIComponent(providerId)}:${encodeURIComponent(modelId)}`;
+  }
+  return `${providerId}/${modelId}`;
+}
+
+/**
+ * The inverse of `encodeSubagentModel`, for prefilling the picker from a
+ * file that may have been written by the desktop app — where a custom-endpoint
+ * model reads `custom:account%3A…:GLM-5.3` and the id needs decoding back.
+ *
+ * Returns null for a value this build cannot map onto a picker option (a
+ * hand-written id, or the legacy `inherit`-style spellings); the form then
+ * shows it read-only rather than silently substituting a different model.
+ *
+ * The legacy `custom:builtin:<family>:<model>` spelling carries an UNENCODED
+ * colon inside the provider id, so the separator cannot simply be the first
+ * one — the desktop's own decoder treats a `builtin` first segment as two.
+ */
+export function decodeSubagentModel(
+  value: string | undefined,
+): { providerId: string; modelId: string } | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  if (raw.startsWith("custom:")) {
+    const body = raw.slice("custom:".length);
+    const sep = body.startsWith("builtin:")
+      ? body.indexOf(":", "builtin:".length)
+      : body.indexOf(":");
+    if (sep <= 0) return null;
+    return {
+      providerId: decodeSegment(body.slice(0, sep)),
+      modelId: decodeSegment(body.slice(sep + 1)),
+    };
+  }
+  const sep = raw.indexOf("/");
+  if (sep <= 0) return null;
+  return {
+    providerId: raw.slice(0, sep),
+    // The `$level` suffix is a picker spelling the frontmatter does not use;
+    // a value carrying it still names the same model.
+    modelId: raw.slice(sep + 1).split("$")[0]!,
+  };
+}
+
+/** decodeURIComponent that leaves a malformed escape as-is rather than throwing. */
+function decodeSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 export function ModelsPage() {
@@ -191,6 +326,12 @@ export function ModelsPage() {
  * Blank fields are OMITTED from the write, which under the route's merge
  * semantics means "unchanged" — the API has no way to clear a context window,
  * so the hints say keep rather than clear.
+ *
+ * The reasoning levels are chosen from the levels THIS machine's rules already
+ * use (chips, not free text): the runtime only accepts a value the model
+ * declares, and the union of the existing rules is the only list of those a
+ * client can see. A level already set on this model stays selected even when
+ * no other model uses it.
  */
 function ModelForm({
   payload,
@@ -215,22 +356,27 @@ function ModelForm({
   const [contextWindow, setContextWindow] = useState(
     rule?.contextWindow ? String(rule.contextWindow) : "",
   );
-  const [reasoning, setReasoning] = useState(
-    (rule?.reasoningLevels ?? []).join(", "),
+  const [levels, setLevels] = useState<string[]>(
+    () => rule?.reasoningLevels ?? [],
   );
   const [enabled, setEnabled] = useState(rule?.enabled !== false);
   const [busy, setBusy] = useState(false);
 
+  // Every level any rule declares, plus the ones this model already carries —
+  // a value the machine has never seen elsewhere is still this model's own.
+  const candidates = [
+    ...new Set([
+      ...(rule?.reasoningLevels ?? []),
+      ...rules.flatMap((r) => r.reasoningLevels ?? []),
+    ]),
+  ];
+
   const canSubmit =
     providerId.trim() !== "" &&
     modelId.trim() !== "" &&
-    (contextWindow.trim() === "" || Number.isFinite(Number(contextWindow)));
+    contextWindowOk(contextWindow);
 
   async function submit() {
-    const levels = reasoning
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s !== "");
     const window = contextWindow.trim();
     setBusy(true);
     const ok = await applyConfigWrite(
@@ -241,6 +387,10 @@ function ModelForm({
           modelId: modelId.trim(),
           enabled,
           ...(window !== "" ? { contextWindow: Number(window) } : {}),
+          // A rule with no levels selected keeps whatever it has: the route
+          // MERGES, so an empty array is a no-op rather than a clear. There is
+          // no way to clear the list once written (delete the rule instead),
+          // which is why the chip row explains what it holds.
           ...(levels.length > 0 ? { reasoningLevels: levels } : {}),
         }),
       ["models"],
@@ -305,20 +455,44 @@ function ModelForm({
         />
       </ConfigField>
 
-      <ConfigField
-        label={t("zconfig.modelReasoningLevels")}
-        hint={t("zconfig.modelKeepBlank")}
-      >
-        <input
-          value={reasoning}
-          onChange={(e) => setReasoning(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          placeholder="high, medium, low"
-          className={configInputClass}
-        />
-      </ConfigField>
+      <div className="mt-4">
+        <span className="block text-xs font-medium text-dim">
+          {t("zconfig.modelReasoningLevels")}
+        </span>
+        <span className="mt-1 block text-[11px] text-faint">
+          {t("zconfig.modelLevelsHint")}
+        </span>
+        {candidates.length === 0 ? (
+          <p className="mt-2 text-[11px] text-faint">
+            {t("zconfig.modelLevelsNone")}
+          </p>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {candidates.map((l) => {
+              const on = levels.includes(l);
+              return (
+                <button
+                  key={l}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    setLevels(
+                      on ? levels.filter((x) => x !== l) : [...levels, l],
+                    )
+                  }
+                  className={`rounded-lg px-3 py-1.5 text-xs transition ${
+                    on
+                      ? "bg-white/[0.16] text-ink ring-1 ring-white/50"
+                      : "bg-raised text-faint"
+                  }`}
+                >
+                  {l}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div className="mt-4 flex items-center justify-between">
         <span className="text-xs font-medium text-dim">

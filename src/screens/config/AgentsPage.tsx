@@ -13,7 +13,13 @@ import {
   ConfigFormSheet,
   configInputClass,
 } from "../../components/config/ConfigFormSheet";
-import { providerOptions, type ModelsPayload } from "./ModelsPage";
+import {
+  providerOptions,
+  modelOptions,
+  decodeSubagentModel,
+  encodeSubagentModel,
+  type ModelsPayload,
+} from "./ModelsPage";
 
 // Subagents (ADR-0009). Tapping an agent opens its configuration; the API
 // splits the two kinds by what they are:
@@ -336,6 +342,12 @@ function BuiltInAgentForm({
           className={configInputClass}
         >
           <option value="">—</option>
+          {/* A stored override may name a provider the picker filters out (an
+              account plan). Keep it selectable so re-saving the same override
+              does not blank it. */}
+          {providerId && !providers.some((p) => p.id === providerId) && (
+            <option value={providerId}>{providerId}</option>
+          )}
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -355,6 +367,12 @@ function BuiltInAgentForm({
           className={configInputClass}
         >
           <option value="">—</option>
+          {/* The stored override may name a model the payload's list omits (a
+              model removed from the dropdown since it was set). Keep it
+              selectable so re-saving the same override does not blank it. */}
+          {modelId && !modelIds.includes(modelId) && (
+            <option value={modelId}>{modelId}</option>
+          )}
           {modelIds.map((id) => (
             <option key={id} value={id}>
               {id}
@@ -394,9 +412,19 @@ function BuiltInAgentForm({
 }
 
 /**
- * The frontmatter fields of a personal agent. Clearing a previously-set
- * model/thoughtLevel sends an explicit null — that is the server's "remove
- * the key" — while a field that was never set and stays empty is omitted.
+ * The frontmatter fields of a personal agent.
+ *
+ * The picker's data (the models section) arrives asynchronously, so the stored
+ * model cannot seed the picker on the first render — it would be filled in as
+ * "no model chosen" and, on save, sent as an explicit null that WIPES the
+ * agent's model. The prefill therefore waits for the payload and marks whether
+ * it has run: `undefined` means "not seeded yet", `""` means "deliberately
+ * inheriting".
+ *
+ * Clearing a previously-set model/thoughtLevel sends an explicit null — the
+ * server's "remove the key" — while a field that was never set and stays empty
+ * is omitted. A stored value this build cannot map onto a picker option is
+ * neither shown nor written: it is left exactly as the file has it.
  */
 function PersonalAgentForm({
   target,
@@ -406,12 +434,36 @@ function PersonalAgentForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const configModels = useAppStore((s) => s.configModels);
+  const loadConfigSection = useAppStore((s) => s.loadConfigSection);
   const applyConfigWrite = useAppStore((s) => s.applyConfigWrite);
   const upsertAgent = useAppStore((s) => s.upsertAgent);
+
+  // The picker's data source; the entry screen's snapshot carries it, but a
+  // screen opened straight to an agent does not.
+  const payloadLanding = configModels === null;
+  useEffect(() => {
+    if (payloadLanding) void loadConfigSection("models");
+  }, [payloadLanding, loadConfigSection]);
 
   const name = target.name ?? "";
   const modelWas = target.frontmatter?.model;
   const thoughtWas = target.frontmatter?.thoughtLevel;
+
+  // The file's model is a picker option's value only when it decodes to one
+  // this machine offers. Anything else (a hand-written id) stays visible
+  // read-only instead of being silently replaced by a different model.
+  const stored = decodeSubagentModel(modelWas);
+  const payload = configModels as ModelsPayload | null;
+  const options = modelOptions(payload);
+  const matched = stored
+    ? options.find(
+        (o) =>
+          o.providerId === stored.providerId && o.modelId === stored.modelId,
+      )
+    : undefined;
+  const storedKnown = stored !== null && matched !== undefined;
+  const levels = matched?.reasoningLevels ?? [];
 
   const [description, setDescription] = useState(
     target.frontmatter?.description ?? "",
@@ -423,19 +475,38 @@ function PersonalAgentForm({
       ? target.frontmatter!.color!
       : "",
   );
-  const [model, setModel] = useState(modelWas ?? "");
-  const [thoughtLevel, setThoughtLevel] = useState(thoughtWas ?? "");
+  // Seeded once, when the picker's options first exist: before that the state
+  // is unknown, not empty (see the doc comment).
+  const [model, setModel] = useState<string | undefined>(undefined);
+  const [thoughtLevel, setThoughtLevel] = useState<string | undefined>(
+    undefined,
+  );
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (model !== undefined || !storedKnown || !stored) return;
+    setModel(encodeSubagentModel(stored.providerId, stored.modelId));
+    setThoughtLevel(thoughtWas ?? "");
+  }, [model, storedKnown, stored, thoughtWas]);
 
   const canSubmit = description.trim() !== "";
 
   async function submit() {
     const body: AgentUpsert = { description: description.trim() };
     if (color !== "") body.color = color;
-    if (model.trim() !== "") body.model = model.trim();
-    else if (modelWas !== undefined) body.model = null;
-    if (thoughtLevel.trim() !== "") body.thoughtLevel = thoughtLevel.trim();
-    else if (thoughtWas !== undefined) body.thoughtLevel = null;
+    // An unreadable model (shown read-only above) is omitted entirely — the
+    // merge semantics then leave the file's value exactly as it is, which is
+    // the only safe outcome for a value this build cannot name.
+    const unmapped = modelWas !== undefined && !storedKnown;
+    const chosen = model ?? "";
+    if (chosen !== "") body.model = chosen;
+    else if (modelWas !== undefined && !unmapped) body.model = null;
+    // A level that does not belong to the chosen model is dropped, not sent:
+    // the runtime rejects it, and keeping the stale one silently would fail
+    // the whole edit for a field the user did not touch.
+    const level = (thoughtLevel ?? "").trim();
+    if (level !== "" && levels.includes(level)) body.thoughtLevel = level;
+    else if (thoughtWas !== undefined && !unmapped) body.thoughtLevel = null;
 
     setBusy(true);
     const ok = await applyConfigWrite(
@@ -468,33 +539,27 @@ function PersonalAgentForm({
         <ColorPicker value={color} onChange={setColor} />
       </ConfigField>
 
-      <ConfigField
-        label={t("zconfig.agentModel")}
-        hint={t("zconfig.agentInheritHint")}
-      >
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          className={configInputClass}
+      {modelWas !== undefined && !storedKnown ? (
+        // A model id this build cannot map onto a picker option (hand-written
+        // in the file). Shown read-only, and the submit below leaves it alone:
+        // substituting a different model on the user's behalf is worse than
+        // keeping the value they wrote.
+        <ConfigField label={t("zconfig.agentModel")}>
+          <p className="mt-1 font-mono text-xs text-faint">{modelWas}</p>
+        </ConfigField>
+      ) : (
+        <ModelPickerFields
+          options={options}
+          levels={levels}
+          model={model ?? ""}
+          thoughtLevel={thoughtLevel ?? ""}
+          onModelChange={(next) => {
+            setModel(next);
+            setThoughtLevel("");
+          }}
+          onThoughtLevelChange={setThoughtLevel}
         />
-      </ConfigField>
-
-      <ConfigField
-        label={t("zconfig.agentThoughtLevel")}
-        hint={t("zconfig.agentInheritHint")}
-      >
-        <input
-          value={thoughtLevel}
-          onChange={(e) => setThoughtLevel(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          className={configInputClass}
-        />
-      </ConfigField>
+      )}
     </ConfigFormSheet>
   );
 }
@@ -505,8 +570,17 @@ function PersonalAgentForm({
  */
 function NewAgentForm({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const configModels = useAppStore((s) => s.configModels);
+  const loadConfigSection = useAppStore((s) => s.loadConfigSection);
   const applyConfigWrite = useAppStore((s) => s.applyConfigWrite);
   const upsertAgent = useAppStore((s) => s.upsertAgent);
+
+  useEffect(() => {
+    if (configModels === null) void loadConfigSection("models");
+  }, [configModels, loadConfigSection]);
+
+  const payload = configModels as ModelsPayload | null;
+  const options = modelOptions(payload);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -517,10 +591,16 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
 
   const canSubmit = isValidAgentName(name.trim()) && description.trim() !== "";
 
+  // The levels a picker choice carries come with the option, so the level
+  // field can only offer values the chosen model actually supports.
+  const levels =
+    options.find((o) => encodeSubagentModel(o.providerId, o.modelId) === model)
+      ?.reasoningLevels ?? [];
+
   async function submit() {
     const body: AgentUpsert = { description: description.trim() };
     if (color !== "") body.color = color;
-    if (model.trim() !== "") body.model = model.trim();
+    if (model !== "") body.model = model;
     if (thoughtLevel.trim() !== "") body.thoughtLevel = thoughtLevel.trim();
 
     setBusy(true);
@@ -568,34 +648,104 @@ function NewAgentForm({ onClose }: { onClose: () => void }) {
         <ColorPicker value={color} onChange={setColor} />
       </ConfigField>
 
+      <ModelPickerFields
+        options={options}
+        levels={levels}
+        model={model}
+        thoughtLevel={thoughtLevel}
+        onModelChange={(next) => {
+          setModel(next);
+          setThoughtLevel("");
+        }}
+        onThoughtLevelChange={setThoughtLevel}
+      />
+    </ConfigFormSheet>
+  );
+}
+
+/**
+ * Model + thought-level pickers, shared by the create and edit forms.
+ *
+ * The model value is the FRONTMATTER spelling (`encodeSubagentModel`), not the
+ * raw `providerId/modelId`: a custom-endpoint provider id contains `/`, which
+ * the runtime's own parser would split at, so the encoded form is the only one
+ * that round-trips. Both forms therefore store the encoded string and let the
+ * option value carry the encoding.
+ *
+ * `model` may arrive before the options do (the models payload is fetched on
+ * open). A selected value that is not in the list would leave the select
+ * showing the "inherit" option while the state still names a model, so an
+ * unknown selection renders an explicit disabled row instead.
+ */
+function ModelPickerFields({
+  options,
+  levels,
+  model,
+  thoughtLevel,
+  onModelChange,
+  onThoughtLevelChange,
+}: {
+  options: ReturnType<typeof modelOptions>;
+  levels: string[];
+  model: string | undefined;
+  thoughtLevel: string | undefined;
+  onModelChange: (next: string) => void;
+  onThoughtLevelChange: (next: string) => void;
+}) {
+  const { t } = useTranslation();
+  const knownModel =
+    model === undefined ||
+    options.some((o) => encodeSubagentModel(o.providerId, o.modelId) === model);
+  return (
+    <>
       <ConfigField
         label={t("zconfig.agentModel")}
         hint={t("zconfig.agentInheritHint")}
       >
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
+        <select
+          value={knownModel ? (model ?? "") : ""}
+          onChange={(e) => onModelChange(e.target.value)}
           className={configInputClass}
-        />
+        >
+          {!knownModel && (
+            <option value="">{t("zconfig.agentModelUnavailable")}</option>
+          )}
+          <option value="">{t("zconfig.agentModelInherit")}</option>
+          {options.map((o) => (
+            <option
+              key={`${o.providerId}/${o.modelId}`}
+              value={encodeSubagentModel(o.providerId, o.modelId)}
+            >
+              {o.label}
+            </option>
+          ))}
+        </select>
       </ConfigField>
 
       <ConfigField
         label={t("zconfig.agentThoughtLevel")}
         hint={t("zconfig.agentInheritHint")}
       >
-        <input
-          value={thoughtLevel}
-          onChange={(e) => setThoughtLevel(e.target.value)}
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          className={configInputClass}
-        />
+        {levels.length === 0 ? (
+          <p className="mt-1 text-xs text-faint">
+            {t("zconfig.agentThoughtNone")}
+          </p>
+        ) : (
+          <select
+            value={thoughtLevel ?? ""}
+            onChange={(e) => onThoughtLevelChange(e.target.value)}
+            className={configInputClass}
+          >
+            <option value="">{t("zconfig.agentModelInherit")}</option>
+            {levels.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+        )}
       </ConfigField>
-    </ConfigFormSheet>
+    </>
   );
 }
 

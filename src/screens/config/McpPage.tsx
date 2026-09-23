@@ -153,9 +153,11 @@ function McpForm({
   const upsertMcp = useAppStore((s) => s.upsertMcp);
 
   const [name, setName] = useState(target?.name ?? "");
-  const [type, setType] = useState(
-    target?.type === "http" || target?.type === "sse" ? target.type : "stdio",
-  );
+  // An unknown transport type is kept verbatim (and shown as its own option
+  // below) so the write never silently downgrades a server this build has not
+  // heard of. Only the two remote transports are folded into the http branch.
+  const initialType = target?.type ?? "stdio";
+  const [type, setType] = useState(initialType);
   const [command, setCommand] = useState(target?.command ?? "");
   const [argsText, setArgsText] = useState((target?.args ?? []).join("\n"));
   const [envText, setEnvText] = useState(kvToLines(target?.env));
@@ -165,7 +167,8 @@ function McpForm({
   const [busy, setBusy] = useState(false);
 
   const nameOk = name.trim() !== "" && !/[\\/]/.test(name.trim());
-  const typeOk = type === "stdio" ? command.trim() !== "" : url.trim() !== "";
+  const remote = type !== "stdio";
+  const typeOk = remote ? url.trim() !== "" : command.trim() !== "";
   const canSubmit = nameOk && typeOk;
 
   async function submit() {
@@ -176,15 +179,15 @@ function McpForm({
         upsertMcp(name.trim(), {
           type,
           enabled,
-          ...(type === "stdio"
+          ...(remote
             ? {
+                url: url.trim(),
+                headers: parseKvLines(headersText),
+              }
+            : {
                 command: command.trim(),
                 args: splitLines(argsText),
                 env: parseKvLines(envText),
-              }
-            : {
-                url: url.trim(),
-                headers: parseKvLines(headersText),
               }),
         }),
       ["mcp"],
@@ -238,7 +241,7 @@ function McpForm({
         </select>
       </ConfigField>
 
-      {type === "stdio" ? (
+      {remote ? (
         <>
           <ConfigField label={t("zconfig.mcpCommand")}>
             <input
