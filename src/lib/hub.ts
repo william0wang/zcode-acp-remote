@@ -6,6 +6,9 @@ import type {
   HubInstance,
   HubProject,
   HubUpgradeResult,
+  ResetCardStatus,
+  SettingsAll,
+  WriteEffect,
 } from "./types";
 
 export class HubApiError extends Error {
@@ -33,7 +36,9 @@ export class HubClient {
 
   private async fetch(
     path: string,
-    method: "GET" | "POST" = "GET",
+    // The configuration API (ADR-0025) writes with PUT and DELETE as well as
+    // POST; the discovery endpoints only ever needed the first two.
+    method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
     body?: unknown,
   ): Promise<Response> {
     let res: Response;
@@ -55,7 +60,21 @@ export class HubClient {
     }
     if (res.status === 401)
       throw new HubApiError("unauthorized: check token", 401);
-    if (!res.ok) throw new HubApiError(`HTTP ${res.status}`, res.status);
+    if (!res.ok) {
+      // The settings API answers a refused write with a REASON — "nonce is
+      // stale — refresh the reset card status", "that is a built-in agent",
+      // "url must be an official ZCode CDN artifact". Dropping it leaves the
+      // user with "HTTP 409" and no way forward, so the body becomes the
+      // message whenever it says something.
+      const detail = await res
+        .json()
+        .then((b: unknown) => {
+          const err = (b as { error?: unknown } | null)?.error;
+          return typeof err === "string" && err ? err : null;
+        })
+        .catch(() => null);
+      throw new HubApiError(detail ?? `HTTP ${res.status}`, res.status);
+    }
     return res;
   }
 
@@ -261,5 +280,272 @@ export class HubClient {
   fsFileUrl(instanceId: string, sessionId: string, path: string): string {
     const q = new URLSearchParams({ sessionId, path, token: this.token });
     return this.url(`/api/instances/${instanceId}/fs/file?${q}`);
+  }
+
+  // ---- ZCode configuration (bridge 0.47.0, server ADR-0025) ----
+  //
+  // Every call goes through the hub's machine-level mount, which serves the
+  // same handler factory the bridge mounts on its own loopback — so the two
+  // cannot drift apart — and needs no registered bridge. Reads are plain GETs;
+  // writes carry an `effect` the caller must surface ("immediate" landed,
+  // "needs-restart" waits for a backend restart).
+
+  /** One-shot snapshot of every section (first screen of a config page). */
+  async settingsAll(): Promise<SettingsAll> {
+    const res = await this.fetch("/api/settings/all");
+    return (await res.json()) as SettingsAll;
+  }
+
+  async settingsModels(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/models");
+    return res.json();
+  }
+
+  async settingsSkills(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/skills");
+    return res.json();
+  }
+
+  async settingsMcp(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/mcp");
+    return res.json();
+  }
+
+  async settingsHooks(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/hooks");
+    return res.json();
+  }
+
+  async settingsAgents(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/agents");
+    return res.json();
+  }
+
+  /** `range` is 7d | 30d | all. */
+  async settingsUsage(range: string): Promise<unknown> {
+    const res = await this.fetch(`/api/settings/usage?range=${encodeURIComponent(range)}`);
+    return res.json();
+  }
+
+  async settingsQuota(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/quota");
+    return res.json();
+  }
+
+  /**
+   * Reset-card inventory for one coding-plan provider. The `nonce` in the
+   * answer is what `spendResetCard` must send back — a spend is tied to a
+   * status read made moments earlier, so a stale screen cannot burn a card.
+   */
+  async resetCardStatus(providerId: string): Promise<ResetCardStatus> {
+    const res = await this.fetch(
+      `/api/settings/reset-cards?providerId=${encodeURIComponent(providerId)}`,
+    );
+    return (await res.json()) as ResetCardStatus;
+  }
+
+  async spendResetCard(input: {
+    providerId: string;
+    resetType: "FIVE_HOUR" | "WEEK";
+    nonce: string;
+    idempotencyKey: string;
+  }): Promise<unknown> {
+    const res = await this.fetch("/api/settings/reset-cards/use", "POST", input);
+    return res.json();
+  }
+
+  async requestResetOpportunity(input: {
+    providerId: string;
+    idempotencyKey: string;
+  }): Promise<{ ok: boolean; opportunity?: { granted: boolean; nextTryAt: number | null } }> {
+    const res = await this.fetch("/api/settings/reset-cards/opportunity", "POST", input);
+    return (await res.json()) as {
+      ok: boolean;
+      opportunity?: { granted: boolean; nextTryAt: number | null };
+    };
+  }
+
+  async markResetHistoryRead(providerId: string): Promise<void> {
+    await this.fetch("/api/settings/reset-cards/history-read", "POST", { providerId });
+  }
+
+  async settingsBackups(): Promise<unknown> {
+    const res = await this.fetch("/api/settings/backups");
+    return res.json();
+  }
+
+  /**
+   * Whether one bridge has recorded a needs-restart write since its last
+   * restart. Per-instance on purpose: the hub-local spelling answers 409,
+   * because the hub has no backend whose restart could clear its own answer.
+   */
+  async settingsPendingRestart(instanceId: string): Promise<{
+    pendingRestart: boolean;
+    writes: number;
+  }> {
+    const res = await this.fetch(
+      `/api/instances/${instanceId}/settings/pending-restart`,
+    );
+    return (await res.json()) as { pendingRestart: boolean; writes: number };
+  }
+
+  async settingsAppUpdate(channel?: string): Promise<unknown> {
+    const q = channel ? `?channel=${encodeURIComponent(channel)}` : "";
+    const res = await this.fetch(`/api/settings/app-update${q}`);
+    return res.json();
+  }
+
+  // ---- configuration writes ----
+  //
+  // Each returns the write's effect class. `send` is shared so the 4xx bodies
+  // (a refused write says WHY — a non-coding-plan provider, a stale nonce)
+  // reach the caller instead of collapsing into a bare status code.
+
+  async updateProvider(
+    providerId: string,
+    body: Record<string, unknown>,
+  ): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/providers/${encodeURIComponent(providerId)}`,
+      "PUT",
+      body,
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async addModel(body: Record<string, unknown>): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/models", "POST", body);
+    return (await res.json()) as WriteEffect;
+  }
+
+  async removeModel(providerId: string, modelId: string): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/models/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`,
+      "DELETE",
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async setSkillEnabled(body: { path: string; enable: boolean }): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/skills/enable", "POST", body);
+    return (await res.json()) as WriteEffect;
+  }
+
+  async copySkillToUser(body: { path: string }): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/skills/copy-to-user", "POST", body);
+    return (await res.json()) as WriteEffect;
+  }
+
+  async deleteSkill(skillPath: string): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/skills/${encodeURIComponent(skillPath)}`,
+      "DELETE",
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async upsertMcpServer(name: string, body: Record<string, unknown>): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/mcp/${encodeURIComponent(name)}`,
+      "PUT",
+      body,
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async removeMcpServer(name: string): Promise<WriteEffect> {
+    const res = await this.fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, "DELETE");
+    return (await res.json()) as WriteEffect;
+  }
+
+  /** The route reads `enabled` (not `enable`, unlike skills and agents). */
+  async setMcpEnabled(name: string, enable: boolean): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/mcp/enable", "POST", {
+      name,
+      enabled: enable,
+    });
+    return (await res.json()) as WriteEffect;
+  }
+
+  /**
+   * Edit one existing hook entry.
+   *
+   * The entry is addressed by THREE coordinates: the event, the index of its
+   * matcher group in that event, and the index of the hook inside the group —
+   * the last one travels in the body because the server's route only takes two
+   * path segments. There is no way to add or remove an entry through here; a
+   * hook that does not exist yet must be written into the config file.
+   */
+  async updateHook(
+    eventName: string,
+    matcherIndex: number,
+    hookIndex: number,
+    body: Record<string, unknown>,
+  ): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/hooks/${encodeURIComponent(eventName)}/${matcherIndex}`,
+      "PUT",
+      { ...body, hookIndex },
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async setHooksEnabled(enabled: boolean): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/hooks/enabled", "POST", { enabled });
+    return (await res.json()) as WriteEffect;
+  }
+
+  async upsertAgent(name: string, body: Record<string, unknown>): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/agents/${encodeURIComponent(name)}`,
+      "PUT",
+      body,
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async deleteAgent(name: string): Promise<WriteEffect> {
+    const res = await this.fetch(`/api/settings/agents/${encodeURIComponent(name)}`, "DELETE");
+    return (await res.json()) as WriteEffect;
+  }
+
+  async setAgentEnabled(name: string, enable: boolean): Promise<WriteEffect> {
+    const res = await this.fetch(
+      `/api/settings/agents/${encodeURIComponent(name)}/enable`,
+      "POST",
+      { enable },
+    );
+    return (await res.json()) as WriteEffect;
+  }
+
+  async restoreBackup(body: { file: string; path: string }): Promise<WriteEffect> {
+    const res = await this.fetch("/api/settings/backups/restore", "POST", body);
+    return (await res.json()) as WriteEffect;
+  }
+
+  async installAppUpdate(body: {
+    version: string;
+    url: string;
+    channel?: string;
+  }): Promise<unknown> {
+    const res = await this.fetch("/api/settings/app-update/install", "POST", body);
+    return res.json();
+  }
+
+  /**
+   * Restart one bridge's backend so its `needs-restart` writes take effect.
+   *
+   * Per-instance on purpose: the hub's own settings mount has no backend, so
+   * the restart must name the bridge it means to disturb. `cancelledTurns` in
+   * the answer is how many conversations were interrupted — the caller warns
+   * with it BEFORE the user commits. `closed` is whether the old subprocess
+   * actually went away: false means the writes this restart existed to apply
+   * did not take effect, so the caller must keep the affordance alive.
+   */
+  async restartBackend(
+    instanceId: string,
+  ): Promise<{ cancelledTurns: number; closed: boolean }> {
+    const res = await this.fetch(`/api/instances/${instanceId}/backend/restart`, "POST");
+    return (await res.json()) as { cancelledTurns: number; closed: boolean };
   }
 }

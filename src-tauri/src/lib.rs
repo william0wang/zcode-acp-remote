@@ -42,8 +42,11 @@ async fn download_file(
       .map_err(|e| match e {
         // Pre-Android-10 devices have no MediaStore.Downloads; the JS side
         // falls back to the anchor-click DownloadManager path on this marker.
+        // Matched as a substring, not an equality: the plugin's reject handler
+        // prefixes the exception class ("IOException: DM_FALLBACK") so a bare
+        // timeout or hostname stays diagnosable from the toast.
         PluginInvokeError::InvokeRejected(err)
-          if err.message.as_deref() == Some("DM_FALLBACK") =>
+          if err.message.as_deref().is_some_and(|m| m.contains("DM_FALLBACK")) =>
         {
           "DM_FALLBACK".to_string()
         }
