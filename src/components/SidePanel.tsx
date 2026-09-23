@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, RefreshCw, X } from "lucide-react";
+import { useBackHandler } from "../lib/backNav";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
 
@@ -16,6 +17,10 @@ export function PanelShell({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
   return (
     <div
       className="fixed inset-0 z-40 flex justify-end bg-black/50"

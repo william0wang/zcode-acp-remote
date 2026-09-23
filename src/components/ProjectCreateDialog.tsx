@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderPlus, Loader2, Search } from "lucide-react";
 import { HubApiError, HubClient } from "../lib/hub";
+import { useBackHandler } from "../lib/backNav";
 import type { HubProject } from "../lib/types";
 import { fmtRelative } from "../lib/time";
 import { useAppStore } from "../store/appStore";
@@ -25,6 +26,11 @@ export function ProjectCreateDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState<string | null>(null);
+
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
 
   // This sheet now also opens from inside a session. A post-connect failure
   // leaves activeSessionId null, so the route to InstancePicker takes over and

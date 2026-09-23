@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
+import { useBackHandler } from "../lib/backNav";
 import { SessionList } from "./SessionList";
 
 // Left drawer = session switching plus the session-independent actions
@@ -35,6 +36,11 @@ export function Drawer({
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
   const closeSession = useAppStore((s) => s.closeSession);
+
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
 
   const sessions = useMemo(
     () =>

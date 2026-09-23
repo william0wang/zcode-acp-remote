@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronLeft, Pencil, Plus } from "lucide-react";
 import { HubClient } from "../lib/hub";
+import { useBackHandler } from "../lib/backNav";
 import { useAppStore } from "../store/appStore";
 import type { SavedServer } from "../lib/types";
 
@@ -183,6 +184,21 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
     setEditing(null);
   };
   const freshInstall = savedServers.length === 0;
+
+  // Back mirrors the on-screen controls: out of an open add/edit form first,
+  // then out of the manager overlay. The root connect screen falls through to
+  // the app-level double-back-to-exit.
+  useBackHandler(() => {
+    if (adding || editing) {
+      closeForm();
+      return true;
+    }
+    if (onClose) {
+      onClose();
+      return true;
+    }
+    return false;
+  });
 
   return (
     <div className="h-full overflow-y-auto bg-canvas px-6 text-ink">

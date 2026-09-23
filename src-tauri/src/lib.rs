@@ -62,6 +62,16 @@ async fn download_file(
   }
 }
 
+// Root-screen double-back-to-exit (App.tsx): the app plugin's Kotlin `exit`
+// command exists on this tauri version but has no ACL permission
+// (`core:app:allow-exit` appeared in a later release), so the JS side calls
+// this app command instead — app commands bypass the ACL (same as
+// download_file below).
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+  app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -92,7 +102,7 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![download_file])
+    .invoke_handler(tauri::generate_handler![download_file, exit_app])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

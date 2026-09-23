@@ -48,6 +48,7 @@ import {
   X,
 } from "lucide-react";
 import type { FsEntry } from "../lib/types";
+import { useBackHandler } from "../lib/backNav";
 import { useAppStore } from "../store/appStore";
 import { MarkdownText } from "./Markdown";
 import { Spinner } from "./Spinner";
@@ -323,10 +324,14 @@ function TextViewer({ path }: TextViewerProps) {
   // Memoized: re-highlighting the whole (growing) buffer on every render
   // janks the UI each "Load more".
   const html = useMemo(() => {
-    const lang = displayText.length > MAX_HIGHLIGHT_BYTES ? "plaintext" : language;
+    const lang =
+      displayText.length > MAX_HIGHLIGHT_BYTES ? "plaintext" : language;
     if (lang === "plaintext") return escapeHtml(displayText);
     try {
-      return hljs.highlight(displayText, { language: lang, ignoreIllegals: true }).value;
+      return hljs.highlight(displayText, {
+        language: lang,
+        ignoreIllegals: true,
+      }).value;
     } catch {
       return escapeHtml(displayText);
     }
@@ -499,6 +504,12 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
   const [forcedText, setForcedText] = useState(false);
   // Markdown: which of preview (default) / source is shown.
   const [mdSource, setMdSource] = useState(false);
+
+  // Same as the back arrow: return to the directory the file was opened from.
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
   const markdown = isMarkdown(file.name);
   const baseKind = fileKindOf(file.name);
   const kind: "image" | "text" | "binary" = forcedText
@@ -562,9 +573,7 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
       "progress",
       ({ received, total }) => {
         setProgress(
-          total > 0
-            ? Math.min(99, Math.floor((received / total) * 100))
-            : null,
+          total > 0 ? Math.min(99, Math.floor((received / total) * 100)) : null,
         );
       },
     ).then(
@@ -610,7 +619,10 @@ export function FileViewer({ file, path, onClose, onExit }: FileViewerProps) {
     setDownloading(true);
     notify(t("viewer.downloadStarted", { name: file.name }));
     try {
-      const saved = await invoke<string>("download_file", { url, name: file.name });
+      const saved = await invoke<string>("download_file", {
+        url,
+        name: file.name,
+      });
       notify(t("viewer.downloadDone", { name: saved || file.name }));
     } catch (e) {
       // Pre-Android-10: MediaStore.Downloads is unavailable, so hand the

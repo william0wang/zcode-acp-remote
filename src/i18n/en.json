@@ -301,7 +301,8 @@
     "cancel": "Cancel",
     "close": "Close",
     "back": "Back",
-    "save": "Save"
+    "save": "Save",
+    "exitHint": "Press back again to exit"
   },
   "error": {
     "title": "Something broke",

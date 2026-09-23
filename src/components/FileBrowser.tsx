@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { FsEntry, FsListing } from "../lib/types";
+import { useBackHandler } from "../lib/backNav";
 import { useAppStore } from "../store/appStore";
 import { FileViewer, fmtSize } from "./FileViewer";
 import { Spinner } from "./Spinner";
@@ -77,6 +78,15 @@ export function FileBrowser({ onClose }: FileBrowserProps) {
   const entries = (listing?.entries ?? []).filter(
     (e) => showHidden || !e.name.startsWith("."),
   );
+
+  // Same ladder as the header's back arrow: up one directory, and at the
+  // root close the browser. A viewer mounted on top registers later and so
+  // answers the gesture first.
+  useBackHandler(() => {
+    if (segments.length) setPath(segments.slice(0, -1).join("/"));
+    else onClose();
+    return true;
+  });
 
   const virtualizer = useVirtualizer({
     count: entries.length,

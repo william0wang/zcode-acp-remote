@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, RefreshCw } from "lucide-react";
+import { useBackHandler } from "../../lib/backNav";
 import { useAppStore } from "../../store/appStore";
 
 // Shared frame for every configuration section page (ADR-0009): a back
@@ -39,6 +40,13 @@ export function ConfigPageFrame({
   hasLoaded?: boolean;
 }) {
   const { t } = useTranslation();
+  // Every configuration page renders this frame, so the gesture mirrors its
+  // back button everywhere: a section page returns to the entry list, the
+  // entry list closes the configuration screen.
+  useBackHandler(() => {
+    onBack();
+    return true;
+  });
   // The configuration screens replace the chat/picker screens, which are the
   // only two that render the notice banner — so the frame renders it itself,
   // otherwise an effect-class or reset-card outcome raised inside a section
@@ -174,9 +182,7 @@ export function ConfigRow({
 
 // Empty-state line for a section with nothing in it.
 export function ConfigEmpty({ text }: { text: string }) {
-  return (
-    <p className="px-4 py-8 text-center text-sm text-faint">{text}</p>
-  );
+  return <p className="px-4 py-8 text-center text-sm text-faint">{text}</p>;
 }
 
 /** Local `MM-DD HH:MM` — the layout the rest of the app stamps times in. */

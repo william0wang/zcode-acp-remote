@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, History, Loader2, Search } from "lucide-react";
 import { HubApiError, HubClient } from "../lib/hub";
+import { useBackHandler } from "../lib/backNav";
 import type {
   HubHistoryCursor,
   HubHistorySession,
@@ -166,6 +167,17 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     setCursor(null);
     setListError(null);
   };
+
+  // The gesture mirrors the header's back button: one level up while a
+  // project's session list is open, otherwise close the sheet. Both consume.
+  useBackHandler(() => {
+    if (selected) {
+      if (resuming === null) back();
+    } else {
+      onClose();
+    }
+    return true;
+  });
 
   const items: SessionRowItem[] = useMemo(
     () =>

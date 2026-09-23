@@ -1,5 +1,9 @@
 import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { onBackButtonPress } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { dispatchBack } from "./lib/backNav";
 import { useAppStore } from "./store/appStore";
 import { ConnectScreen } from "./screens/ConnectScreen";
 import { InstancePicker } from "./screens/InstancePicker";
@@ -15,6 +19,7 @@ const ChatScreen = lazy(() =>
 );
 
 export default function App() {
+  const { t } = useTranslation();
   const init = useAppStore((s) => s.init);
   const profile = useAppStore((s) => s.profile);
   const manageOpen = useAppStore((s) => s.manageOpen);
@@ -25,6 +30,43 @@ export default function App() {
   useEffect(() => {
     init();
   }, [init]);
+
+  // Android back gesture: the overlay/screen handler stack (backNav) owns it
+  // while anything can navigate back internally. At the root screen the press
+  // arms a 2s window instead — a second press inside it exits (the standard
+  // double-back-to-exit contract; a single stray gesture never kills the
+  // app). Registered only inside the Tauri shell; the web build keeps the
+  // browser's own back behavior. Registering the listener at all is what
+  // suppresses Tauri's default (webview-history back, then exit).
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window))
+      return;
+    let lastPress = 0;
+    let unlisten: (() => void) | null = null;
+    let alive = true;
+    onBackButtonPress(() => {
+      if (dispatchBack()) return;
+      const now = Date.now();
+      if (now - lastPress < 2000) {
+        lastPress = 0;
+        void invoke("exit_app");
+      } else {
+        lastPress = now;
+        useAppStore.getState().notify(t("common.exitHint"));
+      }
+    }).then(
+      (l) => {
+        if (alive) unlisten = () => void l.unregister();
+        else void l.unregister();
+      },
+      // Desktop shell: no android back events exist there.
+      () => {},
+    );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [t]);
 
   let body: ReactNode;
   if (!profile) body = <ConnectScreen />;

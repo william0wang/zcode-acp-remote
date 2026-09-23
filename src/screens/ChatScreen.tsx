@@ -20,6 +20,7 @@ import { PermissionDialog } from "../components/PermissionDialog";
 import { ElicitationDialog } from "../components/ElicitationDialog";
 import { Spinner } from "../components/Spinner";
 import { ConfigScreenHost } from "./ConfigScreenHost";
+import { useBackHandler } from "../lib/backNav";
 import { useAppStore, type PlanEntry } from "../store/appStore";
 
 function baseName(path: string | undefined): string {
@@ -90,6 +91,23 @@ export function ChatScreen() {
   const dismissNotice = useAppStore((s) => s.dismissNotice);
   const notify = useAppStore((s) => s.notify);
   const configOpen = useAppStore((s) => s.configOpen);
+  const closeSession = useAppStore((s) => s.closeSession);
+
+  // Route-level back: leave the session for the picker. Overlays mounted on
+  // top (drawer, panels, file browser, config screens) register later and so
+  // answer the gesture first. A pending permission/elicitation is a modal
+  // agent question — the gesture neither dismisses it (that would be an
+  // accidental answer) nor navigates under it, so it is consumed as a no-op.
+  // It lives here rather than in the dialogs because children register
+  // BEFORE this screen (effects run bottom-up), which would put their
+  // no-op below closeSession in the stack.
+  useBackHandler(() => {
+    const s = useAppStore.getState();
+    const sid = s.activeSessionId;
+    if (sid && (s.permissions[sid] || s.elicitations[sid])) return true;
+    closeSession();
+    return true;
+  });
 
   // Android download feedback (MainActivity): the fallback path (pre-Android
   // 10) hands file downloads to the system DownloadManager, which the page
@@ -100,7 +118,11 @@ export function ChatScreen() {
   useEffect(() => {
     const onDownload = (e: Event) => {
       const { name, state, reason } = (
-        e as CustomEvent<{ name: string; state: string; reason?: string | null }>
+        e as CustomEvent<{
+          name: string;
+          state: string;
+          reason?: string | null;
+        }>
       ).detail;
       if (!name) return;
       notify(
@@ -250,9 +272,7 @@ export function ChatScreen() {
       {historyOpen && (
         <ProjectHistoryDialog onClose={() => setHistoryOpen(false)} />
       )}
-      {settingsOpen && (
-        <SettingsPanel onClose={() => setSettingsOpen(false)} />
-      )}
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {filesOpen && <FileBrowser onClose={() => setFilesOpen(false)} />}
       <PermissionDialog />
       <ElicitationDialog />

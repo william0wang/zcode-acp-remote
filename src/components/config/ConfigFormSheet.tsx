@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
+import { useBackHandler } from "../../lib/backNav";
 
 // Input styling shared by every configuration form — the same recipe the
 // connect screen uses, so a keyboard-focus ring reads the same everywhere.
@@ -54,6 +55,12 @@ export function ConfigFormSheet({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  // Back out of the form the same way the header arrow does; the gesture
+  // never submits.
+  useBackHandler(() => {
+    onClose();
+    return true;
+  });
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-canvas text-ink">
       <header className="flex shrink-0 items-center gap-1 px-3 pb-2 pt-[max(var(--safe-top),0.75rem)]">

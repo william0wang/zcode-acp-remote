@@ -299,7 +299,8 @@
     "cancel": "取消",
     "close": "关闭",
     "back": "返回",
-    "save": "保存"
+    "save": "保存",
+    "exitHint": "再按一次退出"
   },
   "error": {
     "title": "出错了",
