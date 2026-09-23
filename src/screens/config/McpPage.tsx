@@ -1,23 +1,41 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Trash2 } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import {
   ConfigBlock,
   ConfigEmpty,
   ConfigPageFrame,
 } from "../../components/config/ConfigPage";
+import {
+  ConfigField,
+  ConfigFormSheet,
+  ConfigToggle,
+  configInputClass,
+  kvToLines,
+  parseKvLines,
+  splitLines,
+} from "../../components/config/ConfigFormSheet";
 
-// MCP servers (ADR-0009): the user config, with a per-server switch. Every
-// write here is `needs-restart` — the bridge has to respawn its backend for a
-// server list change to reach the agent — which `applyConfigWrite` surfaces
-// and the restart affordance on the entry screen resolves.
+// MCP servers (ADR-0009). Every write here is `needs-restart` — the bridge has
+// to respawn its backend for a server list change to reach the agent — which
+// `applyConfigWrite` surfaces and the restart affordance on the entry screen
+// resolves.
+//
+// Adding and editing share `PUT /settings/mcp/{name}`, which MERGES the body
+// into the existing entry. The form therefore sends only the fields its type
+// actually uses (a stdio body never touches url/headers, and vice versa) and
+// lets the server keep whatever else the entry carried.
 
 /** One configured server as the bridge reports it (`readMcpView`). */
 export interface McpServerRow {
   name?: string;
+  type?: string;
   command?: string;
   args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
   enabled?: boolean;
 }
 
@@ -34,6 +52,9 @@ export function mcpServers(payload: unknown): McpServerRow[] {
   return wrapped?.mcp?.servers ?? [];
 }
 
+/** Transports the form offers; anything else an entry carries rides along. */
+const TYPES = ["stdio", "http", "sse"];
+
 export function McpPage() {
   const { t } = useTranslation();
   const mcp = useAppStore((s) => s.configMcp);
@@ -41,25 +62,11 @@ export function McpPage() {
   const loading = useAppStore((s) => s.configLoading);
   const error = useAppStore((s) => s.configError);
   const loadConfigSection = useAppStore((s) => s.loadConfigSection);
-  const applyConfigWrite = useAppStore((s) => s.applyConfigWrite);
-  const setMcpEnabled = useAppStore((s) => s.setMcpEnabled);
-  const deleteMcpServer = useAppStore((s) => s.deleteMcpServer);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const rows = mcpServers(mcp);
 
-  async function toggle(name: string, enable: boolean) {
-    await applyConfigWrite(
-      enable ? "enable MCP server" : "disable MCP server",
-      () => setMcpEnabled(name, enable),
-      ["mcp"],
-    );
-  }
-
-  async function remove(name: string) {
-    setConfirmDelete(null);
-    await applyConfigWrite("remove MCP server", () => deleteMcpServer(name), ["mcp"]);
-  }
+  const [editing, setEditing] = useState<McpServerRow | null>(null);
+  const [adding, setAdding] = useState(false);
 
   return (
     <ConfigPageFrame
@@ -78,71 +85,239 @@ export function McpPage() {
           {rows.map((s) => {
             const name = s.name ?? "";
             return (
-              <div key={name} className="px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm text-ink">{name}</span>
-                    {s.command && (
-                      <span className="block truncate font-mono text-[10px] text-faint">
-                        {[s.command, ...(s.args ?? [])].join(" ")}
-                      </span>
-                    )}
+              <button
+                key={name}
+                onClick={() => setEditing(s)}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-ink">{name}</span>
+                  <span className="block truncate font-mono text-[10px] text-faint">
+                    {s.command
+                      ? [s.command, ...(s.args ?? [])].join(" ")
+                      : (s.url ?? s.type ?? "")}
                   </span>
-                  <button
-                    role="switch"
-                    aria-checked={s.enabled !== false}
-                    aria-label={t("zconfig.mcpEnabled")}
-                    onClick={() => void toggle(name, s.enabled === false)}
-                    className={`mt-0.5 h-6 w-10 shrink-0 rounded-full transition ${
-                      s.enabled !== false ? "bg-emerald-500/80" : "bg-white/[0.12]"
-                    }`}
-                  >
-                    <span
-                      className={`block size-5 rounded-full bg-white transition ${
-                        s.enabled !== false ? "translate-x-4.5" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                {/* Every server here is the user's own: the bridge reads
-                    `mcp.servers` from cli/config.json, which holds nothing a
-                    plugin contributed — plugin enablement lives in a separate
-                    block the settings API does not expose. */}
-                <div className="mt-2">
-                  {confirmDelete === name ? (
-                    <div className="flex items-center gap-2">
-                      <span className="flex-1 text-[11px] text-amber-300">
-                        {t("zconfig.confirmDelete")}
-                      </span>
-                      <button
-                        onClick={() => setConfirmDelete(null)}
-                        className="rounded-lg px-2 py-1.5 text-[11px] text-faint"
-                      >
-                        {t("common.cancel")}
-                      </button>
-                      <button
-                        onClick={() => void remove(name)}
-                        className="rounded-lg bg-red-500/20 px-2.5 py-1.5 text-[11px] font-medium text-red-300"
-                      >
-                        {t("zconfig.delete")}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setConfirmDelete(name)}
-                      className="flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
-                    >
-                      <Trash2 className="size-3" />
-                      {t("zconfig.delete")}
-                    </button>
+                  {s.enabled === false && (
+                    <span className="block text-[10px] text-faint">
+                      {t("zconfig.disabled")}
+                    </span>
                   )}
-                </div>
-              </div>
+                </span>
+                <ChevronRight className="size-4 shrink-0 text-faint" />
+              </button>
             );
           })}
         </ConfigBlock>
       )}
+
+      <div className="px-4">
+        <button
+          onClick={() => setAdding(true)}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-raised px-3 py-2.5 text-sm text-dim active:bg-white/[0.07]"
+        >
+          <Plus className="size-4" />
+          {t("zconfig.mcpAdd")}
+        </button>
+      </div>
+
+      {editing && (
+        <McpForm
+          key={editing.name}
+          target={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      {adding && (
+        <McpForm key="add" target={null} onClose={() => setAdding(false)} />
+      )}
     </ConfigPageFrame>
+  );
+}
+
+/**
+ * Add/edit form for one MCP server.
+ *
+ * The name is the entry's identity (it travels in the PUT path), so it is
+ * editable only while adding — the server rule is non-empty, no path
+ * separators, mirrored here so the error never has to make the round trip.
+ */
+function McpForm({
+  target,
+  onClose,
+}: {
+  target: McpServerRow | null;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const applyConfigWrite = useAppStore((s) => s.applyConfigWrite);
+  const upsertMcp = useAppStore((s) => s.upsertMcp);
+
+  const [name, setName] = useState(target?.name ?? "");
+  const [type, setType] = useState(
+    target?.type === "http" || target?.type === "sse" ? target.type : "stdio",
+  );
+  const [command, setCommand] = useState(target?.command ?? "");
+  const [argsText, setArgsText] = useState((target?.args ?? []).join("\n"));
+  const [envText, setEnvText] = useState(kvToLines(target?.env));
+  const [url, setUrl] = useState(target?.url ?? "");
+  const [headersText, setHeadersText] = useState(kvToLines(target?.headers));
+  const [enabled, setEnabled] = useState(target?.enabled !== false);
+  const [busy, setBusy] = useState(false);
+
+  const nameOk = name.trim() !== "" && !/[\\/]/.test(name.trim());
+  const typeOk = type === "stdio" ? command.trim() !== "" : url.trim() !== "";
+  const canSubmit = nameOk && typeOk;
+
+  async function submit() {
+    setBusy(true);
+    const ok = await applyConfigWrite(
+      target ? "update MCP server" : "add MCP server",
+      () =>
+        upsertMcp(name.trim(), {
+          type,
+          enabled,
+          ...(type === "stdio"
+            ? {
+                command: command.trim(),
+                args: splitLines(argsText),
+                env: parseKvLines(envText),
+              }
+            : {
+                url: url.trim(),
+                headers: parseKvLines(headersText),
+              }),
+        }),
+      ["mcp"],
+    );
+    setBusy(false);
+    if (ok) onClose();
+  }
+
+  return (
+    <ConfigFormSheet
+      title={target ? t("zconfig.mcpEdit") : t("zconfig.mcpAdd")}
+      busy={busy}
+      submitDisabled={!canSubmit}
+      onSubmit={() => void submit()}
+      onClose={onClose}
+    >
+      <ConfigField
+        label={t("zconfig.mcpName")}
+        hint={target ? undefined : t("zconfig.mcpNameHint")}
+      >
+        {target ? (
+          <p className="mt-1 font-mono text-sm text-ink">{target.name}</p>
+        ) : (
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className={configInputClass}
+          />
+        )}
+      </ConfigField>
+
+      <ConfigField label={t("zconfig.mcpType")}>
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+          className={configInputClass}
+        >
+          {/* An entry with a type this build does not know stays selectable
+              and unchanged unless the user actively picks another. */}
+          {target?.type && !TYPES.includes(target.type) && (
+            <option value={target.type}>{target.type}</option>
+          )}
+          {TYPES.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </ConfigField>
+
+      {type === "stdio" ? (
+        <>
+          <ConfigField label={t("zconfig.mcpCommand")}>
+            <input
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="npx"
+              className={configInputClass}
+            />
+          </ConfigField>
+          <ConfigField label={t("zconfig.mcpArgs")} hint={t("zconfig.perLine")}>
+            <textarea
+              value={argsText}
+              onChange={(e) => setArgsText(e.target.value)}
+              rows={3}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={configInputClass}
+            />
+          </ConfigField>
+          <ConfigField
+            label={t("zconfig.mcpEnv")}
+            hint={t("zconfig.kvPerLine")}
+          >
+            <textarea
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              rows={3}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={configInputClass}
+            />
+          </ConfigField>
+        </>
+      ) : (
+        <>
+          <ConfigField label={t("zconfig.mcpUrl")}>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="https://example.com/mcp"
+              className={configInputClass}
+            />
+          </ConfigField>
+          <ConfigField
+            label={t("zconfig.mcpHeaders")}
+            hint={t("zconfig.kvPerLine")}
+          >
+            <textarea
+              value={headersText}
+              onChange={(e) => setHeadersText(e.target.value)}
+              rows={3}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={configInputClass}
+            />
+          </ConfigField>
+        </>
+      )}
+
+      <div className="mt-4 flex items-center justify-between">
+        <span className="text-xs font-medium text-dim">
+          {t("zconfig.enabled")}
+        </span>
+        <ConfigToggle
+          checked={enabled}
+          label={t("zconfig.mcpEnabled")}
+          onChange={setEnabled}
+        />
+      </div>
+    </ConfigFormSheet>
   );
 }

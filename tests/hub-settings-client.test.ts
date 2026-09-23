@@ -85,6 +85,54 @@ test("a skill path is encoded so slashes survive the route", async () => {
   );
 });
 
+test("a model upsert POSTs provider and model with only the set rule fields", async () => {
+  responses.push(Response.json({ ok: true, effect: "immediate" }));
+  await client().addModel({
+    providerId: "account:bigmodel-individual-coding-plan",
+    modelId: "glm-4.6",
+    enabled: true,
+    contextWindow: 200000,
+    reasoningLevels: ["high", "low"],
+  });
+  // One route serves add AND edit (an upsert): the body names the model and
+  // the rule fields that changed, nothing else.
+  expect(requested[0]).toMatchObject({
+    url: "http://hub/api/settings/models",
+    method: "POST",
+    body: {
+      providerId: "account:bigmodel-individual-coding-plan",
+      modelId: "glm-4.6",
+      enabled: true,
+      contextWindow: 200000,
+      reasoningLevels: ["high", "low"],
+    },
+  });
+});
+
+test("an agent upsert PUTs nulls verbatim — clearing rides on them", async () => {
+  responses.push(Response.json({ ok: true, effect: "needs-restart" }));
+  responses.push(Response.json({ ok: true, effect: "needs-restart" }));
+  // A personal-agent patch: `model: null` means "remove the key", so the body
+  // must carry the null, not drop it.
+  await client().upsertAgent("mine", { description: "d", model: null });
+  // A built-in override clear: BOTH keys null together, or the server calls
+  // the request malformed.
+  await client().upsertAgent("general-purpose", {
+    providerId: null,
+    modelId: null,
+  });
+  expect(requested[0]).toMatchObject({
+    url: "http://hub/api/settings/agents/mine",
+    method: "PUT",
+    body: { description: "d", model: null },
+  });
+  expect(requested[1]).toMatchObject({
+    url: "http://hub/api/settings/agents/general-purpose",
+    method: "PUT",
+    body: { providerId: null, modelId: null },
+  });
+});
+
 test("a hook edit carries all three coordinates — two in the path, one in the body", async () => {
   responses.push(Response.json({ ok: true, effect: "needs-restart" }));
   await client().updateHook("PostToolUse", 2, 1, { command: "echo hi" });
@@ -149,7 +197,10 @@ test("a reset-card spend carries the nonce from the status read", async () => {
 
 test("a denied opportunity is data, not a throw", async () => {
   responses.push(
-    Response.json({ ok: true, opportunity: { granted: false, nextTryAt: 1700000000000 } }),
+    Response.json({
+      ok: true,
+      opportunity: { granted: false, nextTryAt: 1700000000000 },
+    }),
   );
   await expect(
     client().requestResetOpportunity({
@@ -187,7 +238,9 @@ test("a backup restore sends the file and the backup path", async () => {
 });
 
 test("an app-update install posts the version and artifact url", async () => {
-  responses.push(Response.json({ ok: true, install: { stage: "downloading" } }));
+  responses.push(
+    Response.json({ ok: true, install: { stage: "downloading" } }),
+  );
   await client().installAppUpdate({
     version: "3.14.2",
     url: "https://cdn/zcode.zip",
@@ -196,7 +249,11 @@ test("an app-update install posts the version and artifact url", async () => {
   expect(requested[0]).toMatchObject({
     url: "http://hub/api/settings/app-update/install",
     method: "POST",
-    body: { version: "3.14.2", url: "https://cdn/zcode.zip", channel: "stable" },
+    body: {
+      version: "3.14.2",
+      url: "https://cdn/zcode.zip",
+      channel: "stable",
+    },
   });
 });
 
@@ -219,5 +276,7 @@ test("the install carries the channel the check was made with", async () => {
 test("the check reads the requested channel, not just stable", async () => {
   responses.push(Response.json({ ok: true }));
   await client().settingsAppUpdate("preview");
-  expect(requested[0]!.url).toBe("http://hub/api/settings/app-update?channel=preview");
+  expect(requested[0]!.url).toBe(
+    "http://hub/api/settings/app-update?channel=preview",
+  );
 });

@@ -332,6 +332,52 @@ export interface WriteEffect {
 }
 
 /**
+ * Body of `POST /settings/models` — an upsert: it adds a model to a provider
+ * or edits its personal rule. Only the fields present change; the route maps
+ * `contextWindow` into `properties` and `reasoningLevels` into `optionSpecs`.
+ */
+export interface ModelUpsert {
+  providerId: string;
+  modelId: string;
+  enabled?: boolean;
+  contextWindow?: number;
+  reasoningLevels?: string[];
+}
+
+/**
+ * Body of `PUT /settings/mcp/{name}`. The route MERGES this into the existing
+ * entry, so only the fields the form actually edits are sent. `type` decides
+ * which transport fields the runtime reads: stdio uses command/args/env,
+ * http and sse use url/headers.
+ */
+export interface McpServerUpsert {
+  type?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+/**
+ * Body of `PUT /settings/agents/{name}`. A personal agent patches frontmatter
+ * fields (`model`/`thoughtLevel` accept null to clear the key); a built-in
+ * agent instead reads a model override, and `providerId`/`modelId` must be
+ * null TOGETHER to clear it. A PUT on a missing personal agent creates it —
+ * then `description` is required.
+ */
+export interface AgentUpsert {
+  description?: string;
+  color?: string;
+  model?: string | null;
+  thoughtLevel?: string | null;
+  providerId?: string | null;
+  modelId?: string | null;
+  reasoningLevel?: string;
+}
+
+/**
  * One-shot snapshot of every section, for a config page's first paint.
  *
  * The two optional sections degrade independently: a machine that never ran an
@@ -363,7 +409,10 @@ export interface SettingsUsage {
     requestCount?: number;
     share?: number;
   }>;
-  daily: Array<{ date: string; models: Array<{ modelId: string; totalTokens: number }> }>;
+  daily: Array<{
+    date: string;
+    models: Array<{ modelId: string; totalTokens: number }>;
+  }>;
 }
 
 /**
@@ -402,4 +451,3 @@ export interface AppUpdateState {
   artifactPath?: string;
   error?: string;
 }
-

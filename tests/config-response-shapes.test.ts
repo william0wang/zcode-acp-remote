@@ -17,7 +17,10 @@ import { maxUsedPercent, isTeamPlan } from "../src/screens/config/QuotaPage";
 import { contextWindowFor } from "../src/screens/config/ModelsPage";
 import { mcpServers } from "../src/screens/config/McpPage";
 import { flattenHooks, hooksEnabled } from "../src/screens/config/HooksPage";
-import { isDeletableScope, type SkillScope } from "../src/screens/config/SkillsPage";
+import {
+  isUserTreeScope,
+  type SkillScope,
+} from "../src/screens/config/SkillsPage";
 import { isAgentReadOnly } from "../src/screens/config/AgentsPage";
 
 // --- mcp: wrapped in `{ok, mcp:{servers}}`, like models and usage -----------
@@ -93,10 +96,18 @@ describe("models payload", () => {
     ok: true,
     models: {
       available: [
-        { providerId: "account:bigmodel-individual-coding-plan", modelId: "glm-4.6" },
+        {
+          providerId: "account:bigmodel-individual-coding-plan",
+          modelId: "glm-4.6",
+        },
         { providerId: "builtin:bigmodel-coding-plan", modelId: "glm-4.5-air" },
       ],
-      providers: [{ providerId: "builtin:bigmodel-coding-plan", providerName: "Bigmodel" }],
+      providers: [
+        {
+          providerId: "builtin:bigmodel-coding-plan",
+          providerName: "Bigmodel",
+        },
+      ],
       modelRules: [
         {
           providerId: "account:bigmodel-individual-coding-plan",
@@ -117,9 +128,9 @@ describe("models payload", () => {
   });
 
   it("joins the context window from modelRules by provider+model", () => {
-    expect(contextWindowFor(payload.models.available[0]!, payload.models.modelRules)).toBe(
-      200000,
-    );
+    expect(
+      contextWindowFor(payload.models.available[0]!, payload.models.modelRules),
+    ).toBe(200000);
   });
 
   it("leaves the window absent when no rule carries properties", () => {
@@ -139,7 +150,12 @@ describe("usage payload", () => {
       range: "7d" as const,
       summary: { totalTokens: 12345, requestCount: 7, models: 2 },
       models: [{ modelId: "glm-4.6", totalTokens: 9000, share: 0.72 }],
-      daily: [{ date: "2026-09-22", models: [{ modelId: "glm-4.6", totalTokens: 9000 }] }],
+      daily: [
+        {
+          date: "2026-09-22",
+          models: [{ modelId: "glm-4.6", totalTokens: 9000 }],
+        },
+      ],
     },
   };
 
@@ -154,7 +170,10 @@ describe("usage payload", () => {
   });
 
   it("treats a machine with no agent database as unavailable, not broken", () => {
-    const empty = { ok: true, usage: { available: false, range: "7d" as const } };
+    const empty = {
+      ok: true,
+      usage: { available: false, range: "7d" as const },
+    };
     expect(empty.usage.available).toBe(false);
   });
 });
@@ -168,9 +187,14 @@ describe("hooks payload", () => {
       enabled: true,
       events: {
         PostToolUse: [
-          { matcher: "Bash", hooks: [{ command: "echo one" }, { command: "echo two" }] },
+          {
+            matcher: "Bash",
+            hooks: [{ command: "echo one" }, { command: "echo two" }],
+          },
         ],
-        SessionStart: [{ hooks: [{ command: "boot", enabled: false, timeout: 5 }] }],
+        SessionStart: [
+          { hooks: [{ command: "boot", enabled: false, timeout: 5 }] },
+        ],
       },
     },
     enabled: true,
@@ -214,8 +238,12 @@ describe("hooks payload", () => {
   });
 
   it("reads the gate ON only when the route says so explicitly", () => {
-    expect(hooksEnabled({ enabled: true, hooks: { enabled: true, events: {} } })).toBe(true);
-    expect(hooksEnabled({ enabled: false, hooks: { enabled: true, events: {} } })).toBe(false);
+    expect(
+      hooksEnabled({ enabled: true, hooks: { enabled: true, events: {} } }),
+    ).toBe(true);
+    expect(
+      hooksEnabled({ enabled: false, hooks: { enabled: true, events: {} } }),
+    ).toBe(false);
   });
 
   it("falls back to the nested copy when the route omits its field", () => {
@@ -228,12 +256,12 @@ describe("hooks payload", () => {
   it("prefers the route's top-level gate over the nested copy", () => {
     // Both are present and either being false means hooks are inert; the
     // route's own field is the authoritative one.
-    expect(hooksEnabled({ enabled: false, hooks: { enabled: true, events: {} } })).toBe(
-      false,
-    );
-    expect(hooksEnabled({ enabled: true, hooks: { enabled: false, events: {} } })).toBe(
-      true,
-    );
+    expect(
+      hooksEnabled({ enabled: false, hooks: { enabled: true, events: {} } }),
+    ).toBe(false);
+    expect(
+      hooksEnabled({ enabled: true, hooks: { enabled: false, events: {} } }),
+    ).toBe(true);
   });
 });
 
@@ -241,22 +269,44 @@ describe("hooks payload", () => {
 
 describe("skills payload", () => {
   const wire = [
-    { name: "mine", path: "/h/.zcode/skills/mine/SKILL.md", scope: "user" as SkillScope, enabled: true },
-    { name: "plug", path: "/h/.zcode/cli/plugins/cache/p/SKILL.md", scope: "plugin" as SkillScope, enabled: true },
-    { name: "ws", path: "/w/.zcode/skills/ws/SKILL.md", scope: "project" as SkillScope, enabled: false },
+    {
+      name: "mine",
+      path: "/h/.zcode/skills/mine/SKILL.md",
+      scope: "user" as SkillScope,
+      enabled: true,
+    },
+    {
+      name: "plug",
+      path: "/h/.zcode/cli/plugins/cache/p/SKILL.md",
+      scope: "plugin" as SkillScope,
+      enabled: true,
+    },
+    {
+      name: "ws",
+      path: "/w/.zcode/skills/ws/SKILL.md",
+      scope: "project" as SkillScope,
+      enabled: false,
+    },
   ];
 
-  it("allows a delete only in the user and agents roots", () => {
-    // The bug this guards: reading a `deletable` field the bridge never sends
-    // made every delete button vanish, while the copy button appeared only on
-    // skills that were switched OFF. `isDeletableScope` is the page's own
-    // predicate — imported, so a page that starts reading another field fails
-    // here instead of shipping a dead button.
-    expect(wire.map((s) => isDeletableScope(s.scope))).toEqual([true, false, false]);
+  it("counts only the user's own trees as already-user-scope", () => {
+    // The bug this guards: reading a `userTree` field the bridge never sends
+    // made every row look like it belonged there. `isUserTreeScope` is the
+    // page's own predicate — imported, so a page that starts reading another
+    // field fails here instead of shipping a wrong copy button.
+    expect(wire.map((s) => isUserTreeScope(s.scope))).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
 
-  it("offers copy-to-user for exactly the scopes that are not deletable", () => {
-    expect(wire.map((s) => !isDeletableScope(s.scope))).toEqual([false, true, true]);
+  it("offers copy-to-user for exactly the scopes outside the user's trees", () => {
+    expect(wire.map((s) => !isUserTreeScope(s.scope))).toEqual([
+      false,
+      true,
+      true,
+    ]);
   });
 });
 
@@ -344,9 +394,9 @@ describe("spend threshold", () => {
   });
 
   it("stays shut while every window is under it", () => {
-    expect(maxUsedPercent([{ usedPercent: 89 }, { usedPercent: 91 }])).toBeLessThan(
-      100,
-    );
+    expect(
+      maxUsedPercent([{ usedPercent: 89 }, { usedPercent: 91 }]),
+    ).toBeLessThan(100);
     expect(maxUsedPercent([{ usedPercent: 89 }])).toBeLessThan(90);
   });
 });

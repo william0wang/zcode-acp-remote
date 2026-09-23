@@ -45,7 +45,10 @@ import {
   type SlashCommand,
   type ToolCallPart,
   type AppUpdateState,
+  type AgentUpsert,
   type Effect,
+  type McpServerUpsert,
+  type ModelUpsert,
   type ResetCardStatus,
   type SettingsAll,
   type SettingsUsage,
@@ -104,17 +107,16 @@ function bridgeSupportsPageMarker(version: unknown): boolean {
 // the backend's OpenAI-style inclusive counts. Null when the turn reported
 // no cache numbers at all (caller keeps the previous rate then).
 function cacheHitRate(u: unknown): number | null {
-  const v = u as
-    | {
-        inputTokens?: unknown;
-        cachedReadTokens?: unknown;
-        cachedWriteTokens?: unknown;
-      }
-    | null;
+  const v = u as {
+    inputTokens?: unknown;
+    cachedReadTokens?: unknown;
+    cachedWriteTokens?: unknown;
+  } | null;
   if (!v || typeof v !== "object") return null;
   if (typeof v.cachedReadTokens !== "number") return null;
   const input = typeof v.inputTokens === "number" ? v.inputTokens : 0;
-  const write = typeof v.cachedWriteTokens === "number" ? v.cachedWriteTokens : 0;
+  const write =
+    typeof v.cachedWriteTokens === "number" ? v.cachedWriteTokens : 0;
   const denom = input + v.cachedReadTokens + write;
   return denom > 0 ? Math.round((v.cachedReadTokens / denom) * 100) : null;
 }
@@ -168,7 +170,12 @@ function parseUsageStats(result: unknown): AccountUsageStats | null {
       ? {
           ollama: {
             kind: (
-              ["success", "not_configured", "auth_error", "unavailable"] as const
+              [
+                "success",
+                "not_configured",
+                "auth_error",
+                "unavailable",
+              ] as const
             ).includes(oc.kind as OllamaUsageStats["kind"])
               ? (oc.kind as OllamaUsageStats["kind"])
               : "unavailable",
@@ -523,14 +530,27 @@ interface AppState {
     providerId: string,
     enabled: boolean,
   ) => Promise<Effect | undefined>;
-  setSkillEnabled: (path: string, enable: boolean) => Promise<Effect | undefined>;
+  setSkillEnabled: (
+    path: string,
+    enable: boolean,
+  ) => Promise<Effect | undefined>;
   copySkillToUser: (path: string) => Promise<Effect | undefined>;
-  deleteSkill: (path: string) => Promise<Effect | undefined>;
+  // POST /settings/models is an upsert: one route adds a model and edits its
+  // rule (context window, reasoning levels), so one wrapper serves both forms.
+  upsertModel: (body: ModelUpsert) => Promise<Effect | undefined>;
   setMcpEnabled: (name: string, enable: boolean) => Promise<Effect | undefined>;
-  deleteMcpServer: (name: string) => Promise<Effect | undefined>;
+  upsertMcp: (
+    name: string,
+    body: McpServerUpsert,
+  ) => Promise<Effect | undefined>;
   setHooksEnabled: (enabled: boolean) => Promise<Effect | undefined>;
-  setAgentEnabled: (name: string, enable: boolean) => Promise<Effect | undefined>;
-  deleteAgent: (name: string) => Promise<Effect | undefined>;
+  setAgentEnabled: (
+    name: string,
+    enable: boolean,
+  ) => Promise<Effect | undefined>;
+  // A PUT on a missing personal agent creates it, so this one route serves
+  // editing, creating, and the built-ins' model override.
+  upsertAgent: (name: string, body: AgentUpsert) => Promise<Effect | undefined>;
   restoreBackup: (file: string, path: string) => Promise<Effect | undefined>;
   // Reset cards: read the inventory, ask for an opportunity, spend a card.
   // Both actions take the provider (and the spend its nonce) explicitly: a
@@ -545,7 +565,11 @@ interface AppState {
   }) => Promise<boolean>;
   markResetHistoryRead: () => Promise<void>;
   // App update: start an install and poll its progress.
-  installAppUpdate: (input: { version: string; url: string; channel?: string }) => Promise<void>;
+  installAppUpdate: (input: {
+    version: string;
+    url: string;
+    channel?: string;
+  }) => Promise<void>;
   pollAppUpdate: () => Promise<void>;
   // Restarts the backend of the instance that owns the configuration, so
   // needs-restart writes take effect. Returns the interrupted-turn count.
@@ -926,9 +950,7 @@ export const useAppStore = create<AppState>((set, get) => {
     if (typeof meta !== "object" || meta === null) return false;
     const zcode = (meta as { zcode?: { earlierPage?: unknown } }).zcode;
     return (
-      typeof zcode === "object" &&
-      zcode !== null &&
-      zcode.earlierPage === true
+      typeof zcode === "object" && zcode !== null && zcode.earlierPage === true
     );
   }
 
@@ -1169,8 +1191,11 @@ export const useAppStore = create<AppState>((set, get) => {
   // construction, never live, so they must not fall into applyUpdate (that
   // lands them at the tail: older messages appended after the newest ones).
   // Hold them briefly so a burst coalesces into ONE prepended segment.
-  let latePageBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
-    [];
+  let latePageBuffer: {
+    sessionId: string;
+    u: SessionUpdate;
+    meta?: unknown;
+  }[] = [];
   let latePageTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Legacy bridges (< PAGE_MARKER_BRIDGE_VERSION) cannot mark page updates,
@@ -1222,10 +1247,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       if (!mine || segment.length === 0) return {};
       let rest = state.messages;
-      if (
-        rest.length &&
-        segment[segment.length - 1].id === rest[0].id
-      ) {
+      if (rest.length && segment[segment.length - 1].id === rest[0].id) {
         // Seam dedupe: the same message split across pages.
         const seam = segment[segment.length - 1];
         segment = segment.slice(0, -1);
@@ -2940,7 +2962,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (section === "appUpdate") void get().loadConfigSection("appUpdate");
     },
 
-    openConfig: (section = null) => set({ configOpen: true, configSection: section }),
+    openConfig: (section = null) =>
+      set({ configOpen: true, configSection: section }),
 
     closeConfig: () => set({ configOpen: false, configSection: null }),
 
@@ -3034,7 +3057,9 @@ export const useAppStore = create<AppState>((set, get) => {
             set({ configBackups: await client.settingsBackups() });
             break;
           case "appUpdate":
-            set({ configAppUpdate: await client.settingsAppUpdate(updateChannel) });
+            set({
+              configAppUpdate: await client.settingsAppUpdate(updateChannel),
+            });
             break;
           case "quota":
             // The plan-quota screen reuses the hub-level quota the side panels
@@ -3080,7 +3105,9 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return true;
       } catch (e) {
-        get().notify(`${label} failed: ${e instanceof Error ? e.message : String(e)}`);
+        get().notify(
+          `${label} failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
         return false;
       }
     },
@@ -3106,10 +3133,10 @@ export const useAppStore = create<AppState>((set, get) => {
       return res.effect;
     },
 
-    deleteSkill: async (path) => {
+    upsertModel: async (body) => {
       const client = hub();
       if (!client) return undefined;
-      const res = await client.deleteSkill(path);
+      const res = await client.addModel(body);
       return res.effect;
     },
 
@@ -3120,10 +3147,10 @@ export const useAppStore = create<AppState>((set, get) => {
       return res.effect;
     },
 
-    deleteMcpServer: async (name) => {
+    upsertMcp: async (name, body) => {
       const client = hub();
       if (!client) return undefined;
-      const res = await client.removeMcpServer(name);
+      const res = await client.upsertMcpServer(name, body);
       return res.effect;
     },
 
@@ -3141,10 +3168,10 @@ export const useAppStore = create<AppState>((set, get) => {
       return res.effect;
     },
 
-    deleteAgent: async (name) => {
+    upsertAgent: async (name, body) => {
       const client = hub();
       if (!client) return undefined;
-      const res = await client.deleteAgent(name);
+      const res = await client.upsertAgent(name, body);
       return res.effect;
     },
 
@@ -3207,7 +3234,8 @@ export const useAppStore = create<AppState>((set, get) => {
       // The provider is the caller's, captured when the gesture began. Reading
       // the store here would let a switch that landed while the request was in
       // flight redirect the spend at the new provider's card.
-      if (get().resetProviderId && get().resetProviderId !== providerId) return false;
+      if (get().resetProviderId && get().resetProviderId !== providerId)
+        return false;
       set({ resetBusy: true });
       try {
         const res = await client.requestResetOpportunity({
@@ -3241,7 +3269,8 @@ export const useAppStore = create<AppState>((set, get) => {
       // Same guard as the opportunity: if the user has switched provider since
       // the gesture began, this nonce belongs to another provider's inventory
       // and spending it now would burn the wrong card.
-      if (get().resetProviderId && get().resetProviderId !== providerId) return false;
+      if (get().resetProviderId && get().resetProviderId !== providerId)
+        return false;
       set({ resetBusy: true });
       // The key minted with this nonce, NOT a fresh one. The backend keys the
       // spend on it, so a retry (the 502/504 the bridge answers when a spend
@@ -3258,7 +3287,11 @@ export const useAppStore = create<AppState>((set, get) => {
         });
         set({ resetBusy: false });
         const used = (res as { ok: boolean; used?: boolean }).used !== false;
-        set({ notice: used ? "notice.configResetSpent" : "notice.configResetSpendFailed" });
+        set({
+          notice: used
+            ? "notice.configResetSpent"
+            : "notice.configResetSpendFailed",
+        });
         // Refresh both surfaces: the card list (one fewer card) and the quota
         // (the window it cleared). A spend that shows no result reads as a
         // failure even when it worked. The refresh also issues the next nonce.
@@ -3331,7 +3364,8 @@ export const useAppStore = create<AppState>((set, get) => {
         const res = (await client.settingsAppUpdate(updateChannel)) as {
           appUpdate?: { install?: AppUpdateState };
         };
-        if (res.appUpdate?.install) set({ appUpdateInstall: res.appUpdate.install });
+        if (res.appUpdate?.install)
+          set({ appUpdateInstall: res.appUpdate.install });
       } catch {
         // A poll failure is not worth a toast; the next one may succeed.
       }

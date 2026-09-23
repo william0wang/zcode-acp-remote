@@ -1,6 +1,5 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, Trash2 } from "lucide-react";
+import { Copy } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import {
   ConfigBlock,
@@ -11,25 +10,27 @@ import {
 // Discovered skills (ADR-0009): every SKILL.md the bridge found, with its
 // enabled state and where it lives.
 //
-// What may be done to a skill follows its scope, which the bridge reports
-// directly (`user` | `agents` | `plugin` | `project`):
-//   - user / agents: the user's own trees — deletable, and copyable-to-user is
-//     pointless (already there).
-//   - plugin: shipped with a plugin — read-only here, deleting it would desync
-//     the plugin install.
-//   - project: a workspace skill — not deletable remotely (the bridge refuses
-//     a path outside its controlled roots) but copyable into the user tree so
-//     the user gets an editable copy.
-// Enable is a switch for every scope: it is immediate and reversible.
+// The API can delete a skill, but a list row is the wrong place to decide
+// which file on somebody's machine stops existing — so this screen offers
+// only the reversible controls: the enable switch (immediate) and, for skills
+// that live outside the user's own tree, a copy into it (which produces an
+// editable copy without touching the original).
+//
+// Scope, reported directly by the bridge (`user` | `agents` | `plugin` |
+// `project`):
+//   - user / agents: the user's own trees — copying there is pointless.
+//   - plugin: shipped with a plugin — a copy would desync the plugin install.
+//   - project: a workspace skill — copying is the one way to get an editable
+//     personal version.
 
 /** Scope values the bridge reports (server skills.ts SkillEntry). */
 export type SkillScope = "user" | "agents" | "plugin" | "project";
 
-export const DELETABLE_SCOPES = new Set<SkillScope>(["user", "agents"]);
+const USER_TREE_SCOPES = new Set<SkillScope>(["user", "agents"]);
 
-/** Whether a skill's directory may be deleted through the API. */
-export function isDeletableScope(scope: SkillScope | undefined): boolean {
-  return scope !== undefined && DELETABLE_SCOPES.has(scope);
+/** Whether a skill already lives in one of the user's own trees. */
+export function isUserTreeScope(scope: SkillScope | undefined): boolean {
+  return scope !== undefined && USER_TREE_SCOPES.has(scope);
 }
 
 export function SkillsPage() {
@@ -41,22 +42,18 @@ export function SkillsPage() {
   const loadConfigSection = useAppStore((s) => s.loadConfigSection);
   const applyConfigWrite = useAppStore((s) => s.applyConfigWrite);
   const setSkillEnabled = useAppStore((s) => s.setSkillEnabled);
-  const deleteSkill = useAppStore((s) => s.deleteSkill);
   const copySkillToUser = useAppStore((s) => s.copySkillToUser);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  const payload = skills as
-    | {
-        ok?: boolean;
-        skills?: Array<{
-          path?: string;
-          name?: string;
-          description?: string;
-          scope?: SkillScope;
-          enabled?: boolean;
-        }>;
-      }
-    | null;
+  const payload = skills as {
+    ok?: boolean;
+    skills?: Array<{
+      path?: string;
+      name?: string;
+      description?: string;
+      scope?: SkillScope;
+      enabled?: boolean;
+    }>;
+  } | null;
 
   const rows = payload?.skills ?? [];
 
@@ -68,13 +65,10 @@ export function SkillsPage() {
     );
   }
 
-  async function remove(path: string) {
-    setConfirmDelete(null);
-    await applyConfigWrite("delete skill", () => deleteSkill(path), ["skills"]);
-  }
-
   async function copyToUser(path: string) {
-    await applyConfigWrite("copy skill", () => copySkillToUser(path), ["skills"]);
+    await applyConfigWrite("copy skill", () => copySkillToUser(path), [
+      "skills",
+    ]);
   }
 
   return (
@@ -94,11 +88,10 @@ export function SkillsPage() {
           {rows.map((s) => {
             const path = s.path ?? s.name ?? "";
             const scope = s.scope;
-            const deletable = isDeletableScope(scope);
             // Copy only makes sense for a skill that is NOT already in the
-            // user tree — and it is the one action available for a project
-            // skill, which cannot be deleted from here.
-            const copyable = scope != null && !isDeletableScope(scope);
+            // user tree — and for a project skill it is the one way to get
+            // an editable personal copy.
+            const copyable = scope != null && !isUserTreeScope(scope);
             return (
               <div key={path} className="px-4 py-3">
                 <div className="flex items-start gap-3">
@@ -124,56 +117,30 @@ export function SkillsPage() {
                     aria-label={t("zconfig.skillEnabled")}
                     onClick={() => void toggle(path, s.enabled === false)}
                     className={`mt-0.5 h-6 w-10 shrink-0 rounded-full transition ${
-                      s.enabled !== false ? "bg-emerald-500/80" : "bg-white/[0.12]"
+                      s.enabled !== false
+                        ? "bg-emerald-500/80"
+                        : "bg-white/[0.12]"
                     }`}
                   >
                     <span
                       className={`block size-5 rounded-full bg-white transition ${
-                        s.enabled !== false ? "translate-x-4.5" : "translate-x-0.5"
+                        s.enabled !== false
+                          ? "translate-x-4.5"
+                          : "translate-x-0.5"
                       }`}
                     />
                   </button>
                 </div>
 
-                {(deletable || copyable) && (
-                  <div className="mt-2 flex gap-2">
-                    {copyable && (
-                      <button
-                        onClick={() => void copyToUser(path)}
-                        className="flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
-                      >
-                        <Copy className="size-3" />
-                        {t("zconfig.skillCopy")}
-                      </button>
-                    )}
-                    {deletable &&
-                      (confirmDelete === path ? (
-                        <div className="flex flex-1 items-center gap-2">
-                          <span className="flex-1 text-[11px] text-amber-300">
-                            {t("zconfig.confirmDelete")}
-                          </span>
-                          <button
-                            onClick={() => setConfirmDelete(null)}
-                            className="rounded-lg px-2 py-1.5 text-[11px] text-faint"
-                          >
-                            {t("common.cancel")}
-                          </button>
-                          <button
-                            onClick={() => void remove(path)}
-                            className="rounded-lg bg-red-500/20 px-2.5 py-1.5 text-[11px] font-medium text-red-300"
-                          >
-                            {t("zconfig.delete")}
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmDelete(path)}
-                          className="flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
-                        >
-                          <Trash2 className="size-3" />
-                          {t("zconfig.delete")}
-                        </button>
-                      ))}
+                {copyable && (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => void copyToUser(path)}
+                      className="flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
+                    >
+                      <Copy className="size-3" />
+                      {t("zconfig.skillCopy")}
+                    </button>
                   </div>
                 )}
               </div>

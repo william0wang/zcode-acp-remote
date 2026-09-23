@@ -1,4 +1,5 @@
 import type {
+  AgentUpsert,
   FsListing,
   HubCreateInstanceResult,
   HubHistoryCursor,
@@ -6,6 +7,8 @@ import type {
   HubInstance,
   HubProject,
   HubUpgradeResult,
+  McpServerUpsert,
+  ModelUpsert,
   ResetCardStatus,
   SettingsAll,
   WriteEffect,
@@ -323,7 +326,9 @@ export class HubClient {
 
   /** `range` is 7d | 30d | all. */
   async settingsUsage(range: string): Promise<unknown> {
-    const res = await this.fetch(`/api/settings/usage?range=${encodeURIComponent(range)}`);
+    const res = await this.fetch(
+      `/api/settings/usage?range=${encodeURIComponent(range)}`,
+    );
     return res.json();
   }
 
@@ -350,15 +355,26 @@ export class HubClient {
     nonce: string;
     idempotencyKey: string;
   }): Promise<unknown> {
-    const res = await this.fetch("/api/settings/reset-cards/use", "POST", input);
+    const res = await this.fetch(
+      "/api/settings/reset-cards/use",
+      "POST",
+      input,
+    );
     return res.json();
   }
 
   async requestResetOpportunity(input: {
     providerId: string;
     idempotencyKey: string;
-  }): Promise<{ ok: boolean; opportunity?: { granted: boolean; nextTryAt: number | null } }> {
-    const res = await this.fetch("/api/settings/reset-cards/opportunity", "POST", input);
+  }): Promise<{
+    ok: boolean;
+    opportunity?: { granted: boolean; nextTryAt: number | null };
+  }> {
+    const res = await this.fetch(
+      "/api/settings/reset-cards/opportunity",
+      "POST",
+      input,
+    );
     return (await res.json()) as {
       ok: boolean;
       opportunity?: { granted: boolean; nextTryAt: number | null };
@@ -366,7 +382,9 @@ export class HubClient {
   }
 
   async markResetHistoryRead(providerId: string): Promise<void> {
-    await this.fetch("/api/settings/reset-cards/history-read", "POST", { providerId });
+    await this.fetch("/api/settings/reset-cards/history-read", "POST", {
+      providerId,
+    });
   }
 
   async settingsBackups(): Promise<unknown> {
@@ -413,7 +431,7 @@ export class HubClient {
     return (await res.json()) as WriteEffect;
   }
 
-  async addModel(body: Record<string, unknown>): Promise<WriteEffect> {
+  async addModel(body: ModelUpsert): Promise<WriteEffect> {
     const res = await this.fetch("/api/settings/models", "POST", body);
     return (await res.json()) as WriteEffect;
   }
@@ -426,13 +444,20 @@ export class HubClient {
     return (await res.json()) as WriteEffect;
   }
 
-  async setSkillEnabled(body: { path: string; enable: boolean }): Promise<WriteEffect> {
+  async setSkillEnabled(body: {
+    path: string;
+    enable: boolean;
+  }): Promise<WriteEffect> {
     const res = await this.fetch("/api/settings/skills/enable", "POST", body);
     return (await res.json()) as WriteEffect;
   }
 
   async copySkillToUser(body: { path: string }): Promise<WriteEffect> {
-    const res = await this.fetch("/api/settings/skills/copy-to-user", "POST", body);
+    const res = await this.fetch(
+      "/api/settings/skills/copy-to-user",
+      "POST",
+      body,
+    );
     return (await res.json()) as WriteEffect;
   }
 
@@ -444,7 +469,10 @@ export class HubClient {
     return (await res.json()) as WriteEffect;
   }
 
-  async upsertMcpServer(name: string, body: Record<string, unknown>): Promise<WriteEffect> {
+  async upsertMcpServer(
+    name: string,
+    body: McpServerUpsert,
+  ): Promise<WriteEffect> {
     const res = await this.fetch(
       `/api/settings/mcp/${encodeURIComponent(name)}`,
       "PUT",
@@ -454,7 +482,10 @@ export class HubClient {
   }
 
   async removeMcpServer(name: string): Promise<WriteEffect> {
-    const res = await this.fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, "DELETE");
+    const res = await this.fetch(
+      `/api/settings/mcp/${encodeURIComponent(name)}`,
+      "DELETE",
+    );
     return (await res.json()) as WriteEffect;
   }
 
@@ -491,11 +522,13 @@ export class HubClient {
   }
 
   async setHooksEnabled(enabled: boolean): Promise<WriteEffect> {
-    const res = await this.fetch("/api/settings/hooks/enabled", "POST", { enabled });
+    const res = await this.fetch("/api/settings/hooks/enabled", "POST", {
+      enabled,
+    });
     return (await res.json()) as WriteEffect;
   }
 
-  async upsertAgent(name: string, body: Record<string, unknown>): Promise<WriteEffect> {
+  async upsertAgent(name: string, body: AgentUpsert): Promise<WriteEffect> {
     const res = await this.fetch(
       `/api/settings/agents/${encodeURIComponent(name)}`,
       "PUT",
@@ -505,7 +538,10 @@ export class HubClient {
   }
 
   async deleteAgent(name: string): Promise<WriteEffect> {
-    const res = await this.fetch(`/api/settings/agents/${encodeURIComponent(name)}`, "DELETE");
+    const res = await this.fetch(
+      `/api/settings/agents/${encodeURIComponent(name)}`,
+      "DELETE",
+    );
     return (await res.json()) as WriteEffect;
   }
 
@@ -518,7 +554,10 @@ export class HubClient {
     return (await res.json()) as WriteEffect;
   }
 
-  async restoreBackup(body: { file: string; path: string }): Promise<WriteEffect> {
+  async restoreBackup(body: {
+    file: string;
+    path: string;
+  }): Promise<WriteEffect> {
     const res = await this.fetch("/api/settings/backups/restore", "POST", body);
     return (await res.json()) as WriteEffect;
   }
@@ -528,7 +567,11 @@ export class HubClient {
     url: string;
     channel?: string;
   }): Promise<unknown> {
-    const res = await this.fetch("/api/settings/app-update/install", "POST", body);
+    const res = await this.fetch(
+      "/api/settings/app-update/install",
+      "POST",
+      body,
+    );
     return res.json();
   }
 
@@ -545,7 +588,10 @@ export class HubClient {
   async restartBackend(
     instanceId: string,
   ): Promise<{ cancelledTurns: number; closed: boolean }> {
-    const res = await this.fetch(`/api/instances/${instanceId}/backend/restart`, "POST");
+    const res = await this.fetch(
+      `/api/instances/${instanceId}/backend/restart`,
+      "POST",
+    );
     return (await res.json()) as { cancelledTurns: number; closed: boolean };
   }
 }

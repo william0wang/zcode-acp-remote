@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, RefreshCw, Sliders, X } from "lucide-react";
+import { Pencil, RefreshCw, X } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
 
@@ -46,7 +46,8 @@ export function PanelShell({
 // upgrade trigger, and the account quota card (connection-level data — the
 // list screen keeps the instance WS alive, so it renders here too).
 // Rarely-touched language/font preferences sit at the very bottom.
-// Session-scoped controls live in SessionPanel.
+// Session-scoped controls live in SessionPanel. ZCode configuration has its
+// own header button on the picker — it does not get a second entry here.
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const savedServers = useAppStore((s) => s.savedServers);
@@ -91,8 +92,6 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }
 
   const activeServer = savedServers.find((s) => s.id === activeServerId);
-  const openConfig = useAppStore((s) => s.openConfig);
-  const pendingRestart = useAppStore((s) => s.pendingRestart);
 
   return (
     <PanelShell title={t("panel.title")} onClose={onClose}>
@@ -132,32 +131,6 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               {upgradeNote}
             </p>
           )}
-        </div>
-
-        {/* ZCode configuration (ADR-0009) — a full screen of its own, reached
-            from here and from the instance picker. The badge is the one thing
-            that must not be missed: a needs-restart write has not landed yet,
-            and the user is otherwise never told again. */}
-        <div>
-          <h3 className="pb-2 text-[11px] font-medium uppercase tracking-wide text-faint">
-            {t("zconfig.title")}
-          </h3>
-          <button
-            onClick={() => openConfig(null)}
-            className="flex w-full items-center gap-2 rounded-xl bg-raised px-3 py-2.5 text-left active:bg-white/[0.05]"
-          >
-            <Sliders className="size-4 shrink-0 text-faint" />
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm text-dim">
-                {t("zconfig.entry")}
-              </span>
-              <span className="block truncate text-[11px] text-faint">
-                {pendingRestart
-                  ? t("zconfig.restartPendingShort")
-                  : t("zconfig.entryHint")}
-              </span>
-            </span>
-          </button>
         </div>
       </div>
 
@@ -203,7 +176,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                     : "text-faint"
                 }`}
               >
-                {t(`panel.fontSize${size.charAt(0).toUpperCase() + size.slice(1)}`)}
+                {t(
+                  `panel.fontSize${size.charAt(0).toUpperCase() + size.slice(1)}`,
+                )}
               </button>
             ))}
           </div>
