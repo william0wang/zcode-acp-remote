@@ -4,6 +4,7 @@ import { useAppStore } from "../store/appStore";
 import { ConfigSheet } from "./ConfigSheet";
 import { PanelShell } from "./SidePanel";
 import { QuotaSection, SectionLabel } from "./QuotaSection";
+import { bareModelIdFromConfigValue } from "../lib/modelValue";
 
 // Session-scoped right panel shown in chat: config options (model / mode /
 // thought) plus the shared account quota card. Global settings live in
@@ -36,7 +37,10 @@ export function SessionPanel({ onClose }: { onClose: () => void }) {
                   {t(`config.${opt.id}`, { defaultValue: opt.name ?? opt.id })}
                 </span>
                 <span className="truncate text-xs text-faint">
-                  {current?.name ?? opt.currentValue ?? "—"}
+                  {current?.name ??
+                    (opt.currentValue
+                      ? bareModelIdFromConfigValue(opt.currentValue)
+                      : "—")}
                 </span>
               </button>
             );

@@ -16,6 +16,8 @@ import {
 import {
   providerOptions,
   modelOptions,
+  findModelOption,
+  matchProviderId,
   decodeSubagentModel,
   encodeSubagentModel,
   type ModelsPayload,
@@ -98,6 +100,7 @@ export interface AgentEntryView {
 export function AgentsPage() {
   const { t } = useTranslation();
   const agents = useAppStore((s) => s.configAgents);
+  const configModels = useAppStore((s) => s.configModels);
   const supported = useAppStore((s) => s.configSupported);
   const loading = useAppStore((s) => s.configLoading);
   const error = useAppStore((s) => s.configError);
@@ -108,6 +111,12 @@ export function AgentsPage() {
   const payload = agents as { ok?: boolean; agents?: AgentEntryView[] } | null;
 
   const rows = payload?.agents ?? [];
+  // For the rows' model labels only; the payload may not be loaded yet, in
+  // which case the label degrades to the bare model id.
+  const pickerOptions = modelOptions(configModels as ModelsPayload | null);
+  useEffect(() => {
+    if (configModels === null) void loadConfigSection("models");
+  }, [configModels, loadConfigSection]);
 
   const [editing, setEditing] = useState<AgentEntryView | null>(null);
   const [adding, setAdding] = useState(false);
@@ -143,9 +152,20 @@ export function AgentsPage() {
             const readOnly = isAgentReadOnly(a.readOnly);
             const description = a.frontmatter?.description;
             // `modelSelection` is the built-ins' override; a personal agent's
-            // model lives in its own frontmatter.
-            const model = a.modelSelection?.modelId ?? a.frontmatter?.model;
-            const thoughtLevel = a.modelSelection?.thoughtLevel;
+            // model lives in its own frontmatter. Both render as the picker
+            // label — never the raw `custom:…` spelling the file carries.
+            const stored = decodeSubagentModel(a.frontmatter?.model);
+            const model =
+              a.modelSelection?.modelId ??
+              (stored
+                ? (findModelOption(
+                    pickerOptions,
+                    stored.providerId,
+                    stored.modelId,
+                  )?.label ?? stored.modelId)
+                : a.frontmatter?.model);
+            const thoughtLevel =
+              a.modelSelection?.thoughtLevel ?? a.frontmatter?.thoughtLevel;
             return (
               <div key={name} className="flex items-start gap-3 px-4 py-3">
                 <button
@@ -159,7 +179,7 @@ export function AgentsPage() {
                     </span>
                   )}
                   {model && (
-                    <span className="block truncate font-mono text-[10px] text-faint">
+                    <span className="block truncate text-[10px] text-faint">
                       {model}
                       {thoughtLevel ? ` · ${thoughtLevel}` : ""}
                     </span>
@@ -275,13 +295,19 @@ function BuiltInAgentForm({
   const modelIds = [
     ...new Set(
       available
-        .filter((m) => m.providerId === providerId && m.modelId)
-        .map((m) => m.modelId!),
+        .filter(
+          (m) => matchProviderId(m.providerId) === matchProviderId(providerId),
+        )
+        .map((m) => m.modelId!)
+        .filter(Boolean),
     ),
   ];
   const levels =
-    rules.find((r) => r.providerId === providerId && r.modelId === modelId)
-      ?.reasoningLevels ?? [];
+    rules.find(
+      (r) =>
+        matchProviderId(r.providerId) === matchProviderId(providerId) &&
+        r.modelId === modelId,
+    )?.reasoningLevels ?? [];
 
   async function submit() {
     setBusy(true);
@@ -323,7 +349,7 @@ function BuiltInAgentForm({
     >
       <p className="mt-3 text-[11px] text-faint">
         {override?.modelId
-          ? `${override.providerId ?? "?"} / ${override.modelId}${override.thoughtLevel ? ` · ${override.thoughtLevel}` : ""}`
+          ? `${providers.find((p) => matchProviderId(p.id) === matchProviderId(override.providerId))?.name ?? override.providerId} / ${override.modelId}${override.thoughtLevel ? ` · ${override.thoughtLevel}` : ""}`
           : t("zconfig.agentOverrideNone")}
       </p>
 
@@ -421,10 +447,11 @@ function BuiltInAgentForm({
  * it has run: `undefined` means "not seeded yet", `""` means "deliberately
  * inheriting".
  *
- * Clearing a previously-set model/thoughtLevel sends an explicit null — the
- * server's "remove the key" — while a field that was never set and stays empty
- * is omitted. A stored value this build cannot map onto a picker option is
- * neither shown nor written: it is left exactly as the file has it.
+ * The write is gated on the user having PICKED a model (`modelTouched`): an
+ * untouched save rewrites neither the model nor the thought level, so the
+ * file keeps its own spelling of both. Picking "inherit" sends the null that
+ * clears the key; a stored value this build cannot map onto a picker option
+ * is shown read-only and never written.
  */
 function PersonalAgentForm({
   target,
@@ -451,19 +478,18 @@ function PersonalAgentForm({
   const thoughtWas = target.frontmatter?.thoughtLevel;
 
   // The file's model is a picker option's value only when it decodes to one
-  // this machine offers. Anything else (a hand-written id) stays visible
+  // this machine offers. Matching goes through `findModelOption`, which
+  // normalizes the coding-plan provider spellings — the file says
+  // `account:…`, the payload says `builtin:…`, and a raw comparison never
+  // matches. Anything still unmappable (a hand-written id) stays visible
   // read-only instead of being silently replaced by a different model.
   const stored = decodeSubagentModel(modelWas);
   const payload = configModels as ModelsPayload | null;
   const options = modelOptions(payload);
   const matched = stored
-    ? options.find(
-        (o) =>
-          o.providerId === stored.providerId && o.modelId === stored.modelId,
-      )
+    ? findModelOption(options, stored.providerId, stored.modelId)
     : undefined;
   const storedKnown = stored !== null && matched !== undefined;
-  const levels = matched?.reasoningLevels ?? [];
 
   const [description, setDescription] = useState(
     target.frontmatter?.description ?? "",
@@ -481,6 +507,9 @@ function PersonalAgentForm({
   const [thoughtLevel, setThoughtLevel] = useState<string | undefined>(
     undefined,
   );
+  // Only a user pick makes the model writeable: seeding must not count, or an
+  // untouched save would rewrite the file's own spelling of the same model.
+  const [modelTouched, setModelTouched] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -489,24 +518,48 @@ function PersonalAgentForm({
     setThoughtLevel(thoughtWas ?? "");
   }, [model, storedKnown, stored, thoughtWas]);
 
+  // The level vocabulary follows the model actually selected — not the one
+  // the file had. A stored level the vocabulary omits (GLM-5.3's rules carry
+  // none, yet the desktop writes `max`) stays selectable while the stored
+  // model is selected, so the file's value survives an unrelated edit.
+  const activeOption =
+    model !== undefined && model !== ""
+      ? options.find(
+          (o) => encodeSubagentModel(o.providerId, o.modelId) === model,
+        )
+      : undefined;
+  const onStoredModel =
+    activeOption !== undefined &&
+    matched !== undefined &&
+    activeOption.providerId === matched.providerId &&
+    activeOption.modelId === matched.modelId;
+  const levelChoices = [...(activeOption?.reasoningLevels ?? [])];
+  if (
+    onStoredModel &&
+    thoughtWas !== undefined &&
+    thoughtWas !== "" &&
+    !levelChoices.includes(thoughtWas)
+  ) {
+    levelChoices.push(thoughtWas);
+  }
+
   const canSubmit = description.trim() !== "";
 
   async function submit() {
     const body: AgentUpsert = { description: description.trim() };
     if (color !== "") body.color = color;
-    // An unreadable model (shown read-only above) is omitted entirely — the
-    // merge semantics then leave the file's value exactly as it is, which is
-    // the only safe outcome for a value this build cannot name.
-    const unmapped = modelWas !== undefined && !storedKnown;
-    const chosen = model ?? "";
-    if (chosen !== "") body.model = chosen;
-    else if (modelWas !== undefined && !unmapped) body.model = null;
-    // A level that does not belong to the chosen model is dropped, not sent:
-    // the runtime rejects it, and keeping the stale one silently would fail
-    // the whole edit for a field the user did not touch.
-    const level = (thoughtLevel ?? "").trim();
-    if (level !== "" && levels.includes(level)) body.thoughtLevel = level;
-    else if (thoughtWas !== undefined && !unmapped) body.thoughtLevel = null;
+    // An untouched model (never picked, or unmappable and shown read-only) is
+    // omitted entirely — the merge semantics then leave the file's model and
+    // thought level exactly as they are, whatever spelling they carry.
+    if (modelTouched) {
+      const chosen = model ?? "";
+      if (chosen !== "") body.model = chosen;
+      else if (modelWas !== undefined) body.model = null;
+      const level = (thoughtLevel ?? "").trim();
+      if (level !== "" && levelChoices.includes(level))
+        body.thoughtLevel = level;
+      else if (thoughtWas !== undefined) body.thoughtLevel = null;
+    }
 
     setBusy(true);
     const ok = await applyConfigWrite(
@@ -541,7 +594,7 @@ function PersonalAgentForm({
 
       {modelWas !== undefined && !storedKnown ? (
         // A model id this build cannot map onto a picker option (hand-written
-        // in the file). Shown read-only, and the submit below leaves it alone:
+        // in the file). Shown read-only, and the submit above leaves it alone:
         // substituting a different model on the user's behalf is worse than
         // keeping the value they wrote.
         <ConfigField label={t("zconfig.agentModel")}>
@@ -550,11 +603,12 @@ function PersonalAgentForm({
       ) : (
         <ModelPickerFields
           options={options}
-          levels={levels}
+          levels={levelChoices}
           model={model ?? ""}
           thoughtLevel={thoughtLevel ?? ""}
           onModelChange={(next) => {
             setModel(next);
+            setModelTouched(true);
             setThoughtLevel("");
           }}
           onThoughtLevelChange={setThoughtLevel}

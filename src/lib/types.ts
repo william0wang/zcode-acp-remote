@@ -361,6 +361,19 @@ export interface McpServerUpsert {
 }
 
 /**
+ * Body of `PUT /settings/hooks/{event}/{matcherIndex}` (`hookIndex` rides in
+ * the body — the path takes only two segments). The route edits ONE existing
+ * entry and merges the patch: `enabled: true` removes the pin rather than
+ * storing it, `timeoutMs` (ms) wins over `timeout` (seconds) when both exist.
+ */
+export interface HookEntryPatch {
+  command?: string;
+  enabled?: boolean;
+  timeoutMs?: number;
+  timeout?: number;
+}
+
+/**
  * Body of `PUT /settings/agents/{name}`. A personal agent patches frontmatter
  * fields (`model`/`thoughtLevel` accept null to clear the key); a built-in
  * agent instead reads a model override, and `providerId`/`modelId` must be

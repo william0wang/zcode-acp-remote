@@ -47,6 +47,7 @@ import {
   type AppUpdateState,
   type AgentUpsert,
   type Effect,
+  type HookEntryPatch,
   type McpServerUpsert,
   type ModelUpsert,
   type ResetCardStatus,
@@ -544,6 +545,15 @@ interface AppState {
     body: McpServerUpsert,
   ) => Promise<Effect | undefined>;
   setHooksEnabled: (enabled: boolean) => Promise<Effect | undefined>;
+  // Edits ONE existing hook entry in place; there is deliberately no add or
+  // remove through here (an insert shifts every later index and races a
+  // concurrent edit of the same event).
+  updateHookEntry: (
+    eventName: string,
+    matcherIndex: number,
+    hookIndex: number,
+    body: HookEntryPatch,
+  ) => Promise<Effect | undefined>;
   setAgentEnabled: (
     name: string,
     enable: boolean,
@@ -3158,6 +3168,18 @@ export const useAppStore = create<AppState>((set, get) => {
       const client = hub();
       if (!client) return undefined;
       const res = await client.setHooksEnabled(enabled);
+      return res.effect;
+    },
+
+    updateHookEntry: async (eventName, matcherIndex, hookIndex, body) => {
+      const client = hub();
+      if (!client) return undefined;
+      const res = await client.updateHook(
+        eventName,
+        matcherIndex,
+        hookIndex,
+        body,
+      );
       return res.effect;
     },
 

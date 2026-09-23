@@ -1,6 +1,7 @@
 import type {
   AgentUpsert,
   FsListing,
+  HookEntryPatch,
   HubCreateInstanceResult,
   HubHistoryCursor,
   HubHistoryPage,
@@ -511,7 +512,7 @@ export class HubClient {
     eventName: string,
     matcherIndex: number,
     hookIndex: number,
-    body: Record<string, unknown>,
+    body: HookEntryPatch,
   ): Promise<WriteEffect> {
     const res = await this.fetch(
       `/api/settings/hooks/${encodeURIComponent(eventName)}/${matcherIndex}`,

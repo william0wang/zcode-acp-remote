@@ -58,6 +58,11 @@ export interface ModelsPayload {
  * than a copy that can drift — a copied version passing while the page reads a
  * different path is how four screens once shipped dead.
  *
+ * The join goes through `matchProviderId`: `available` normalizes coding-plan
+ * ids to `builtin:*` server-side while `modelRules` are passed through
+ * verbatim (the desktop writes `account:*` there), so an exact-string compare
+ * misses the rule and the window silently disappears from the row.
+ *
  * A model absent from the rules (a personal rule with no properties) simply
  * has no window rather than being an error.
  */
@@ -65,15 +70,14 @@ export function contextWindowFor(
   model: ModelRef,
   rules: ModelRule[] | undefined,
 ): number | undefined {
-  return (rules ?? []).find(
-    (r) => r.providerId === model.providerId && r.modelId === model.modelId,
-  )?.contextWindow;
+  return ruleFor(model, rules ?? [])?.contextWindow;
 }
 
 /** The rule row for one selectable model — the prefill source for editing. */
 function ruleFor(model: ModelRef, rules: ModelRule[]): ModelRule | undefined {
+  const pid = matchProviderId(model.providerId);
   return rules.find(
-    (r) => r.providerId === model.providerId && r.modelId === model.modelId,
+    (r) => matchProviderId(r.providerId) === pid && r.modelId === model.modelId,
   );
 }
 
@@ -126,11 +130,36 @@ export function isAccountProvider(providerId: string): boolean {
 }
 
 /**
+ * The provider id as a MATCH key: coding-plan ids normalize to the legacy
+ * `builtin:` spelling. The models payload normalizes server-side
+ * (configProviderIdFor) while agent files written by the desktop keep the
+ * registry's `account:` spelling — both name the same provider, and comparing
+ * raw strings never matches them (observed: every agent's model showed as an
+ * unmappable id and the picker could not prefill).
+ */
+export function matchProviderId(providerId: string | undefined): string {
+  // Undefined (a rule without a provider id) collapses to "" so two undefined
+  // ids compare equal rather than to everything.
+  if (!providerId?.startsWith("account:")) return providerId ?? "";
+  const m =
+    /^account:([a-z0-9]+)-(?:(?:individual|team|start)-)?coding-plan$/.exec(
+      providerId,
+    );
+  return m ? `builtin:${m[1]}-coding-plan` : providerId;
+}
+
+/**
  * Every selectable model as a picker option: the value the runtime spells
  * (`providerId/modelId`), the label, and the reasoning levels its rule
  * carries. One list feeds both the built-in override picker and the personal
  * agent's frontmatter model, so a value the runtime would reject never
  * reaches the form.
+ *
+ * The label follows the bridge's own session-switcher rule (buildModelSelect
+ * Options): a builtin (or coding-plan) model reads as its bare model id, a
+ * third-party one is qualified with its provider, and a model id two
+ * providers share is always qualified. One rule everywhere is the point —
+ * the same model must not read three different ways across the app.
  */
 export function modelOptions(payload: ModelsPayload | null): Array<{
   providerId: string;
@@ -140,6 +169,11 @@ export function modelOptions(payload: ModelsPayload | null): Array<{
 }> {
   const rules = payload?.models?.modelRules ?? [];
   const seen = new Set<string>();
+  const byId = new Map<string, number>();
+  for (const m of payload?.models?.available ?? []) {
+    if (!m.providerId || !m.modelId) continue;
+    byId.set(m.modelId, (byId.get(m.modelId) ?? 0) + 1);
+  }
   const out: Array<{
     providerId: string;
     modelId: string;
@@ -151,17 +185,41 @@ export function modelOptions(payload: ModelsPayload | null): Array<{
     const key = `${m.providerId}/${m.modelId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const rule = rules.find(
-      (r) => r.providerId === m.providerId && r.modelId === m.modelId,
-    );
+    // The rule join goes through `matchProviderId` for the same reason as
+    // `contextWindowFor`: the two halves of the payload can spell one coding
+    // plan provider differently, and the picker must still see its levels.
+    const rule = ruleFor(m, rules);
+    const builtinLike =
+      m.providerId.startsWith("builtin:") || isAccountProvider(m.providerId);
+    const qualify = !builtinLike || (byId.get(m.modelId) ?? 0) > 1;
     out.push({
       providerId: m.providerId,
       modelId: m.modelId,
-      label: `${m.providerName ?? m.providerId} · ${m.modelId}`,
+      label: qualify
+        ? `${m.providerName ?? m.providerId} › ${m.modelId}`
+        : m.modelId,
       reasoningLevels: rule?.reasoningLevels ?? [],
     });
   }
   return out;
+}
+
+export type ModelOption = ReturnType<typeof modelOptions>[number];
+
+/**
+ * The picker option a stored model selection names — matching through
+ * `matchProviderId`, so an `account:`-spelled agent file maps onto the
+ * `builtin:`-spelled option for the same plan.
+ */
+export function findModelOption(
+  options: ModelOption[],
+  providerId: string,
+  modelId: string,
+): ModelOption | undefined {
+  const key = matchProviderId(providerId);
+  return options.find(
+    (o) => matchProviderId(o.providerId) === key && o.modelId === modelId,
+  );
 }
 
 /**

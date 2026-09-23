@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Plus } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
+import type { McpServerUpsert } from "../../lib/types";
 import {
   ConfigBlock,
   ConfigEmpty,
@@ -54,6 +55,47 @@ export function mcpServers(payload: unknown): McpServerRow[] {
 
 /** Transports the form offers; anything else an entry carries rides along. */
 const TYPES = ["stdio", "http", "sse"];
+
+/**
+ * The PUT body for one server, built from the form's raw fields.
+ *
+ * A body carries ONLY its transport's fields: the route MERGES, so a `url`
+ * landing on a stdio server (or a `command` on an http one) is written next to
+ * the real transport instead of replacing it. An EMPTY env/headers map is
+ * omitted, matching the desktop form (whose JSON textarea drops a field that
+ * does not parse): a blank textarea means "keep what the entry had", while
+ * sending `{}` would clear it — or shadow a legacy `http_headers` block the
+ * runtime merges with `??`.
+ */
+export function mcpUpsertBody(f: {
+  type: string;
+  enabled: boolean;
+  remote: boolean;
+  url: string;
+  headersText: string;
+  command: string;
+  argsText: string;
+  envText: string;
+}): McpServerUpsert {
+  const kv = parseKvLines(f.remote ? f.headersText : f.envText);
+  const kvPresent = Object.keys(kv).length > 0;
+  return {
+    type: f.type,
+    enabled: f.enabled,
+    ...(f.remote
+      ? {
+          url: f.url.trim(),
+          ...(kvPresent ? { headers: kv } : {}),
+        }
+      : {
+          command: f.command.trim(),
+          // Blank args ARE sent as `[]` — the desktop form's own spelling for
+          // "this server takes no arguments" — unlike env, which omits.
+          args: splitLines(f.argsText),
+          ...(kvPresent ? { env: kv } : {}),
+        }),
+  };
+}
 
 export function McpPage() {
   const { t } = useTranslation();
@@ -176,20 +218,19 @@ function McpForm({
     const ok = await applyConfigWrite(
       target ? "update MCP server" : "add MCP server",
       () =>
-        upsertMcp(name.trim(), {
-          type,
-          enabled,
-          ...(remote
-            ? {
-                url: url.trim(),
-                headers: parseKvLines(headersText),
-              }
-            : {
-                command: command.trim(),
-                args: splitLines(argsText),
-                env: parseKvLines(envText),
-              }),
-        }),
+        upsertMcp(
+          name.trim(),
+          mcpUpsertBody({
+            type,
+            enabled,
+            remote,
+            url,
+            headersText,
+            command,
+            argsText,
+            envText,
+          }),
+        ),
       ["mcp"],
     );
     setBusy(false);
@@ -241,7 +282,39 @@ function McpForm({
         </select>
       </ConfigField>
 
+      {/* Remote transports (http/sse) edit url/headers; stdio edits
+          command/args/env. The branches must mirror `mcpUpsertBody` — the
+          fields the user SEES are the fields the write sends. */}
       {remote ? (
+        <>
+          <ConfigField label={t("zconfig.mcpUrl")}>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="https://example.com/mcp"
+              className={configInputClass}
+            />
+          </ConfigField>
+          <ConfigField
+            label={t("zconfig.mcpHeaders")}
+            hint={t("zconfig.kvPerLine")}
+          >
+            <textarea
+              value={headersText}
+              onChange={(e) => setHeadersText(e.target.value)}
+              rows={3}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={configInputClass}
+            />
+          </ConfigField>
+        </>
+      ) : (
         <>
           <ConfigField label={t("zconfig.mcpCommand")}>
             <input
@@ -272,35 +345,6 @@ function McpForm({
             <textarea
               value={envText}
               onChange={(e) => setEnvText(e.target.value)}
-              rows={3}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className={configInputClass}
-            />
-          </ConfigField>
-        </>
-      ) : (
-        <>
-          <ConfigField label={t("zconfig.mcpUrl")}>
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              inputMode="url"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="https://example.com/mcp"
-              className={configInputClass}
-            />
-          </ConfigField>
-          <ConfigField
-            label={t("zconfig.mcpHeaders")}
-            hint={t("zconfig.kvPerLine")}
-          >
-            <textarea
-              value={headersText}
-              onChange={(e) => setHeadersText(e.target.value)}
               rows={3}
               autoCapitalize="none"
               autoCorrect="off"

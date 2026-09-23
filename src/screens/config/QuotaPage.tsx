@@ -13,14 +13,41 @@ import { QuotaRow, SectionLabel } from "../../components/QuotaSection";
 // Plan quota with its reset cards (ADR-0009). The side panels' quota card is
 // read-only and untouched; this screen is where a card can actually be spent.
 //
-// Two gates stand in front of a spend, both deliberate — spending a card is
-// the one irreversible action in the settings API:
-//   1. the highest usage window must be at or above the threshold, so a card
-//      is only offered when it would actually help;
-//   2. the spend itself is confirmed with the card's type and expiry.
-// Between them sits an opportunity request, because the backend can decline
-// one ("not now") and a declined spend is a wasted round trip.
+// Spending a card is the one irreversible action in the settings API, so the
+// gesture always ends in a confirmation naming the card's window and expiry.
+// Below the usage threshold that confirmation is PRECEDED by a warning step
+// ("usage has not reached X% — continue?"): the card stays usable, but using
+// it well before the allowance runs low is a decision worth double-checking.
+// The threshold is read on the card's OWN window — a 5-hour card against the
+// 5-hour window, a weekly card against the weekly one — because a card cannot
+// clear a window it does not reset. Between the confirmations and the spend
+// sits an opportunity request, because the backend can decline one ("not
+// now") and a declined spend is a wasted round trip.
 export const SPEND_THRESHOLD_PCT = 90;
+
+/** The two card windows the reset API sells. */
+type ResetType = "FIVE_HOUR" | "WEEK";
+
+/**
+ * One spend gesture in flight: which window, and whether the below-threshold
+ * warning has been answered. `warned: false` renders the warning step; `true`
+ * renders the spend confirmation. At or above the threshold a gesture starts
+ * already warned — its single confirmation is the spend itself.
+ */
+interface SpendStage {
+  type: ResetType;
+  warned: boolean;
+}
+
+/**
+ * The quota item each card window clears (server quota/parse.ts deriveLabel:
+ * GLM token limits keyed `token_5h` for the 5-hour window, `token_week` for
+ * the weekly one).
+ */
+const WINDOW_KEY_OF: Record<ResetType, string> = {
+  FIVE_HOUR: "token_5h",
+  WEEK: "token_week",
+};
 
 /** The provider ids that can own a coding plan (server coding-plan.ts). */
 export const CODING_PLAN_PROVIDERS = [
@@ -38,31 +65,26 @@ export function isTeamPlan(providerId: string): boolean {
 }
 
 /**
- * The highest used percentage across the GLM windows.
+ * The used percentage of the ONE window a card type clears.
  *
- * The gate is "any window at or above the threshold", not "every window": one
- * exhausted window is exactly when a card helps, and waiting for all of them
- * would refuse the case the feature exists for.
+ * A card's confirmation count reads its OWN window — an exhausted week must
+ * not let a 5-hour card skip its warning, because that card cannot clear the
+ * week; spent there it is wasted on a window nowhere near its limit. Only the
+ * GLM branch counts (the payload also carries Opencode Go and Ollama windows,
+ * which a coding-plan card does nothing for), and a window the payload does
+ * not list reads as 0 — unknown usage keeps the warning rather than skipping
+ * it. Exported so the page and its tests agree on which window counts.
  */
-export function maxUsedPercent(
-  items: Array<{ usedPercent: number }> | undefined,
+export function windowUsedPercent(
+  usageStats: {
+    glm: { items?: Array<{ key: string; usedPercent: number }> };
+  } | null,
+  type: ResetType,
 ): number {
-  return (items ?? []).reduce((m, it) => Math.max(m, it.usedPercent), 0);
-}
-
-/**
- * The percentage that decides whether a card may be offered.
- *
- * Reads the GLM branch and NOTHING else. The usage payload also carries
- * Opencode Go and Ollama windows, which a coding-plan card does nothing for —
- * passing the whole payload (or the other branches) would let an exhausted
- * Opencode window open the gate on a card that cannot clear it. The selector
- * is exported so the page and its tests agree on which windows count.
- */
-export function spendGatePercent(
-  usageStats: { glm: { items?: Array<{ usedPercent: number }> } } | null,
-): number {
-  return maxUsedPercent(usageStats?.glm.items);
+  return (
+    usageStats?.glm.items?.find((it) => it.key === WINDOW_KEY_OF[type])
+      ?.usedPercent ?? 0
+  );
 }
 
 /**
@@ -94,7 +116,7 @@ export function QuotaPage() {
   const requestResetOpportunity = useAppStore((s) => s.requestResetOpportunity);
   const spendResetCard = useAppStore((s) => s.spendResetCard);
   const markResetHistoryRead = useAppStore((s) => s.markResetHistoryRead);
-  const [confirm, setConfirm] = useState<"FIVE_HOUR" | "WEEK" | null>(null);
+  const [confirm, setConfirm] = useState<SpendStage | null>(null);
 
   // Which providers could hold cards, from the entry snapshot's eligibility
   // check (a provider-id shape test plus a credential-file check). The hub
@@ -119,12 +141,19 @@ export function QuotaPage() {
     if (resetCards?.hasUnreadHistory) void markResetHistoryRead();
   }, [resetCards?.hasUnreadHistory, markResetHistoryRead]);
 
-  const maxUsedPct = spendGatePercent(usageStats);
-
-  const canSpend = maxUsedPct >= SPEND_THRESHOLD_PCT;
   const teamBlocked = providerId ? isTeamPlan(providerId) : false;
 
-  async function spend(resetType: "FIVE_HOUR" | "WEEK") {
+  // A gesture on a window below the threshold opens on the warning step; at
+  // or above it the single confirmation is the spend itself. Each card reads
+  // its own window, so the two lists can sit on different sides of it.
+  function askSpend(type: ResetType) {
+    setConfirm({
+      type,
+      warned: windowUsedPercent(usageStats, type) >= SPEND_THRESHOLD_PCT,
+    });
+  }
+
+  async function spend(resetType: ResetType) {
     // Capture BOTH halves of the spend now, while the confirm dialog is still
     // open and the user cannot switch provider underneath. A gesture spans two
     // round trips (opportunity, then spend); re-reading the store at entry time
@@ -139,7 +168,11 @@ export function QuotaPage() {
     // granted opportunity is what makes the spend worth committing to.
     const granted = await requestResetOpportunity(spendProviderId);
     if (!granted) return;
-    await spendResetCard({ providerId: spendProviderId, nonce: spendNonce, resetType });
+    await spendResetCard({
+      providerId: spendProviderId,
+      nonce: spendNonce,
+      resetType,
+    });
   }
 
   return (
@@ -233,11 +266,15 @@ export function QuotaPage() {
               cards={resetCards.availableFiveHour}
               lastUsed={resetCards.latestFiveHour?.usedAt ?? null}
               resetType="FIVE_HOUR"
-              canSpend={canSpend}
+              aboveThreshold={
+                windowUsedPercent(usageStats, "FIVE_HOUR") >=
+                SPEND_THRESHOLD_PCT
+              }
               busy={resetBusy}
               nextTryAt={resetNextTryAt}
               confirm={confirm}
               onConfirm={setConfirm}
+              onAsk={askSpend}
               onSpend={spend}
             />
             <CardList
@@ -245,20 +282,16 @@ export function QuotaPage() {
               cards={resetCards.availableWeek}
               lastUsed={resetCards.latestWeek?.usedAt ?? null}
               resetType="WEEK"
-              canSpend={canSpend}
+              aboveThreshold={
+                windowUsedPercent(usageStats, "WEEK") >= SPEND_THRESHOLD_PCT
+              }
               busy={resetBusy}
               nextTryAt={resetNextTryAt}
               confirm={confirm}
               onConfirm={setConfirm}
+              onAsk={askSpend}
               onSpend={spend}
             />
-            {/* The threshold is the gate; when it is not met, say why rather
-                than showing a mysteriously disabled button. */}
-            {!canSpend && (
-              <p className="px-4 pt-2 text-xs text-faint">
-                {t("zconfig.resetBelowThreshold", { pct: SPEND_THRESHOLD_PCT })}
-              </p>
-            )}
           </>
         ) : (
           <ConfigEmpty text={t("zconfig.resetUnavailable")} />
@@ -287,23 +320,25 @@ function CardList({
   cards,
   lastUsed,
   resetType,
-  canSpend,
+  aboveThreshold,
   busy,
   nextTryAt,
   confirm,
   onConfirm,
+  onAsk,
   onSpend,
 }: {
   title: string;
   cards: Array<{ expireAt: number }>;
   lastUsed: number | null;
-  resetType: "FIVE_HOUR" | "WEEK";
-  canSpend: boolean;
+  resetType: ResetType;
+  aboveThreshold: boolean;
   busy: boolean;
   nextTryAt: number | null;
-  confirm: "FIVE_HOUR" | "WEEK" | null;
-  onConfirm: (v: "FIVE_HOUR" | "WEEK" | null) => void;
-  onSpend: (v: "FIVE_HOUR" | "WEEK") => void;
+  confirm: SpendStage | null;
+  onConfirm: (v: SpendStage | null) => void;
+  onAsk: (type: ResetType) => void;
+  onSpend: (v: ResetType) => void;
 }) {
   const { t } = useTranslation();
   const sorted = [...cards].sort((a, b) => a.expireAt - b.expireAt);
@@ -351,12 +386,12 @@ function CardList({
         </p>
       )}
 
-      {cards.length > 0 && (
-        <>
-          {confirm === resetType ? (
-            // The confirmation names the card, not a generic "are you sure":
-            // a spend is irreversible and the user is committing to a specific
-            // window and expiry.
+      {cards.length > 0 &&
+        (confirm?.type === resetType ? (
+          confirm.warned ? (
+            // The spend confirmation names the card, not a generic "are you
+            // sure": a spend is irreversible and the user is committing to a
+            // specific window and expiry.
             <div className="mt-2 rounded-lg bg-white/[0.05] px-3 py-2.5">
               <p className="text-xs text-dim">
                 {t("zconfig.resetConfirm", {
@@ -385,17 +420,46 @@ function CardList({
               </div>
             </div>
           ) : (
-            <button
-              disabled={!canSpend || busy}
-              onClick={() => onConfirm(resetType)}
-              className="mt-2 w-full rounded-lg bg-white/[0.08] px-3 py-2 text-xs font-medium text-ink active:bg-white/[0.12] disabled:opacity-40"
-            >
-              {t("zconfig.resetUse")}
-            </button>
-          )}
-        </>
+            // The pre-step below the threshold: the card works, but the
+            // allowance is nowhere near spent — say so before the user
+            // commits to anything.
+            <div className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2.5">
+              <p className="text-xs text-amber-300">
+                {t("zconfig.resetBelowWarn", { pct: SPEND_THRESHOLD_PCT })}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => onConfirm(null)}
+                  className="flex-1 rounded-lg px-3 py-2 text-xs text-faint active:bg-white/[0.06]"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  onClick={() => onConfirm({ type: resetType, warned: true })}
+                  className="flex-1 rounded-lg bg-amber-500/20 px-3 py-2 text-xs font-medium text-amber-300 active:bg-amber-500/30"
+                >
+                  {t("zconfig.resetWarnContinue")}
+                </button>
+              </div>
+            </div>
+          )
+        ) : (
+          <button
+            disabled={busy}
+            onClick={() => onAsk(resetType)}
+            className="mt-2 w-full rounded-lg bg-white/[0.08] px-3 py-2 text-xs font-medium text-ink active:bg-white/[0.12] disabled:opacity-40"
+          >
+            {t("zconfig.resetUse")}
+          </button>
+        ))}
+
+      {/* Below this card's OWN threshold the card still works — the note says
+          what the extra step is, not that the button is dead. */}
+      {!aboveThreshold && (
+        <p className="pt-1.5 text-[11px] text-faint">
+          {t("zconfig.resetBelowThreshold", { pct: SPEND_THRESHOLD_PCT })}
+        </p>
       )}
     </div>
   );
 }
-

@@ -13,16 +13,22 @@
 // here. A copy passing while the page reads a different path is exactly how the
 // first round shipped dead — so a copy is now impossible to write by accident.
 import { describe, expect, it } from "vitest";
-import { maxUsedPercent, isTeamPlan } from "../src/screens/config/QuotaPage";
+import { isTeamPlan, windowUsedPercent } from "../src/screens/config/QuotaPage";
 import {
   contextWindowFor,
   decodeSubagentModel,
   encodeSubagentModel,
+  findModelOption,
+  matchProviderId,
   modelOptions,
   providerOptions,
 } from "../src/screens/config/ModelsPage";
-import { mcpServers } from "../src/screens/config/McpPage";
-import { flattenHooks, hooksEnabled } from "../src/screens/config/HooksPage";
+import { mcpServers, mcpUpsertBody } from "../src/screens/config/McpPage";
+import {
+  flattenHooks,
+  hooksEnabled,
+  timeoutMsOf,
+} from "../src/screens/config/HooksPage";
 import {
   isUserTreeScope,
   type SkillScope,
@@ -81,6 +87,86 @@ describe("mcp payload", () => {
   it("returns an empty list rather than throwing on a missing section", () => {
     expect(mcpServers({ ok: true })).toEqual([]);
     expect(mcpServers(null)).toEqual([]);
+  });
+});
+
+// --- the upsert body: only the transport's fields, blank kv omitted ---------
+
+describe("mcp upsert body", () => {
+  // The route MERGES the body into the entry, so a field from the wrong
+  // transport branch lands next to the real one instead of replacing it. This
+  // builder is what the form submits — the JSX branches and the body builder
+  // drifted apart once (remote rendered the stdio fields), and every edit the
+  // user made in the visible fields was silently dropped.
+  const stdioFields = {
+    type: "stdio",
+    enabled: true,
+    remote: false,
+    url: "",
+    headersText: "",
+    command: "npx",
+    argsText: "-y\nctx7",
+    envText: "A=1\nB=x=y",
+  };
+
+  it("sends only the transport's own fields", () => {
+    expect(mcpUpsertBody(stdioFields)).toEqual({
+      type: "stdio",
+      enabled: true,
+      command: "npx",
+      args: ["-y", "ctx7"],
+      env: { A: "1", B: "x=y" },
+    });
+    expect(
+      mcpUpsertBody({
+        type: "sse",
+        enabled: false,
+        remote: true,
+        url: "https://x/mcp",
+        headersText: "Authorization=Bearer t",
+        command: "leftover",
+        argsText: "leftover",
+        envText: "",
+      }),
+    ).toEqual({
+      type: "sse",
+      enabled: false,
+      url: "https://x/mcp",
+      headers: { Authorization: "Bearer t" },
+    });
+  });
+
+  it("omits a blank env/headers instead of clearing what the entry had", () => {
+    // Desktop parity: its JSON textarea drops a field that does not parse, so
+    // blank means "keep". A `{}` would wipe the entry's env — or shadow a
+    // legacy `http_headers` block the runtime merges with `??`.
+    expect(
+      "env" in
+        mcpUpsertBody({
+          ...stdioFields,
+          argsText: "",
+          envText: "  \n",
+        }),
+    ).toBe(false);
+    expect(
+      "headers" in
+        mcpUpsertBody({
+          type: "http",
+          enabled: true,
+          remote: true,
+          url: "https://x",
+          headersText: "",
+          command: "",
+          argsText: "",
+          envText: "",
+        }),
+    ).toBe(false);
+  });
+
+  it("still sends args as [] — the desktop's spelling for no arguments", () => {
+    expect(
+      mcpUpsertBody({ ...stdioFields, argsText: "  \n", envText: "" }).args,
+    ).toEqual([]);
   });
 });
 
@@ -145,6 +231,35 @@ describe("models payload", () => {
     ).toBeUndefined();
   });
 
+  it("joins a rule across the two coding-plan spellings", () => {
+    // `available` normalizes coding-plan ids to `builtin:*` server-side while
+    // `modelRules` ride through verbatim (the desktop writes `account:*`
+    // there) — an exact-string join misses the rule, its context window and
+    // its reasoning levels, and the edit form then prefills empty.
+    const rule = {
+      providerId: "account:bigmodel-individual-coding-plan",
+      modelId: "glm-4.5-air",
+      contextWindow: 128000,
+      reasoningLevels: ["low", "high"],
+    };
+    expect(
+      contextWindowFor(
+        { providerId: "builtin:bigmodel-coding-plan", modelId: "glm-4.5-air" },
+        [rule],
+      ),
+    ).toBe(128000);
+    const options = modelOptions({
+      ...payload,
+      models: {
+        ...payload.models,
+        modelRules: [...payload.models.modelRules, rule],
+      },
+    });
+    expect(
+      options.find((o) => o.modelId === "glm-4.5-air")?.reasoningLevels,
+    ).toEqual(["low", "high"]);
+  });
+
   it("builds picker options with each model's reasoning levels", () => {
     // The agent forms pick a model from this list; a rule that declares levels
     // must reach the picker, or the level dropdown is empty on a model that
@@ -185,6 +300,97 @@ describe("models payload", () => {
     const ids = providerOptions(payload).map((p) => p.id);
     expect(ids).toContain("builtin:bigmodel-coding-plan");
     expect(ids).not.toContain("account:bigmodel-individual-coding-plan");
+  });
+
+  it("labels models the way the session switcher does", () => {
+    // One rule everywhere: a builtin/coding-plan model reads as its bare id,
+    // a third-party one is qualified, and an id two providers share always
+    // qualifies. The fixture's glm-4.6 is account-plan (bare); add a
+    // third-party provider and a collision to cover the other two.
+    const options = modelOptions({
+      ok: true,
+      models: {
+        available: [
+          ...payload.models.available,
+          { providerId: "uuid-1", providerName: "Go", modelId: "deepseek-v4" },
+          { providerId: "uuid-2", providerName: "Other", modelId: "glm-4.6" },
+        ],
+        providers: [],
+        modelRules: [],
+      },
+    });
+    const label = (providerId: string, modelId: string) =>
+      options.find((o) => o.providerId === providerId && o.modelId === modelId)!
+        .label;
+    // Collision on glm-4.6: both carriers qualify, a nameless one with its id.
+    expect(label("uuid-2", "glm-4.6")).toBe("Other › glm-4.6");
+    expect(label("account:bigmodel-individual-coding-plan", "glm-4.6")).toBe(
+      "account:bigmodel-individual-coding-plan › glm-4.6",
+    );
+    expect(label("builtin:bigmodel-coding-plan", "glm-4.5-air")).toBe(
+      "glm-4.5-air",
+    ); // builtin: bare
+    expect(label("uuid-1", "deepseek-v4")).toBe("Go › deepseek-v4"); // third-party
+  });
+});
+
+// --- provider spelling: `account:` vs `builtin:` -----------------------------
+//
+// The models payload normalizes coding-plan providers to the legacy `builtin:`
+// spelling server-side (configProviderIdFor), while agent files written by the
+// desktop keep the registry's `account:` spelling. Raw-string comparison never
+// matches the two — every agent's model read as unmappable and the picker
+// could not prefill.
+
+describe("provider spelling normalization", () => {
+  const planPayload = {
+    ok: true,
+    models: {
+      available: [
+        {
+          providerId: "builtin:bigmodel-coding-plan",
+          providerName: "BigModel",
+          modelId: "GLM-5.3",
+        },
+      ],
+      providers: [],
+      modelRules: [],
+    },
+  };
+
+  it("maps coding-plan spellings onto one match key", () => {
+    expect(matchProviderId("account:bigmodel-individual-coding-plan")).toBe(
+      "builtin:bigmodel-coding-plan",
+    );
+    expect(matchProviderId("account:acme-team-coding-plan")).toBe(
+      "builtin:acme-coding-plan",
+    );
+    expect(matchProviderId("account:acme-start-coding-plan")).toBe(
+      "builtin:acme-coding-plan",
+    );
+    // Anything else passes through untouched, whatever the prefix.
+    expect(matchProviderId("builtin:bigmodel-coding-plan")).toBe(
+      "builtin:bigmodel-coding-plan",
+    );
+    expect(matchProviderId("account:odd-shape")).toBe("account:odd-shape");
+  });
+
+  it("maps an agent file's model onto the payload's option", () => {
+    // The real-world pair from ~/.zcode/agents: the file spells the plan
+    // `account:…` (the desktop's registry spelling), the payload spells it
+    // `builtin:…`. The cross-spelling match is what lets the picker prefill.
+    const options = modelOptions(planPayload);
+    expect(options[0]!.label).toBe("GLM-5.3");
+    const stored = decodeSubagentModel(
+      "custom:account%3Abigmodel-individual-coding-plan:GLM-5.3",
+    );
+    expect(stored).toEqual({
+      providerId: "account:bigmodel-individual-coding-plan",
+      modelId: "GLM-5.3",
+    });
+    expect(
+      findModelOption(options, stored!.providerId, stored!.modelId),
+    )?.toMatchObject({ modelId: "GLM-5.3" });
   });
 });
 
@@ -337,11 +543,37 @@ describe("hooks payload", () => {
     expect(rows[2]!.matcher).toBe("");
   });
 
-  it("reads an absent `enabled` as on, and converts seconds to ms", () => {
+  it("reads an absent `enabled` as on, and keeps the seconds timeout raw", () => {
     const rows = flattenHooks(wire.hooks.events);
     expect(rows[0]!.enabled).toBe(true);
     expect(rows[2]!.enabled).toBe(false);
-    expect(rows[2]!.timeoutMs).toBe(5000);
+    expect(rows[2]!.rawTimeoutSec).toBe(5);
+  });
+
+  it("keeps each timeout spelling raw, and either reads back in ms", () => {
+    // The edit form writes back in the unit the entry already spells, so the
+    // decode must not collapse the two into one field — editing a
+    // `timeoutMs` entry must not add a second `timeout` next to it.
+    const rows = flattenHooks({
+      Mixed: [
+        {
+          hooks: [
+            { command: "a", timeoutMs: 1500 },
+            { command: "b", timeout: 90 },
+            { command: "c" },
+          ],
+        },
+      ],
+    });
+    expect(rows[0]!.rawTimeoutMs).toBe(1500);
+    expect(rows[0]!.rawTimeoutSec).toBeUndefined();
+    expect(timeoutMsOf(rows[0]!)).toBe(1500);
+    expect(rows[1]!.rawTimeoutSec).toBe(90);
+    expect(timeoutMsOf(rows[1]!)).toBe(90000);
+    expect(timeoutMsOf(rows[2]!)).toBeUndefined();
+    // The edit route addresses an entry by all three coordinates.
+    expect(rows[1]!.matcherIndex).toBe(0);
+    expect(rows[1]!.hookIndex).toBe(1);
   });
 
   it("reads an absent nested `enabled` as OFF, because false deletes the key", () => {
@@ -500,17 +732,32 @@ describe("reset-card eligibility", () => {
   });
 });
 
-// --- the spend gate -------------------------------------------------------
+// --- the confirm threshold -------------------------------------------------
 
 describe("spend threshold", () => {
-  it("opens the gate on the highest window, not the average", () => {
-    expect(maxUsedPercent([{ usedPercent: 4 }, { usedPercent: 93 }])).toBe(93);
+  const usage = {
+    glm: {
+      items: [
+        { key: "token_5h", usedPercent: 20 },
+        { key: "token_week", usedPercent: 100 },
+      ],
+    },
+  };
+
+  it("reads each card's own window, never the max across them", () => {
+    // The keys are the server's own (quota/parse.ts deriveLabel); a card that
+    // clears only the 5-hour window must not read the exhausted week.
+    expect(windowUsedPercent(usage, "FIVE_HOUR")).toBe(20);
+    expect(windowUsedPercent(usage, "WEEK")).toBe(100);
   });
 
-  it("stays shut while every window is under it", () => {
+  it("keeps the warning when the card's window is not listed", () => {
+    expect(windowUsedPercent(null, "WEEK")).toBe(0);
     expect(
-      maxUsedPercent([{ usedPercent: 89 }, { usedPercent: 91 }]),
-    ).toBeLessThan(100);
-    expect(maxUsedPercent([{ usedPercent: 89 }])).toBeLessThan(90);
+      windowUsedPercent(
+        { glm: { items: [{ key: "mcp", usedPercent: 100 }] } },
+        "WEEK",
+      ),
+    ).toBe(0);
   });
 });
