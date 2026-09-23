@@ -1,7 +1,7 @@
 {
   "name": "zcode-acp-remote",
   "private": true,
-  "version": "0.9.4",
+  "version": "0.10.0",
   "license": "MIT",
   "devEngines": {
     "packageManager": {
