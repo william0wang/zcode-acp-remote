@@ -8,7 +8,7 @@ import {
   ConfigPageFrame,
   fmtStamp,
 } from "../../components/config/ConfigPage";
-import { QuotaRow, SectionLabel } from "../../components/QuotaSection";
+import { QuotaRow } from "../../components/QuotaSection";
 
 // Plan quota with its reset cards (ADR-0009). The side panels' quota card is
 // read-only and untouched; this screen is where a card can actually be spent.
@@ -183,40 +183,27 @@ export function QuotaPage() {
       unsupported={supported === false}
     >
       {/* ---- the allowance itself ---- */}
+      {/* GLM only: this screen is the coding-plan surface (the cards and the
+          windows they reset). Other platforms' windows — Opencode Go, Ollama —
+          are not part of a coding plan and stay in the side panels' card. */}
       <ConfigBlock>
         {quotaUnavailable ? (
           <ConfigEmpty text={t("quota.unavailable")} />
         ) : usageStats ? (
-          <>
-            <SectionLabel title="GLM Coding Plan" />
-            {usageStats.glm.kind === "success" ? (
-              (usageStats.glm.items ?? []).map((it) => (
-                <QuotaRow
-                  key={it.key}
-                  label={it.label}
-                  percent={it.usedPercent}
-                  resetMs={it.nextResetTime}
-                  used={it.key === "mcp" ? it.usedCount : undefined}
-                  total={it.key === "mcp" ? it.totalCount : undefined}
-                />
-              ))
-            ) : (
-              <ConfigEmpty text={t("quota.unavailable")} />
-            )}
-            {usageStats.opencode.kind !== "not_configured" && (
-              <>
-                <SectionLabel title="Opencode Go" divided />
-                {(usageStats.opencode.windows ?? []).map((w) => (
-                  <QuotaRow
-                    key={w.key}
-                    label={w.label}
-                    percent={w.usagePercent}
-                    resetMs={w.resetsAt}
-                  />
-                ))}
-              </>
-            )}
-          </>
+          usageStats.glm.kind === "success" ? (
+            (usageStats.glm.items ?? []).map((it) => (
+              <QuotaRow
+                key={it.key}
+                label={it.label}
+                percent={it.usedPercent}
+                resetMs={it.nextResetTime}
+                used={it.key === "mcp" ? it.usedCount : undefined}
+                total={it.key === "mcp" ? it.totalCount : undefined}
+              />
+            ))
+          ) : (
+            <ConfigEmpty text={t("quota.unavailable")} />
+          )
         ) : (
           <ConfigEmpty text={t("quota.unavailable")} />
         )}

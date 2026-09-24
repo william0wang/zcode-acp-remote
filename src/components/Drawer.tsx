@@ -5,6 +5,7 @@ import {
   FolderPlus,
   History,
   RefreshCw,
+  Sliders,
   SlidersHorizontal,
 } from "lucide-react";
 import { useAppStore } from "../store/appStore";
@@ -15,7 +16,8 @@ import { SessionList } from "./SessionList";
 // (create / resume / global settings) that used to be reachable only after
 // leaving the session: they are entry-screen features, not session features,
 // so there is no reason to force a trip back to the picker for them.
-// Config and quota stay in the right-side SessionPanel.
+// Session-scoped config options and quota stay in the right-side
+// SessionPanel; the ZCode configuration opens as its own full screen.
 // The overlays themselves are owned by ChatScreen: this drawer unmounts on
 // close, so any dialog mounted here would die with it.
 export function Drawer({
@@ -36,6 +38,8 @@ export function Drawer({
   const refreshInstances = useAppStore((s) => s.refreshInstances);
   const openSession = useAppStore((s) => s.openSession);
   const closeSession = useAppStore((s) => s.closeSession);
+  const openConfig = useAppStore((s) => s.openConfig);
+  const pendingRestart = useAppStore((s) => s.pendingRestart);
 
   useBackHandler(() => {
     onClose();
@@ -107,6 +111,22 @@ export function Drawer({
             className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
           >
             <RefreshCw className="size-4.5" />
+          </button>
+          {/* ZCode configuration — the in-session way in, mirroring the
+              picker's header. The dot marks a needs-restart write waiting to
+              be applied, the same signal that entry button carries. */}
+          <button
+            onClick={() => {
+              onClose();
+              openConfig(null);
+            }}
+            aria-label={t("zconfig.title")}
+            className="relative flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <Sliders className="size-4.5" />
+            {pendingRestart && (
+              <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-amber-400" />
+            )}
           </button>
           <button
             onClick={() => {
