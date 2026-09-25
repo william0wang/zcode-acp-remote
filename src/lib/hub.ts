@@ -1,5 +1,6 @@
 import type {
   AgentUpsert,
+  ConversationRunsResponse,
   FsListing,
   HookEntryPatch,
   HubCreateInstanceResult,
@@ -12,6 +13,17 @@ import type {
   ModelUpsert,
   ResetCardStatus,
   SettingsAll,
+  WorkflowArtifactItemsResponse,
+  WorkflowArtifactReadResponse,
+  WorkflowCreatePromptResponse,
+  WorkflowDetailResponse,
+  WorkflowListResponse,
+  WorkflowNodeResultResponse,
+  WorkflowRunEventsResponse,
+  WorkflowRunsHistoryResponse,
+  WorkflowScope,
+  WorkflowStartResponse,
+  WorkflowWorkspaceResponse,
   WriteEffect,
 } from "./types";
 
@@ -69,11 +81,16 @@ export class HubClient {
       // stale — refresh the reset card status", "that is a built-in agent",
       // "url must be an official ZCode CDN artifact". Dropping it leaves the
       // user with "HTTP 409" and no way forward, so the body becomes the
-      // message whenever it says something.
+      // message whenever it says something. The workflow routes carry BOTH a
+      // short reason token (`error`) and the human detail (`message`, e.g.
+      // compile diagnostics) — prefer the detail when present.
       const detail = await res
         .json()
         .then((b: unknown) => {
-          const err = (b as { error?: unknown } | null)?.error;
+          const body = b as { error?: unknown; message?: unknown } | null;
+          if (typeof body?.message === "string" && body.message)
+            return body.message;
+          const err = body?.error;
           return typeof err === "string" && err ? err : null;
         })
         .catch(() => null);
@@ -574,6 +591,251 @@ export class HubClient {
       body,
     );
     return res.json();
+  }
+
+  // ---- dynamic-workflow management (bridge 0.48.0, server ADR-0029) ----
+  //
+  // Every route is PER-INSTANCE: the hub's machine-level settings mount has
+  // no backend (its `/settings/all` reports the workflow gate as a bare
+  // `{available:false}` — no `enabled` field), so each call names the bridge
+  // through the per-instance proxy. Run-detail queries additionally name the
+  // ACP session that owns the run (`sessionId`); the bridge resolves it to
+  // the backend id.
+
+  /** Base path for one bridge's per-instance settings routes. */
+  private instSettings(instanceId: string): string {
+    return `/api/instances/${encodeURIComponent(instanceId)}/settings`;
+  }
+
+  /**
+   * The per-instance `/settings/all` — the only mount whose `workflow` block
+   * carries the real gate verdict (`{enabled, mode, source}`). The machine-
+   * level snapshot the config screens use cannot answer "is the feature on".
+   */
+  async instanceSettingsAll(instanceId: string): Promise<SettingsAll> {
+    const res = await this.fetch(`${this.instSettings(instanceId)}/all`);
+    return (await res.json()) as SettingsAll;
+  }
+
+  async workflowsList(
+    instanceId: string,
+    scope?: WorkflowScope,
+  ): Promise<WorkflowListResponse> {
+    const q = scope ? `?scope=${scope}` : "";
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows${q}`,
+    );
+    return (await res.json()) as WorkflowListResponse;
+  }
+
+  async workflowGet(
+    instanceId: string,
+    scope: WorkflowScope,
+    name: string,
+  ): Promise<WorkflowDetailResponse> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`,
+    );
+    return (await res.json()) as WorkflowDetailResponse;
+  }
+
+  async workflowUpdateMeta(
+    instanceId: string,
+    scope: WorkflowScope,
+    name: string,
+    meta: Record<string, unknown>,
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/meta`,
+      "PUT",
+      meta,
+    );
+    return res.json();
+  }
+
+  async workflowDelete(
+    instanceId: string,
+    scope: WorkflowScope,
+    name: string,
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`,
+      "DELETE",
+    );
+    return res.json();
+  }
+
+  async workflowMove(
+    instanceId: string,
+    scope: WorkflowScope,
+    name: string,
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/move`,
+      "POST",
+    );
+    return res.json();
+  }
+
+  async workflowStart(
+    instanceId: string,
+    scope: WorkflowScope,
+    name: string,
+    body: { args?: Record<string, unknown>; sessionId?: string },
+  ): Promise<WorkflowStartResponse> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/${encodeURIComponent(scope)}/${encodeURIComponent(name)}/start`,
+      "POST",
+      body,
+    );
+    return (await res.json()) as WorkflowStartResponse;
+  }
+
+  async workflowResume(
+    instanceId: string,
+    runId: string,
+    body: { sessionId: string; name?: string },
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/resume`,
+      "POST",
+      body,
+    );
+    return res.json();
+  }
+
+  /** Journal run history — cross-restart, not session-bound. */
+  async workflowRunsHistory(
+    instanceId: string,
+    opts: { scope?: WorkflowScope; name?: string; limit?: number } = {},
+  ): Promise<WorkflowRunsHistoryResponse> {
+    const q = new URLSearchParams();
+    if (opts.scope) q.set("scope", opts.scope);
+    if (opts.name) q.set("name", opts.name);
+    if (opts.limit !== undefined) q.set("limit", String(opts.limit));
+    const qs = q.size > 0 ? `?${q}` : "";
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflows/runs${qs}`,
+    );
+    return (await res.json()) as WorkflowRunsHistoryResponse;
+  }
+
+  /** The desktop's prefilled "create via conversation" prompt. */
+  async workflowCreatePrompt(
+    instanceId: string,
+    scope?: WorkflowScope,
+  ): Promise<WorkflowCreatePromptResponse> {
+    const q = scope ? `?scope=${scope}` : "";
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-create-prompt${q}`,
+    );
+    return (await res.json()) as WorkflowCreatePromptResponse;
+  }
+
+  /** A session's runs, incl. the `resumable` verdict per run. */
+  async conversationRuns(
+    instanceId: string,
+    sessionId: string,
+    limit?: number,
+  ): Promise<ConversationRunsResponse> {
+    const q = new URLSearchParams({ sessionId });
+    if (limit !== undefined) q.set("limit", String(limit));
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs?${q}`,
+    );
+    return (await res.json()) as ConversationRunsResponse;
+  }
+
+  async runEvents(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+    afterSequence?: number,
+  ): Promise<WorkflowRunEventsResponse> {
+    const q = new URLSearchParams({ sessionId });
+    if (afterSequence !== undefined)
+      q.set("afterSequence", String(afterSequence));
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/events?${q}`,
+    );
+    return (await res.json()) as WorkflowRunEventsResponse;
+  }
+
+  async runArtifacts(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<{ ok: boolean; artifacts?: unknown[] }> {
+    const q = new URLSearchParams({ sessionId });
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/artifacts?${q}`,
+    );
+    return (await res.json()) as { ok: boolean; artifacts?: unknown[] };
+  }
+
+  async runArtifactData(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+    artifactId: string,
+    afterSequence?: number,
+    limit?: number,
+  ): Promise<WorkflowArtifactItemsResponse> {
+    const q = new URLSearchParams({ sessionId });
+    if (afterSequence !== undefined)
+      q.set("afterSequence", String(afterSequence));
+    if (limit !== undefined) q.set("limit", String(limit));
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/data?${q}`,
+    );
+    return (await res.json()) as WorkflowArtifactItemsResponse;
+  }
+
+  async runArtifactRead(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+    artifactId: string,
+    version: number,
+    offset: number,
+    limit?: number,
+  ): Promise<WorkflowArtifactReadResponse> {
+    const q = new URLSearchParams({
+      sessionId,
+      version: String(version),
+      offset: String(offset),
+    });
+    if (limit !== undefined) q.set("limit", String(limit));
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/read?${q}`,
+    );
+    return (await res.json()) as WorkflowArtifactReadResponse;
+  }
+
+  async runWorkspace(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<WorkflowWorkspaceResponse> {
+    const q = new URLSearchParams({ sessionId });
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/workspace?${q}`,
+    );
+    return (await res.json()) as WorkflowWorkspaceResponse;
+  }
+
+  async runNodeResult(
+    instanceId: string,
+    sessionId: string,
+    runId: string,
+    siteId: string,
+    ordinal: number,
+  ): Promise<WorkflowNodeResultResponse> {
+    const q = new URLSearchParams({ sessionId });
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(siteId)}/${ordinal}?${q}`,
+    );
+    return (await res.json()) as WorkflowNodeResultResponse;
   }
 
   /**

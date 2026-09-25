@@ -12,6 +12,7 @@ import {
   Plug,
   RefreshCw,
   Sparkles,
+  Workflow,
 } from "lucide-react";
 import { useAppStore, type ConfigSection } from "../store/appStore";
 import { ConfigPageFrame } from "../components/config/ConfigPage";
@@ -24,6 +25,7 @@ import { QuotaPage } from "./config/QuotaPage";
 import { UsagePage } from "./config/UsagePage";
 import { BackupsPage } from "./config/BackupsPage";
 import { AppUpdatePage } from "./config/AppUpdatePage";
+import { WorkflowsPage } from "./config/WorkflowsPage";
 
 // The independent configuration entry (ADR-0009): a full-screen list of the
 // machine's ZCode configuration sections, each opening its own full-screen
@@ -33,18 +35,29 @@ export function ZCodeConfigScreen() {
   const { t } = useTranslation();
   const section = useAppStore((s) => s.configSection);
   const supported = useAppStore((s) => s.configSupported);
+  const workflowGate = useAppStore((s) => s.configWorkflowGate);
   const loading = useAppStore((s) => s.configLoading);
   const error = useAppStore((s) => s.configError);
+  const instanceId = useAppStore((s) => s.instanceId);
   const openConfig = useAppStore((s) => s.openConfig);
   const closeConfig = useAppStore((s) => s.closeConfig);
   const loadConfigAll = useAppStore((s) => s.loadConfigAll);
   const loadConfigSection = useAppStore((s) => s.loadConfigSection);
+  const loadWorkflowGate = useAppStore((s) => s.loadWorkflowGate);
 
-  // The snapshot feeds the entry list's summaries (counts, whether the machine
-  // has cards at all), so it loads once when the screen opens — not per row.
+  // The snapshot load resolves the machine-level `supported` verdict (and
+  // caches the body other screens read), so it runs once when this screen
+  // opens — not per row.
   useEffect(() => {
     if (supported === null) void loadConfigAll();
   }, [supported, loadConfigAll]);
+
+  // The workflow gate lives only in the PER-INSTANCE snapshot (the machine-
+  // level one has no backend to resolve a verdict), so the entry list probes
+  // the connected bridge — no bridge, no entry.
+  useEffect(() => {
+    if (workflowGate === null) void loadWorkflowGate();
+  }, [workflowGate, instanceId, loadWorkflowGate]);
 
   // A section page loads its own payload on mount; the snapshot alone would
   // compress the shapes these screens edit.
@@ -62,6 +75,7 @@ export function ZCodeConfigScreen() {
   if (section === "usage") return <UsagePage />;
   if (section === "backups") return <BackupsPage />;
   if (section === "appUpdate") return <AppUpdatePage />;
+  if (section === "workflows") return <WorkflowsPage />;
 
   const entries: Array<{
     id: ConfigSection;
@@ -69,20 +83,74 @@ export function ZCodeConfigScreen() {
     title: string;
     hint: string;
   }> = [
-    { id: "quota", icon: Gauge, title: t("zconfig.quota"), hint: t("zconfig.quotaHint") },
-    { id: "models", icon: Box, title: t("zconfig.models"), hint: t("zconfig.modelsHint") },
-    { id: "skills", icon: Sparkles, title: t("zconfig.skills"), hint: t("zconfig.skillsHint") },
-    { id: "mcp", icon: Plug, title: t("zconfig.mcp"), hint: t("zconfig.mcpHint") },
-    { id: "hooks", icon: Package, title: t("zconfig.hooks"), hint: t("zconfig.hooksHint") },
-    { id: "agents", icon: Bot, title: t("zconfig.agents"), hint: t("zconfig.agentsHint") },
-    { id: "usage", icon: ChartBar, title: t("zconfig.usage"), hint: t("zconfig.usageHint") },
-    { id: "backups", icon: Archive, title: t("zconfig.backups"), hint: t("zconfig.backupsHint") },
+    {
+      id: "quota",
+      icon: Gauge,
+      title: t("zconfig.quota"),
+      hint: t("zconfig.quotaHint"),
+    },
+    {
+      id: "models",
+      icon: Box,
+      title: t("zconfig.models"),
+      hint: t("zconfig.modelsHint"),
+    },
+    {
+      id: "skills",
+      icon: Sparkles,
+      title: t("zconfig.skills"),
+      hint: t("zconfig.skillsHint"),
+    },
+    {
+      id: "mcp",
+      icon: Plug,
+      title: t("zconfig.mcp"),
+      hint: t("zconfig.mcpHint"),
+    },
+    {
+      id: "hooks",
+      icon: Package,
+      title: t("zconfig.hooks"),
+      hint: t("zconfig.hooksHint"),
+    },
+    {
+      id: "agents",
+      icon: Bot,
+      title: t("zconfig.agents"),
+      hint: t("zconfig.agentsHint"),
+    },
+    {
+      id: "usage",
+      icon: ChartBar,
+      title: t("zconfig.usage"),
+      hint: t("zconfig.usageHint"),
+    },
+    {
+      id: "backups",
+      icon: Archive,
+      title: t("zconfig.backups"),
+      hint: t("zconfig.backupsHint"),
+    },
     {
       id: "appUpdate",
       icon: Download,
       title: t("zconfig.appUpdate"),
       hint: t("zconfig.appUpdateHint"),
     },
+    // Hidden unless the gate verdict says the feature is on (server ADR-0029:
+    // availability is the remote verdict; the settings UI only reads it).
+    // `workflowGate` (per-instance probe) is the only honest source — the
+    // machine-level snapshot's workflow block is always `{available:false}`.
+    ...(workflowGate?.enabled === true
+      ? [
+          {
+            id: "workflows" as ConfigSection,
+            icon: Workflow,
+            title: t("zconfig.workflows"),
+            hint: t("zconfig.workflowsHint"),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -109,7 +177,9 @@ export function ZCodeConfigScreen() {
             <Icon className="size-4.5 shrink-0 text-faint" />
             <span className="min-w-0 flex-1">
               <span className="block text-sm text-ink">{title}</span>
-              <span className="block truncate text-[11px] text-faint">{hint}</span>
+              <span className="block truncate text-[11px] text-faint">
+                {hint}
+              </span>
             </span>
             <ChevronRight className="size-4 shrink-0 text-faint" />
           </button>

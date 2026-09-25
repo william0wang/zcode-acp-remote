@@ -406,6 +406,11 @@ export interface SettingsAll {
   agents: unknown;
   usage: SettingsUsage | null;
   resetCards: { providers: string[]; credentials: boolean; reason?: string };
+  /**
+   * Dynamic-workflow gate verdict (bridge 0.48.0, ADR-0029). Absent on an
+   * older bridge — read as "off", which hides the workflows section.
+   */
+  workflow?: { enabled: boolean; mode: string; source: string };
 }
 
 export interface SettingsUsage {
@@ -444,6 +449,186 @@ export interface ResetCardStatus {
     /** Send back verbatim with a spend; ties it to this status read. */
     nonce: string;
   };
+}
+
+// ---- dynamic-workflow management (bridge 0.48.0, server ADR-0029) ----
+//
+// Shapes of the per-instance settings routes under
+// /api/instances/{id}/settings/workflows* and /settings/workflow-runs*.
+// Read-heavy and append-only: the backend is the authority, the app renders
+// what arrives and never infers fields the route did not send.
+
+/** Workflow scope vocabulary (upstream workflows/* `scope`). */
+export type WorkflowScope = "project" | "global";
+
+export interface WorkflowEntry {
+  name: string;
+  description?: string;
+  scope?: string;
+}
+
+export interface WorkflowListResponse {
+  ok: boolean;
+  workflows: WorkflowEntry[];
+  invalid: Array<{ path?: string; reason?: string }>;
+  /** The scanned directory, returned even when it does not exist yet. */
+  dir?: string;
+}
+
+export interface WorkflowDetailResponse {
+  ok: boolean;
+  name: string;
+  path?: string;
+  scope: WorkflowScope;
+  meta?: Record<string, unknown>;
+  script?: string;
+}
+
+/**
+ * One history row from the journal (`workflows/runs` — cross-restart, not
+ * session-bound). `parentSessionId` is the BACKEND session id: only runs this
+ * app launched come with a known ACP session (the local launch memory).
+ */
+export interface WorkflowRunRow {
+  runId: string;
+  name?: string;
+  status: string;
+  stopReason?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  spentTokens?: number;
+  parentSessionId?: string;
+  toolCallId?: string;
+  args?: Record<string, unknown>;
+  cwd?: string;
+  artifacts?: Array<{ id?: string; kind?: string; title?: string }>;
+}
+
+export interface WorkflowRunsHistoryResponse {
+  ok: boolean;
+  runs: WorkflowRunRow[];
+  truncated?: boolean;
+}
+
+/** A session-scoped run summary (`v4 workflowRuns` via the bridge). */
+export interface ConversationRunSummary {
+  runId: string;
+  toolCallId?: string;
+  label?: string;
+  updatedAt?: number;
+  status: string;
+  stopReason?: string;
+  resumedFrom?: string;
+  supersededBy?: string;
+  failureCode?: string;
+  failureMessage?: string;
+  /** cancelled ∪ failed-Interrupted — the resume button's source of truth. */
+  resumable: boolean;
+}
+
+export interface ConversationRunsResponse {
+  ok: boolean;
+  runs: ConversationRunSummary[];
+}
+
+/** One journal event; `sequence` is the append-only cursor. */
+export interface WorkflowRunEvent {
+  sequence: number;
+  type: string;
+  payload: Record<string, unknown>;
+  truncated?: boolean;
+}
+
+export interface WorkflowRunEventsResponse {
+  ok: boolean;
+  events: WorkflowRunEvent[];
+  hasMore?: boolean;
+}
+
+/**
+ * One artifact. Kind-specific latest fields sit at the top level (kept open
+ * via the index signature); `versions` carries history (≤16).
+ */
+export interface WorkflowArtifact {
+  id: string;
+  kind: "file" | "markdown" | "chart" | "table" | "metrics" | "board" | string;
+  title?: string;
+  versions?: Array<Record<string, unknown>>;
+  itemCount?: number;
+  primary?: boolean;
+  [key: string]: unknown;
+}
+
+export interface WorkflowArtifactItemsResponse {
+  ok: boolean;
+  items: Array<{
+    sequence?: number;
+    siteId?: string;
+    ordinal?: number;
+    item: unknown;
+  }>;
+  hasMore?: boolean;
+}
+
+export interface WorkflowArtifactReadResponse {
+  ok: boolean;
+  dataBase64: string;
+  mediaType?: string;
+  totalBytes?: number;
+  nextOffset?: number;
+}
+
+/**
+ * A workspace node's summary is a strict OBJECT upstream (v4
+ * workflow-workspace schema), never a string — which fields are set depends
+ * on the op (arrays carry resultCount, world.run carries exitCode and the
+ * two output streams, string bodies only resultBytes).
+ */
+export interface WorkflowNodeSummary {
+  resultBytes: number;
+  resultCount?: number;
+  exitCode?: number;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+}
+
+export interface WorkflowWorkspaceNode {
+  siteId?: string;
+  ordinal?: number;
+  op?: string;
+  args?: unknown;
+  status?: string;
+  summary?: WorkflowNodeSummary;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface WorkflowWorkspaceResponse {
+  ok: boolean;
+  nodes: WorkflowWorkspaceNode[];
+  truncated?: boolean;
+}
+
+export interface WorkflowNodeResultResponse {
+  ok: boolean;
+  status?: string;
+  result?: unknown;
+  error?: unknown;
+  truncated?: boolean;
+  totalBytes?: number;
+}
+
+/** `POST …/start` — `acpSessionId` is what openSession() consumes. */
+export interface WorkflowStartResponse {
+  ok: boolean;
+  acpSessionId: string;
+  runId?: string;
+  toolCallId?: string;
+}
+
+export interface WorkflowCreatePromptResponse {
+  ok: boolean;
+  prompt: string;
 }
 
 /** The install outcome of an app update, as the bridge reports it. */

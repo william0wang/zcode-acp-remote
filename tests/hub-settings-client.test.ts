@@ -280,3 +280,139 @@ test("the check reads the requested channel, not just stable", async () => {
     "http://hub/api/settings/app-update?channel=preview",
   );
 });
+
+// --- dynamic-workflow routes (bridge 0.48.0, server ADR-0029) -------------
+//
+// Every workflow route is per-instance and must spell the per-instance
+// prefix — the hub's machine-level mount answers 409 — and the run-detail
+// queries must carry the ACP session id plus the journal cursor, because
+// that pair is what the bridge resolves the query with.
+
+test("workflow management routes name the instance and use their verbs", async () => {
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+
+  await client().workflowsList("i1", "project");
+  await client().workflowGet("i1", "global", "night ly");
+  await client().workflowUpdateMeta("i1", "global", "night ly", {
+    description: "x",
+  });
+  await client().workflowDelete("i1", "global", "night ly");
+  await client().workflowMove("i1", "global", "night ly");
+  await client().workflowStart("i1", "project", "deploy", {
+    args: { target: "src/" },
+  });
+
+  expect(requested[0]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows?scope=project",
+    method: "GET",
+  });
+  expect(requested[1]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows/global/night%20ly",
+    method: "GET",
+  });
+  expect(requested[2]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows/global/night%20ly/meta",
+    method: "PUT",
+    body: { description: "x" },
+  });
+  expect(requested[3]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows/global/night%20ly",
+    method: "DELETE",
+  });
+  expect(requested[4]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows/global/night%20ly/move",
+    method: "POST",
+  });
+  expect(requested[5]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflows/project/deploy/start",
+    method: "POST",
+    body: { args: { target: "src/" } },
+  });
+});
+
+test("run queries carry the session id and the journal cursor", async () => {
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true }));
+
+  await client().conversationRuns("i1", "sess 1");
+  await client().runEvents("i1", "sess 1", "run 2", 41);
+  await client().runArtifactData("i1", "sess 1", "run 2", "a/b", 7, 50);
+  await client().runArtifactRead("i1", "sess 1", "run 2", "a/b", 3, 0, 1024);
+  await client().runNodeResult("i1", "sess 1", "run 2", "site 1", 2);
+
+  expect(requested[0]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-runs?sessionId=sess+1",
+  );
+  expect(requested[1]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-runs/run%202/events?sessionId=sess+1&afterSequence=41",
+  );
+  expect(requested[2]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-runs/run%202/artifacts/a%2Fb/data?sessionId=sess+1&afterSequence=7&limit=50",
+  );
+  expect(requested[3]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-runs/run%202/artifacts/a%2Fb/read?sessionId=sess+1&version=3&offset=0&limit=1024",
+  );
+  expect(requested[4]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-runs/run%202/nodes/site%201/2?sessionId=sess+1",
+  );
+});
+
+test("resume and the create prompt keep their body/shape contracts", async () => {
+  responses.push(Response.json({ ok: true }));
+  responses.push(Response.json({ ok: true, prompt: "Help me…" }));
+
+  await client().workflowResume("i1", "run 2", {
+    sessionId: "sess 1",
+    name: "deploy",
+  });
+  await client().workflowCreatePrompt("i1", "global");
+
+  expect(requested[0]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflow-runs/run%202/resume",
+    method: "POST",
+    body: { sessionId: "sess 1", name: "deploy" },
+  });
+  expect(requested[1]!.url).toBe(
+    "http://hub/api/instances/i1/settings/workflow-create-prompt?scope=global",
+  );
+});
+
+test("a workflow refusal surfaces the message detail over the reason token", async () => {
+  // The workflow routes answer {ok:false, error:<token>, message:<detail>} —
+  // for compile_failed the diagnostics ride in `message`, and "compile_failed"
+  // alone would leave the user staring at a token.
+  responses.push(
+    new Response(
+      JSON.stringify({
+        ok: false,
+        error: "compile_failed",
+        message: "line 3: unexpected token",
+      }),
+      { status: 422 },
+    ),
+  );
+  await expect(
+    client().workflowStart("i1", "project", "broken", {}),
+  ).rejects.toThrow("line 3: unexpected token");
+});
+
+test("the workflow gate probe reads the per-instance settings snapshot", async () => {
+  // The machine-level /settings/all carries no gate verdict (its mount has
+  // no backend), so the entry visibility must come from this spelling.
+  responses.push(
+    Response.json({
+      ok: true,
+      workflow: { enabled: true, mode: "alwaysOn", source: "remote" },
+    }),
+  );
+  await client().instanceSettingsAll("i1");
+  expect(requested[0]!.url).toBe("http://hub/api/instances/i1/settings/all");
+});

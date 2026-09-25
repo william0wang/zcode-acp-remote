@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { AcpConnection } from "../lib/acp";
 import { HubApiError, HubClient } from "../lib/hub";
+import { rememberLaunch } from "../lib/workflow-launches";
 import {
   defaultServerName,
   loadFontSize,
@@ -53,6 +54,10 @@ import {
   type ResetCardStatus,
   type SettingsAll,
   type SettingsUsage,
+  type ConversationRunSummary,
+  type WorkflowListResponse,
+  type WorkflowScope,
+  type WorkflowStartResponse,
 } from "../lib/types";
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
@@ -391,6 +396,25 @@ interface AppState {
   // install then refuses.
   updateChannel: UpdateChannel;
   setUpdateChannel: (channel: UpdateChannel) => void;
+  // ---- dynamic workflows (bridge 0.48.0, server ADR-0029) ----
+  //
+  // The saved-workflow list for the scope on screen. Every workflow route is
+  // per-instance, so the reads/writes all name the connected bridge.
+  configWorkflows: WorkflowListResponse | null;
+  // The scope the LAST workflows read asked for — the stale-response guard's
+  // comparison key (two scope taps race exactly like the usage ranges).
+  configWorkflowScope: WorkflowScope;
+  // The workflow gate verdict, read from the PER-INSTANCE settings snapshot:
+  // the machine-level `/settings/all` the entry list loads has no backend and
+  // reports no `enabled` field at all, so this is the only honest source for
+  // "show the workflows entry". Null = not probed (reads as hidden).
+  configWorkflowGate: SettingsAll["workflow"] | null;
+  // Text the next mounted composer adopts as its draft (the workflow
+  // "create via conversation" entry). Nonce-keyed so the same text twice
+  // still reads as a new request; consumed exactly once.
+  composerPrefill: { text: string; nonce: number } | null;
+  setComposerPrefill: (text: string) => void;
+  clearComposerPrefill: () => void;
 
   init: () => void;
   // Upserts by normalized hubUrl: an existing entry gets the new token and
@@ -581,6 +605,41 @@ interface AppState {
     channel?: string;
   }) => Promise<void>;
   pollAppUpdate: () => Promise<void>;
+  // ---- dynamic workflows ----
+  // Reads the saved-workflow list for one scope (per-instance routes).
+  loadWorkflows: (scope: WorkflowScope) => Promise<void>;
+  // Probes the per-instance settings snapshot for the workflow gate verdict
+  // (the entry list's visibility source). A 404 marks the hub too old; any
+  // other failure just leaves the gate unread — the entry stays hidden.
+  loadWorkflowGate: () => Promise<void>;
+  // Runs one hub call with the connected client and the connected instance
+  // bound in; notifies on failure and resolves null (no client, no instance,
+  // or the call refused). Every workflow read/write the screens make goes
+  // through here so the error posture lives in one place. `silent` serves
+  // the run-detail poller: a dead session must not toast every 3s tick.
+  workflowAction: <T>(
+    label: string,
+    fn: (client: HubClient, instanceId: string) => Promise<T>,
+    silent?: boolean,
+  ) => Promise<T | null>;
+  // Launches a saved workflow; records the run in the local launch memory so
+  // its rows stay actionable (open session, run detail, resume) later.
+  startWorkflow: (input: {
+    scope: WorkflowScope;
+    name: string;
+    args?: Record<string, unknown>;
+  }) => Promise<WorkflowStartResponse | null>;
+  resumeWorkflowRun: (input: {
+    runId: string;
+    sessionId: string;
+    name?: string;
+  }) => Promise<boolean>;
+  // Best-effort per-session run summaries for the runs list (the `resumable`
+  // verdict lives there). Silent on failure: a session the bridge no longer
+  // knows simply contributes no summaries and its rows stay read-only.
+  loadRunSummaries: (
+    sessionIds: string[],
+  ) => Promise<Record<string, ConversationRunSummary[]>>;
   // Restarts the backend of the instance that owns the configuration, so
   // needs-restart writes take effect. Returns the interrupted-turn count.
   restartConfigBackend: () => Promise<number>;
@@ -596,7 +655,8 @@ export type ConfigSection =
   | "quota"
   | "usage"
   | "backups"
-  | "appUpdate";
+  | "appUpdate"
+  | "workflows";
 
 // Module singletons: connection + timers live outside React state.
 let acp: AcpConnection | null = null;
@@ -604,6 +664,8 @@ let acp: AcpConnection | null = null;
 const TOAST_MS = 4000;
 let toastSeq = 0;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+// Composer-prefill request counter; see setComposerPrefill.
+let prefillSeq = 0;
 // Events from superseded connections must be ignored (their async onclose
 // can fire after a new connection to the SAME instance was started).
 let connSeq = 0;
@@ -777,6 +839,10 @@ function connectionResetPatch(): Partial<AppState> {
     configUsageRange: "7d",
     configBackups: null,
     configAppUpdate: null,
+    configWorkflows: null,
+    configWorkflowScope: "project",
+    configWorkflowGate: null,
+    composerPrefill: null,
   };
 }
 
@@ -1933,6 +1999,10 @@ export const useAppStore = create<AppState>((set, get) => {
     configUsageRange: "7d",
     configBackups: null,
     configAppUpdate: null,
+    configWorkflows: null,
+    configWorkflowScope: "project",
+    configWorkflowGate: null,
+    composerPrefill: null,
     appUpdateInstall: null,
     resetCards: null,
     resetProviderId: null,
@@ -3071,6 +3141,12 @@ export const useAppStore = create<AppState>((set, get) => {
               configAppUpdate: await client.settingsAppUpdate(updateChannel),
             });
             break;
+          case "workflows":
+            // The list is scope-parameterised; the workflows screen drives
+            // loadWorkflows itself (mount + scope taps), this mount-effect
+            // path just seeds the current scope's first paint.
+            await get().loadWorkflows(get().configWorkflowScope);
+            break;
           case "quota":
             // The plan-quota screen reuses the hub-level quota the side panels
             // already show — one source of truth, so the numbers outside and
@@ -3391,6 +3467,131 @@ export const useAppStore = create<AppState>((set, get) => {
       } catch {
         // A poll failure is not worth a toast; the next one may succeed.
       }
+    },
+
+    // ---- dynamic workflows (bridge 0.48.0, server ADR-0029) ----
+
+    setComposerPrefill: (text) => {
+      // Monotonic nonce: the same prompt text requested twice must still be
+      // distinguishable, or the second request would not re-trigger the
+      // composer's consumption effect.
+      prefillSeq += 1;
+      set({ composerPrefill: { text, nonce: prefillSeq } });
+    },
+
+    clearComposerPrefill: () => set({ composerPrefill: null }),
+
+    loadWorkflowGate: async () => {
+      const client = hub();
+      const instanceId = get().instanceId;
+      if (!client || !instanceId) return;
+      try {
+        const all = await client.instanceSettingsAll(instanceId);
+        set({ configWorkflowGate: all.workflow ?? null });
+      } catch {
+        // Silent, and that includes 404: a per-instance 404 is usually the
+        // hub re-learning its instances after a restart (the bridge
+        // re-registers within seconds), not proof of an old hub — writing
+        // `configSupported:false` here would retire EVERY config section on
+        // one transient answer. A failed probe hides the entry, which is the
+        // same verdict the gate itself gives on any doubt (fail-closed).
+      }
+    },
+
+    loadWorkflows: async (scope) => {
+      const client = hub();
+      if (!client) return;
+      set({
+        configLoading: true,
+        configError: null,
+        configWorkflowScope: scope,
+      });
+      try {
+        const instanceId = get().instanceId;
+        if (!instanceId) throw new Error("no instance connected");
+        const list = await client.workflowsList(instanceId, scope);
+        // Stale-response guard: the scope buttons fire a fresh read per tap
+        // and nothing serializes them — an answer for a scope the user has
+        // already moved past must not repaint the list under the new one.
+        if (get().configWorkflowScope !== scope) return;
+        set({ configWorkflows: list, configLoading: false });
+      } catch (e) {
+        if (get().configWorkflowScope !== scope) return;
+        // No 404 special-case: the machine-level loaders own the old-hub
+        // verdict. A 404 here is per-instance (usually the hub re-learning
+        // its instances), so it lands as a retriable page error instead of
+        // the permanent "unsupported" screen.
+        set({
+          configError: e instanceof Error ? e.message : String(e),
+          configLoading: false,
+        });
+      }
+    },
+
+    workflowAction: async (label, fn, silent = false) => {
+      const client = hub();
+      const instanceId = get().instanceId;
+      if (!client || !instanceId) {
+        if (!silent) get().notify(`${label} failed: not connected`);
+        return null;
+      }
+      try {
+        return await fn(client, instanceId);
+      } catch (e) {
+        if (!silent)
+          get().notify(
+            `${label} failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        return null;
+      }
+    },
+
+    startWorkflow: async (input) => {
+      const res = await get().workflowAction("start workflow", (client, iid) =>
+        client.workflowStart(iid, input.scope, input.name, {
+          ...(input.args ? { args: input.args } : {}),
+        }),
+      );
+      if (!res) return null;
+      // Remember the join the response just minted: `runId → acpSessionId`
+      // exists nowhere else the app can read it (history rows carry the
+      // BACKEND session id), and without it the run's rows could never be
+      // opened, inspected, or resumed from this app later.
+      if (res.runId) {
+        rememberLaunch({
+          runId: res.runId,
+          acpSessionId: res.acpSessionId,
+          instanceId: get().instanceId ?? "",
+          name: input.name,
+          scope: input.scope,
+          at: Date.now(),
+        });
+      }
+      return res;
+    },
+
+    resumeWorkflowRun: async (input) => {
+      const res = await get().workflowAction("resume run", (client, iid) =>
+        client.workflowResume(iid, input.runId, {
+          sessionId: input.sessionId,
+          ...(input.name ? { name: input.name } : {}),
+        }),
+      );
+      return res !== null;
+    },
+
+    loadRunSummaries: async (sessionIds) => {
+      const client = hub();
+      const instanceId = get().instanceId;
+      if (!client || !instanceId) return {};
+      const out: Record<string, ConversationRunSummary[]> = {};
+      await Promise.allSettled(
+        sessionIds.map(async (sessionId) => {
+          const res = await client.conversationRuns(instanceId, sessionId);
+          if (res?.runs) out[sessionId] = res.runs;
+        }),
+      );
+      return out;
     },
 
     restartConfigBackend: async () => {

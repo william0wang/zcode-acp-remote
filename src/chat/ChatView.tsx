@@ -522,6 +522,18 @@ function Composer() {
   const [images, setImages] = useState<AttachmentDraft[]>([]);
   const galleryRef = useRef<HTMLInputElement | null>(null);
 
+  // The workflow "create via conversation" entry stages its prompt here
+  // (server ADR-0029: prefill the draft, never auto-send). Consumed exactly
+  // once — the clear must happen in the same commit, or a re-render would
+  // re-apply the text over whatever the user typed in between.
+  const composerPrefill = useAppStore((s) => s.composerPrefill);
+  const clearComposerPrefill = useAppStore((s) => s.clearComposerPrefill);
+  useEffect(() => {
+    if (!composerPrefill) return;
+    setText(composerPrefill.text);
+    clearComposerPrefill();
+  }, [composerPrefill, setText, clearComposerPrefill]);
+
   // The whitespace-delimited word around the caret and its offset — the
   // completion query source. A caret resting exactly on a following word's
   // start edge counts as no word (nothing has been typed into it yet).
