@@ -9,6 +9,19 @@ import type { SavedServer } from "../lib/types";
 const inputClass =
   "mt-1 w-full rounded-xl bg-raised px-4 py-3 text-sm text-ink ring-1 ring-inset ring-hairline placeholder:text-faint focus:ring-2 focus:ring-white/40 focus:outline-none";
 
+// Same-origin mode (the hub serves the web build itself): an empty URL means
+// "this page's origin". Only a real browser over http(s) qualifies — the
+// Tauri shell is excluded (its Windows/Android origin IS http(s), but it is
+// tauri.localhost, not a hub).
+function sameOriginHubUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  if ("__TAURI_INTERNALS__" in window) return null;
+  const { protocol, hostname } = window.location;
+  if (protocol !== "http:" && protocol !== "https:") return null;
+  if (hostname === "tauri.localhost") return null;
+  return window.location.origin;
+}
+
 // Add/edit form. ADDING keeps the original gate — health + discovery must
 // answer before a new server is saved. EDITING saves in place (a down hub is
 // fine; the offline banner + polling handle it) and only the ACTIVE server
@@ -31,6 +44,7 @@ function ServerForm({
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const sameOrigin = sameOriginHubUrl();
 
   // The confirm state is fleeting — a stray first tap must not linger armed.
   useEffect(() => {
@@ -42,8 +56,14 @@ function ServerForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const url = hubUrl.trim().replace(/\/+$/, "");
+    const url = hubUrl.trim()
+      ? hubUrl.trim().replace(/\/+$/, "")
+      : sameOrigin;
     const secret = token.trim();
+    if (!url) {
+      setError(t("connect.invalidUrl"));
+      return;
+    }
     try {
       const parsed = new URL(url);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
@@ -95,7 +115,9 @@ function ServerForm({
       <input
         value={hubUrl}
         onChange={(e) => setHubUrl(e.target.value)}
-        placeholder="https://hub.example.com"
+        placeholder={
+          sameOrigin ? t("connect.urlPlaceholderSameOrigin") : "https://hub.example.com"
+        }
         autoCapitalize="none"
         autoCorrect="off"
         inputMode="url"
@@ -122,7 +144,7 @@ function ServerForm({
 
       <button
         type="submit"
-        disabled={testing || !hubUrl.trim() || !token.trim()}
+        disabled={testing || (!hubUrl.trim() && !sameOrigin) || !token.trim()}
         className="mt-6 w-full rounded-xl bg-white py-3 text-sm font-semibold text-black transition active:scale-[0.99] disabled:opacity-40"
       >
         {testing

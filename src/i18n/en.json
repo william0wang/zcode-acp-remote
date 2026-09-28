@@ -6,6 +6,7 @@
     "connect": "Connect",
     "testing": "Testing…",
     "invalidUrl": "Enter a valid http(s) URL",
+    "urlPlaceholderSameOrigin": "Empty = this page's origin (hub-served build)",
     "savedServers": "Servers",
     "addServer": "Add server",
     "editServer": "Edit server",

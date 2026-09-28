@@ -114,10 +114,24 @@ pnpm build              # -> dist/ (static, self-contained)
 pnpm exec vite preview  # local smoke test of the built bundle
 ```
 
+**Served by the hub (same origin)** — with static hosting enabled
+(`ZCODE_ACP_WEB_DIR` or `remote.webDir` in the server config), the hub
+serves the build itself: one address for the page, the REST API, and the
+WebSocket — no CORS, no mixed-content limits, no separate static host; behind
+a tunnel a single https URL covers everything.
+
+```bash
+pnpm build
+ZCODE_ACP_WEB_DIR="$PWD/dist" zcode-acp hub   # then open http://localhost:8377
+```
+
+On the connect screen leave the hub URL empty — it defaults to the page's
+origin, so only the token is needed.
+
 Caveats:
 
-- A page served over `https://` can only open `wss://` — enter the hub's
-  tunneled `https://` URL.
+- On a separately deployed page, `https://` can only open `wss://` — enter
+  the hub's tunneled `https://` URL.
 - The token is stored in the browser's localStorage: don't use a shared
   machine, and prefer a private/incognito window for one-off access.
 

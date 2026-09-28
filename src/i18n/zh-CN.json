@@ -6,6 +6,7 @@
     "connect": "连接",
     "testing": "测试中…",
     "invalidUrl": "请输入有效的 http(s) 地址",
+    "urlPlaceholderSameOrigin": "留空 = 当前页面地址（hub 自带部署）",
     "savedServers": "服务器",
     "addServer": "添加服务器",
     "editServer": "编辑服务器",

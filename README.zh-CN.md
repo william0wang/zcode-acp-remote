@@ -103,9 +103,22 @@ pnpm build              # -> dist/（静态、自包含）
 pnpm exec vite preview  # 本地预览构建产物
 ```
 
+**由 hub 直接托管（同源）** —— 服务端开启静态托管（`ZCODE_ACP_WEB_DIR`，
+或配置文件 `remote.webDir`）后，hub 自己服务这套构建：页面、REST API 和
+WebSocket 同源——没有 CORS、没有混合内容限制，无需单独的静态主机；走隧道
+时一个 https 地址就是全部。
+
+```bash
+pnpm build
+ZCODE_ACP_WEB_DIR="$PWD/dist" zcode-acp hub   # 然后打开 http://localhost:8377
+```
+
+连接页的 hub 地址留空即可——默认取当前页面的地址，只需填令牌。
+
 注意事项：
 
-- `https://` 页面只能连接 `wss://` —— 请输入经隧道暴露的 hub `https://` 地址。
+- 分离部署时，`https://` 页面只能连接 `wss://` —— 请输入经隧道暴露的 hub
+  `https://` 地址。
 - 令牌保存在浏览器 localStorage 中：不要在公用电脑上使用；一次性访问建议用
   无痕/隐私窗口。
 
