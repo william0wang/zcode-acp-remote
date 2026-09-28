@@ -1,12 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { useBackHandler } from "../../lib/backNav";
 import { useAppStore } from "../../store/appStore";
 import { MarkdownText } from "../Markdown";
@@ -18,6 +19,11 @@ import type {
   WorkflowWorkspaceNode,
 } from "../../lib/types";
 import { ConfigBlock, ConfigEmpty, fmtStamp } from "./ConfigPage";
+import {
+  ConfigField,
+  ConfigFormSheet,
+  configInputClass,
+} from "./ConfigFormSheet";
 
 // One workflow run's detail view (bridge 0.48.0, ADR-0029): the journal
 // events, the artifacts, and the workspace nodes the backend's v4 queries
@@ -115,18 +121,25 @@ export function WorkflowRunDetail({
   runId,
   title,
   onBack,
+  onRepoint,
 }: {
   instanceId: string;
   sessionId: string;
   runId: string;
   title: string;
   onBack: () => void;
+  /** Supersede re-point: the amendment returned a NEW run id. */
+  onRepoint: (runId: string) => void;
 }) {
   const { t } = useTranslation();
   const workflowAction = useAppStore((s) => s.workflowAction);
   const resumeWorkflowRun = useAppStore((s) => s.resumeWorkflowRun);
+  const stopWorkflowRun = useAppStore((s) => s.stopWorkflowRun);
+  const amendWorkflowRun = useAppStore((s) => s.amendWorkflowRun);
   const [tab, setTab] = useState<Tab>("events");
   const [summary, setSummary] = useState<ConversationRunSummary | null>(null);
+  const [amending, setAmending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [events, setEvents] = useState<WorkflowRunEvent[] | null>(null);
   const [eventsBusy, setEventsBusy] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -253,6 +266,31 @@ export function WorkflowRunDetail({
     if (ok) void refreshSummary();
   }
 
+  async function stop() {
+    setStopping(true);
+    const ok = await stopWorkflowRun(runId, sessionId);
+    setStopping(false);
+    if (ok) void refreshSummary();
+  }
+
+  // Phases entered so far (journal `phase-entered` events) — the last one is
+  // where the run currently stands.
+  const phases = useMemo(
+    () =>
+      (events ?? [])
+        .filter((e) => e.type === "phase-entered")
+        .map((e) => {
+          const p = e.payload ?? {};
+          for (const key of ["phaseName", "name"]) {
+            const v = p[key];
+            if (typeof v === "string" && v) return v;
+          }
+          return null;
+        })
+        .filter((v): v is string => v !== null),
+    [events],
+  );
+
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "events", label: t("zconfig.workflowEvents") },
     { id: "artifacts", label: t("zconfig.workflowArtifacts") },
@@ -280,15 +318,44 @@ export function WorkflowRunDetail({
             {summary?.updatedAt ? fmtStamp(summary.updatedAt) : ""}
             {summary?.failureMessage ? ` · ${summary.failureMessage}` : ""}
           </p>
+          {(summary?.resumedFrom || summary?.supersededBy) && (
+            <p className="mt-0.5 truncate text-[10px] text-faint">
+              {summary?.resumedFrom &&
+                ` ${t("zconfig.workflowLineageFrom")} …${summary.resumedFrom.slice(-8)}`}
+              {summary?.supersededBy &&
+                ` ${t("zconfig.workflowLineageBy")} …${summary.supersededBy.slice(-8)}`}
+            </p>
+          )}
         </span>
-        {summary?.resumable && (
-          <button
-            onClick={() => void resume()}
-            className="shrink-0 rounded-lg bg-sky-500/20 px-2.5 py-1.5 text-[11px] font-medium text-sky-300"
-          >
-            {t("zconfig.workflowResume")}
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {active && !sessionDead && (
+            <>
+              <button
+                onClick={() => setAmending(true)}
+                aria-label={t("zconfig.workflowConfigure")}
+                className="flex size-8 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+              >
+                <SlidersHorizontal className="size-4" />
+              </button>
+              <button
+                onClick={() => void stop()}
+                disabled={stopping}
+                aria-label={t("zconfig.workflowStop")}
+                className="flex size-8 items-center justify-center rounded-full bg-red-500/15 text-red-300 active:bg-red-500/25 disabled:opacity-40"
+              >
+                <Square className="size-3.5 fill-current" />
+              </button>
+            </>
+          )}
+          {summary?.resumable && (
+            <button
+              onClick={() => void resume()}
+              className="rounded-lg bg-sky-500/20 px-2.5 py-1.5 text-[11px] font-medium text-sky-300"
+            >
+              {t("zconfig.workflowResume")}
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="flex shrink-0 gap-1 px-4 pb-2">
@@ -315,6 +382,22 @@ export function WorkflowRunDetail({
         )}
         {tab === "events" && (
           <>
+            {phases.length > 0 && (
+              <div className="mx-4 mb-2 flex flex-wrap items-center gap-1">
+                {phases.map((p, i) => (
+                  <span
+                    key={`${i}-${p}`}
+                    className={`rounded-md px-1.5 py-0.5 text-[10px] ${
+                      i === phases.length - 1
+                        ? "bg-sky-500/20 font-medium text-sky-300"
+                        : "bg-white/[0.06] text-faint"
+                    }`}
+                  >
+                    {p}
+                  </span>
+                ))}
+              </div>
+            )}
             {events !== null && events.length === 0 ? (
               <ConfigEmpty text={t("zconfig.workflowEventsEmpty")} />
             ) : (
@@ -434,6 +517,20 @@ export function WorkflowRunDetail({
           onBack={() => setOpenArtifact(null)}
         />
       )}
+      {amending && (
+        <AmendSheet
+          onClose={() => setAmending(false)}
+          onAmend={async (body) => {
+            setAmending(false);
+            const res = await amendWorkflowRun({ runId, sessionId, body });
+            if (!res) return;
+            // A supersede answers with the NEW run's id — re-point the whole
+            // view so the poller and every tab follow the continuation.
+            if (res.runId !== runId) onRepoint(res.runId);
+            else void refreshSummary();
+          }}
+        />
+      )}
     </div>
   );
 
@@ -457,6 +554,133 @@ export function WorkflowRunDetail({
       truncated: res.truncated,
     });
   }
+}
+
+/**
+ * Submit-only settings amendment (bridge 0.49.0): the run summary carries no
+ * current values until the upstream schema extension lands, so nothing is
+ * prefilled. Three-state per field: empty = keep, "clear" checked = send
+ * `null` (revert to default), value = set. The submit is disabled until at
+ * least one field contributes a change (an empty delta is a 422 by contract).
+ */
+function AmendSheet({
+  onClose,
+  onAmend,
+}: {
+  onClose: () => void;
+  onAmend: (body: {
+    subagentModel?: string | null;
+    maxConcurrency?: number | null;
+  }) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [model, setModel] = useState("");
+  const [clearModel, setClearModel] = useState(false);
+  const [concurrency, setConcurrency] = useState("");
+  const [clearConcurrency, setClearConcurrency] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const modelValue = clearModel ? null : model.trim() || undefined;
+  const parsedConcurrency = concurrency.trim();
+  const concurrencyNumber =
+    !clearConcurrency && parsedConcurrency
+      ? Number(parsedConcurrency)
+      : undefined;
+  const concurrencyValue: number | null | undefined = clearConcurrency
+    ? null
+    : concurrencyNumber !== undefined &&
+        Number.isInteger(concurrencyNumber) &&
+        concurrencyNumber >= 1
+      ? concurrencyNumber
+      : undefined;
+  const concurrencyInvalid =
+    !clearConcurrency &&
+    parsedConcurrency !== "" &&
+    concurrencyValue === undefined;
+  const empty =
+    modelValue === undefined &&
+    concurrencyValue === undefined &&
+    !clearConcurrency;
+
+  return (
+    <ConfigFormSheet
+      title={t("zconfig.workflowConfigure")}
+      submitDisabled={busy || empty || concurrencyInvalid}
+      onClose={onClose}
+      onSubmit={() => {
+        setBusy(true);
+        void onAmend({
+          ...(modelValue !== undefined ? { subagentModel: modelValue } : {}),
+          ...(concurrencyValue !== undefined || clearConcurrency
+            ? { maxConcurrency: clearConcurrency ? null : concurrencyValue }
+            : {}),
+        });
+      }}
+    >
+      <ConfigField
+        label={t("zconfig.workflowSubagentModel")}
+        hint={t("zconfig.workflowSubagentModelHint")}
+      >
+        <input
+          value={model}
+          onChange={(e) => {
+            setModel(e.target.value);
+            if (e.target.value) setClearModel(false);
+          }}
+          disabled={clearModel}
+          className={`${configInputClass} font-mono`}
+          placeholder="zhipu/glm-4.7"
+        />
+        <label className="mt-1.5 flex items-center gap-2 text-[11px] text-dim">
+          <input
+            type="checkbox"
+            checked={clearModel}
+            onChange={(e) => {
+              setClearModel(e.target.checked);
+              if (e.target.checked) setModel("");
+            }}
+            className="size-3.5 accent-white"
+          />
+          {t("zconfig.workflowClearModel")}
+        </label>
+      </ConfigField>
+      <ConfigField
+        label={t("zconfig.workflowMaxConcurrency")}
+        hint={
+          concurrencyInvalid
+            ? t("zconfig.workflowConcurrencyInvalid")
+            : t("zconfig.workflowConcurrencyHint")
+        }
+      >
+        <input
+          value={concurrency}
+          onChange={(e) => {
+            setConcurrency(e.target.value);
+            if (e.target.value) setClearConcurrency(false);
+          }}
+          disabled={clearConcurrency}
+          inputMode="numeric"
+          className={configInputClass}
+          placeholder="4"
+        />
+        <label className="mt-1.5 flex items-center gap-2 text-[11px] text-dim">
+          <input
+            type="checkbox"
+            checked={clearConcurrency}
+            onChange={(e) => {
+              setClearConcurrency(e.target.checked);
+              if (e.target.checked) setConcurrency("");
+            }}
+            className="size-3.5 accent-white"
+          />
+          {t("zconfig.workflowClearConcurrency")}
+        </label>
+      </ConfigField>
+      <p className="px-1 text-[10px] leading-relaxed text-faint">
+        {t("zconfig.workflowAmendHint")}
+      </p>
+    </ConfigFormSheet>
+  );
 }
 
 /** One journal row: sequence + type, payload expandable in place. */
@@ -546,17 +770,20 @@ function ArtifactViewer({
   const [binary, setBinary] = useState(false);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
-  const [boardItems, setBoardItems] = useState<string | null>(null);
-  const [boardHasMore, setBoardHasMore] = useState(false);
-  const [boardCursor, setBoardCursor] = useState<number | null>(null);
+  // Board/table/metrics share one paginated data channel (`artifactData`):
+  // raw items stay structured so each kind renders its own view.
+  const [dataItems, setDataItems] = useState<Array<{
+    sequence: number;
+    item: unknown;
+  }> | null>(null);
+  const [dataHasMore, setDataHasMore] = useState(false);
+  const [dataCursor, setDataCursor] = useState<number | null>(null);
   // One decoder per artifact, in streaming mode: a chunk boundary can split
   // a multi-byte UTF-8 character, and per-chunk decoding would turn each
   // split into U+FFFD on both sides.
   const decoderRef = useRef<TextDecoder | null>(null);
 
   const kind = artifact.kind;
-  // Structured kinds render from the inventory row itself — no extra fetch.
-  const structured = kind !== "markdown" && kind !== "file" && kind !== "board";
 
   const loadChunk = useCallback(
     async (offset: number, append: boolean) => {
@@ -601,33 +828,41 @@ function ArtifactViewer({
     if (text.length > 0 && bad / text.length > 0.01) setBinary(true);
   }, [nextOffset, text]);
 
-  const loadBoard = useCallback(
+  const loadData = useCallback(
     async (initial: boolean) => {
       setBusy(true);
-      const after = initial ? undefined : (boardCursor ?? undefined);
+      const after = initial ? undefined : (dataCursor ?? undefined);
       const res = await workflowAction("load artifact items", (c) =>
         c.runArtifactData(instanceId, sessionId, runId, artifact.id, after),
       );
       setBusy(false);
       if (!res) return;
-      const rendered = res.items
-        .map((it) => prettyJson(it.item))
-        .join("\n\n---\n\n");
       const lastSeq = res.items[res.items.length - 1]?.sequence;
-      if (lastSeq !== undefined) setBoardCursor(lastSeq);
-      setBoardItems((prev) =>
-        initial || prev === null ? rendered : `${prev}\n\n---\n\n${rendered}`,
+      if (lastSeq !== undefined) setDataCursor(lastSeq);
+      setDataItems((prev) =>
+        initial || prev === null
+          ? res.items.map((it) => ({
+              sequence: it.sequence ?? 0,
+              item: it.item,
+            }))
+          : [
+              ...prev,
+              ...res.items.map((it) => ({
+                sequence: it.sequence ?? 0,
+                item: it.item,
+              })),
+            ],
       );
-      setBoardHasMore(res.hasMore === true);
+      setDataHasMore(res.hasMore === true);
     },
-    [workflowAction, instanceId, sessionId, runId, artifact, boardCursor],
+    [workflowAction, instanceId, sessionId, runId, artifact, dataCursor],
   );
 
   useEffect(() => {
     if (kind === "markdown" || kind === "file") {
       void loadChunk(0, false);
-    } else if (kind === "board") {
-      void loadBoard(true);
+    } else if (kind === "board" || kind === "table" || kind === "metrics") {
+      void loadData(true);
     } else {
       setBusy(false);
     }
@@ -641,11 +876,11 @@ function ArtifactViewer({
 
   return (
     <ViewerShell title={artifact.title ?? artifact.id} onBack={onBack}>
-      {!structured &&
-      busy &&
+      {busy &&
       text === null &&
       markdown === null &&
-      boardItems === null ? (
+      dataItems === null &&
+      kind !== "chart" ? (
         <div className="flex justify-center py-10">
           <RefreshCw className="size-5 animate-spin text-faint" />
         </div>
@@ -676,28 +911,177 @@ function ArtifactViewer({
             </button>
           )}
         </>
+      ) : kind === "table" ? (
+        <TableView items={dataItems} spec={artifact.spec} />
+      ) : kind === "metrics" ? (
+        <MetricsView items={dataItems} />
       ) : kind === "board" ? (
         <>
-          {boardItems !== null ? (
-            <pre className="whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim">
-              {boardItems}
-            </pre>
-          ) : null}
-          {boardHasMore && (
-            <button
-              onClick={() => void loadBoard(false)}
-              disabled={busy}
-              className="mt-4 w-full rounded-xl bg-raised px-3 py-2.5 text-sm text-dim active:bg-white/[0.07]"
+          {(dataItems ?? []).map((it) => (
+            <pre
+              key={it.sequence}
+              className="mb-3 whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim"
             >
-              {t("zconfig.workflowLoadMore")}
-            </button>
-          )}
+              {prettyJson(it.item)}
+            </pre>
+          ))}
         </>
       ) : (
         <pre className="whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim">
           {prettyJson(artifact)}
         </pre>
       )}
+      {(kind === "board" || kind === "table" || kind === "metrics") &&
+        dataHasMore && (
+          <button
+            onClick={() => void loadData(false)}
+            disabled={busy}
+            className="mt-4 w-full rounded-xl bg-raised px-3 py-2.5 text-sm text-dim active:bg-white/[0.07]"
+          >
+            {t("zconfig.workflowLoadMore")}
+          </button>
+        )}
     </ViewerShell>
+  );
+}
+
+/** Short cell text for a table cell / metric value. */
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return prettyJson(value);
+  return String(value);
+}
+
+/**
+ * Table artifacts: column labels come from the spec's declared columns when
+ * they parse (labels/keys in any common spelling), else from the first row's
+ * own keys — the report items are plain objects by construction.
+ */
+function TableView({
+  items,
+  spec,
+}: {
+  items: Array<{ sequence: number; item: unknown }> | null;
+  spec: unknown;
+}) {
+  const rows = (items ?? []).map((it) =>
+    typeof it.item === "object" && it.item !== null && !Array.isArray(it.item)
+      ? (it.item as Record<string, unknown>)
+      : null,
+  );
+  const firstRow = rows.find((r) => r !== null) ?? null;
+  const columns: string[] = (() => {
+    const declared = (() => {
+      if (typeof spec !== "object" || spec === null) return null;
+      const cols = (spec as Record<string, unknown>)["columns"];
+      if (!Array.isArray(cols)) return null;
+      return cols
+        .map((c) => {
+          if (typeof c === "string") return c;
+          if (typeof c === "object" && c !== null) {
+            const o = c as Record<string, unknown>;
+            for (const key of ["label", "title", "name", "key", "field"]) {
+              const v = o[key];
+              if (typeof v === "string" && v) return v;
+            }
+          }
+          return null;
+        })
+        .filter((v): v is string => v !== null);
+    })();
+    if (declared && declared.length > 0) return declared;
+    return firstRow ? Object.keys(firstRow) : [];
+  })();
+
+  if (items === null || rows.every((r) => r === null)) {
+    return (
+      <pre className="whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim">
+        {(items ?? []).map((it) => prettyJson(it.item)).join("\n\n---\n\n")}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto pt-2">
+      <table className="w-full border-collapse text-left text-[11px]">
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th
+                key={c}
+                className="whitespace-nowrap border-b border-hairline px-2 py-1.5 font-medium text-dim"
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={items[i]!.sequence} className="align-top">
+              {columns.map((c) => (
+                <td
+                  key={c}
+                  className="max-w-64 truncate border-b border-hairline/50 px-2 py-1.5 text-dim"
+                >
+                  {r === null ? prettyJson(items[i]!.item) : cellText(r[c])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Metrics artifacts: one key-value card per report item. */
+function MetricsView({
+  items,
+}: {
+  items: Array<{ sequence: number; item: unknown }> | null;
+}) {
+  if (items === null) return null;
+  return (
+    <div className="flex flex-col gap-2 pt-2">
+      {items.map((it) => {
+        if (
+          typeof it.item !== "object" ||
+          it.item === null ||
+          Array.isArray(it.item)
+        ) {
+          return (
+            <pre
+              key={it.sequence}
+              className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-dim"
+            >
+              {prettyJson(it.item)}
+            </pre>
+          );
+        }
+        return (
+          <div
+            key={it.sequence}
+            className="rounded-xl bg-surface px-3 py-2 ring-1 ring-hairline"
+          >
+            {Object.entries(it.item as Record<string, unknown>).map(
+              ([k, v]) => (
+                <div
+                  key={k}
+                  className="flex items-baseline justify-between gap-3 py-0.5"
+                >
+                  <span className="min-w-0 truncate text-[11px] text-faint">
+                    {k}
+                  </span>
+                  <span className="shrink-0 font-mono text-xs text-ink">
+                    {cellText(v)}
+                  </span>
+                </div>
+              ),
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

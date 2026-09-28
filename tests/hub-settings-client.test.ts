@@ -385,6 +385,34 @@ test("resume and the create prompt keep their body/shape contracts", async () =>
   );
 });
 
+test("amendRunSettings addresses the run by path, the session by query (bridge 0.49.0)", async () => {
+  responses.push(
+    Response.json({
+      ok: true,
+      runId: "run-new",
+      toolCallId: "settings-1",
+      supersededRunId: "run-old",
+    }),
+  );
+
+  const res = await client().amendRunSettings("i1", "run 2", "sess 1", {
+    subagentModel: null,
+    maxConcurrency: 4,
+  });
+
+  expect(requested[0]).toMatchObject({
+    url: "http://hub/api/instances/i1/settings/workflow-runs/run%202/settings?sessionId=sess+1",
+    method: "POST",
+    // Key PRESENCE is the three-state discriminator — `null` must ride the
+    // wire as a real JSON null, never be dropped or stringified.
+    body: { subagentModel: null, maxConcurrency: 4 },
+  });
+  expect(res).toMatchObject({
+    runId: "run-new",
+    supersededRunId: "run-old",
+  });
+});
+
 test("a workflow refusal surfaces the message detail over the reason token", async () => {
   // The workflow routes answer {ok:false, error:<token>, message:<detail>} —
   // for compile_failed the diagnostics ride in `message`, and "compile_failed"

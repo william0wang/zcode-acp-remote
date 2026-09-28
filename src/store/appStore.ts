@@ -57,6 +57,7 @@ import {
   type ConversationRunSummary,
   type WorkflowListResponse,
   type WorkflowScope,
+  type AmendRunSettingsResponse,
   type WorkflowStartResponse,
 } from "../lib/types";
 
@@ -624,16 +625,32 @@ interface AppState {
   ) => Promise<T | null>;
   // Launches a saved workflow; records the run in the local launch memory so
   // its rows stay actionable (open session, run detail, resume) later.
+  // `sessionId` pins the run to an existing session (in-chat start) instead
+  // of letting the bridge mint a fresh one.
   startWorkflow: (input: {
     scope: WorkflowScope;
     name: string;
     args?: Record<string, unknown>;
+    sessionId?: string;
   }) => Promise<WorkflowStartResponse | null>;
   resumeWorkflowRun: (input: {
     runId: string;
     sessionId: string;
     name?: string;
   }) => Promise<boolean>;
+  // Amend a flying run's settings (bridge 0.49.0). Returns the run that
+  // continues the work — SAME id for in-place changes, a NEW id (plus
+  // supersededRunId) when the amendment stopped and replaced the run; the
+  // caller re-points its view on a differing id.
+  amendWorkflowRun: (input: {
+    runId: string;
+    sessionId: string;
+    body: { subagentModel?: string | null; maxConcurrency?: number | null };
+  }) => Promise<AmendRunSettingsResponse | null>;
+  // Stop a flying run through the ACP extension the bridge already forwards
+  // (`session/cancelBackgroundTask`, taskId ≡ runId — the same identity
+  // equation as resume/amend). Reflects as the run card's stopped state.
+  stopWorkflowRun: (runId: string, sessionId: string) => Promise<boolean>;
   // Best-effort per-session run summaries for the runs list (the `resumable`
   // verdict lives there). Silent on failure: a session the bridge no longer
   // knows simply contributes no summaries and its rows stay read-only.
@@ -3550,6 +3567,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const res = await get().workflowAction("start workflow", (client, iid) =>
         client.workflowStart(iid, input.scope, input.name, {
           ...(input.args ? { args: input.args } : {}),
+          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         }),
       );
       if (!res) return null;
@@ -3578,6 +3596,36 @@ export const useAppStore = create<AppState>((set, get) => {
         }),
       );
       return res !== null;
+    },
+
+    amendWorkflowRun: async (input) => {
+      return get().workflowAction("amend run settings", (client, iid) =>
+        client.amendRunSettings(iid, input.runId, input.sessionId, input.body),
+      );
+    },
+
+    stopWorkflowRun: async (runId, sessionId) => {
+      const conn = acp;
+      if (!conn) {
+        get().notify("stop run failed: not connected");
+        return false;
+      }
+      try {
+        const result = (await conn.request("session/cancelBackgroundTask", {
+          sessionId,
+          taskId: runId,
+        })) as { cancelled?: boolean } | null;
+        if (result?.cancelled !== true) {
+          get().notify("stop run failed: run not found or already settled");
+          return false;
+        }
+        return true;
+      } catch (e) {
+        get().notify(
+          `stop run failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return false;
+      }
     },
 
     loadRunSummaries: async (sessionIds) => {

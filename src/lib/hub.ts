@@ -13,6 +13,7 @@ import type {
   ModelUpsert,
   ResetCardStatus,
   SettingsAll,
+  AmendRunSettingsResponse,
   WorkflowArtifactItemsResponse,
   WorkflowArtifactReadResponse,
   WorkflowCreatePromptResponse,
@@ -702,6 +703,26 @@ export class HubClient {
       body,
     );
     return res.json();
+  }
+
+  /**
+   * Amend a run's settings (bridge 0.49.0). Three-state per field: the key's
+   * PRESENCE is the discriminator — absent = keep, `null` = revert to
+   * default, value = set. `?sessionId=` is required by the route.
+   */
+  async amendRunSettings(
+    instanceId: string,
+    runId: string,
+    sessionId: string,
+    body: { subagentModel?: string | null; maxConcurrency?: number | null },
+  ): Promise<AmendRunSettingsResponse> {
+    const q = new URLSearchParams({ sessionId });
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/settings?${q}`,
+      "POST",
+      body,
+    );
+    return (await res.json()) as AmendRunSettingsResponse;
   }
 
   /** Journal run history — cross-restart, not session-bound. */

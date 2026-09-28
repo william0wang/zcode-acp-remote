@@ -20,6 +20,11 @@ import {
   WorkflowRunDetail,
 } from "../../components/config/WorkflowRunDetail";
 import { lookupLaunch } from "../../lib/workflow-launches";
+import { argsDeclaration, parseArgsInput } from "../../lib/workflow-args";
+import {
+  WorkflowArgsForm,
+  type ArgsFormState,
+} from "../../components/config/WorkflowArgsForm";
 import type {
   ConversationRunSummary,
   WorkflowDetailResponse,
@@ -36,24 +41,6 @@ import type {
 // its ACP session in the local launch memory (open / inspect / resume);
 // every other row — an editor-driven run, or one whose bridge died — is
 // read-only, because the journal only records the backend session id.
-
-/** Parse the optional start-args textarea; "" = no args. */
-function parseArgsInput(text: string): {
-  args?: Record<string, unknown>;
-  error?: string;
-} {
-  const trimmed = text.trim();
-  if (!trimmed) return {};
-  try {
-    const value: unknown = JSON.parse(trimmed);
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return { error: "args must be a JSON object" };
-    }
-    return { args: value as Record<string, unknown> };
-  } catch {
-    return { error: "invalid JSON" };
-  }
-}
 
 export function WorkflowsPage() {
   const { t } = useTranslation();
@@ -102,11 +89,18 @@ export function WorkflowsPage() {
   if (runDetail && instanceId) {
     return (
       <WorkflowRunDetail
+        // A supersede re-points the run id; the key FORCES a remount so no
+        // poller state (afterSequence cursors, loaded tabs) survives from the
+        // old run's journal — its sequence numbers do not carry over.
+        key={runDetail.runId}
         instanceId={instanceId}
         sessionId={runDetail.sessionId}
         runId={runDetail.runId}
         title={runDetail.name}
         onBack={() => setRunDetail(null)}
+        onRepoint={(newRunId) =>
+          setRunDetail((prev) => (prev ? { ...prev, runId: newRunId } : prev))
+        }
       />
     );
   }
@@ -283,8 +277,12 @@ function WorkflowDetail({
     const d = detail?.meta?.["description"];
     return typeof d === "string" ? d : "";
   }, [detail]);
+  const whenToUse = useMemo(() => {
+    const w = detail?.meta?.["whenToUse"];
+    return typeof w === "string" ? w : "";
+  }, [detail]);
 
-  async function saveDescription(next: string) {
+  async function saveMeta(next: { description: string; whenToUse: string }) {
     setEditingDesc(false);
     // updateMeta REPLACES the whole meta — without a loaded detail the merge
     // base is unknown and a bare {description} would wipe whenToUse/args.
@@ -293,14 +291,36 @@ function WorkflowDetail({
       return;
     }
     setLoading(true);
+    // Empty whenToUse = drop the key entirely (upstream wants non-empty
+    // strings or absence, never "") — strip the OLD value before merging, or
+    // the spread below would silently carry it back in.
+    const { whenToUse: _old, ...rest } = detail.meta ?? {};
     const res = await workflowAction("save description", (c, iid) =>
       c.workflowUpdateMeta(iid, scope, name, {
-        ...detail.meta,
-        description: next,
+        ...rest,
+        description: next.description,
+        ...(next.whenToUse.trim() ? { whenToUse: next.whenToUse.trim() } : {}),
       }),
     );
     setLoading(false);
     if (res) void load();
+  }
+
+  // Promote-to-global rides the same chat-prefill path as creation — the
+  // desktop's launcher does exactly this (a saved-workflow launch prompt);
+  // there is no dedicated REST for it.
+  function promoteViaChat() {
+    useAppStore
+      .getState()
+      .setComposerPrefill(
+        `Please promote the saved workflow "${name}" from this project's scope to the global scope: move the file under ~/.zcode/workflows/ keeping its script, description, whenToUse and args declaration unchanged, then remove the project copy. If it is inherently bound to this project and cannot be generalized meaningfully, say why and stop without saving.`,
+      );
+    useAppStore.getState().closeConfig();
+    if (!useAppStore.getState().activeSessionId) {
+      useAppStore
+        .getState()
+        .notify("prompt staged — open a session to review and send it");
+    }
   }
 
   async function start(args?: Record<string, unknown>) {
@@ -361,6 +381,9 @@ function WorkflowDetail({
             value={description}
           />
         ) : null}
+        {whenToUse ? (
+          <ConfigRow label={t("zconfig.workflowWhenToUse")} value={whenToUse} />
+        ) : null}
         {detail?.path && (
           <ConfigRow
             label={t("zconfig.workflowPath")}
@@ -387,12 +410,19 @@ function WorkflowDetail({
           {t("zconfig.workflowStart")}
         </button>
         <div className="mt-2 flex gap-2">
-          {scope === "global" && (
+          {scope === "global" ? (
             <button
               onClick={() => void moveToProject()}
               className="flex-1 rounded-xl bg-raised px-3 py-2 text-xs text-dim active:bg-white/[0.07]"
             >
               {t("zconfig.workflowMoveToProject")}
+            </button>
+          ) : (
+            <button
+              onClick={promoteViaChat}
+              className="flex-1 rounded-xl bg-raised px-3 py-2 text-xs text-dim active:bg-white/[0.07]"
+            >
+              {t("zconfig.workflowPromoteGlobal")}
             </button>
           )}
           {confirmDelete ? (
@@ -468,6 +498,18 @@ function WorkflowDetail({
                       {r.spentTokens ? `${fmtTokens(r.spentTokens)} · ` : ""}
                       {r.artifacts?.length ? `${r.artifacts.length}◆` : ""}
                     </span>
+                    {(summary?.resumedFrom || r.resumedFrom) && (
+                      <span className="block truncate text-[10px] text-faint">
+                        {t("zconfig.workflowLineageFrom")} …
+                        {(summary?.resumedFrom ?? r.resumedFrom)!.slice(-8)}
+                      </span>
+                    )}
+                    {(summary?.supersededBy || r.supersededBy) && (
+                      <span className="block truncate text-[10px] text-faint">
+                        {t("zconfig.workflowLineageBy")} …
+                        {(summary?.supersededBy ?? r.supersededBy)!.slice(-8)}
+                      </span>
+                    )}
                   </span>
                   <StatusBadge status={summary?.status ?? r.status} />
                 </div>
@@ -511,15 +553,16 @@ function WorkflowDetail({
 
       {starting && (
         <StartSheet
+          meta={detail?.meta}
           onClose={() => setStarting(false)}
           onStart={(args) => void start(args)}
         />
       )}
       {editingDesc && (
-        <DescriptionSheet
-          initial={description}
+        <MetaSheet
+          initial={{ description, whenToUse }}
           onClose={() => setEditingDesc(false)}
-          onSave={(next) => void saveDescription(next)}
+          onSave={(next) => void saveMeta(next)}
         />
       )}
     </ConfigPageFrame>
@@ -528,66 +571,97 @@ function WorkflowDetail({
 
 // ---------- sheets ----------
 
-/** Optional JSON-object args, validated client-side before any request. */
+/**
+ * Launch args: the typed form when the workflow declares them, the free-form
+ * JSON textarea otherwise (validated client-side before any request).
+ */
 function StartSheet({
+  meta,
   onClose,
   onStart,
 }: {
+  meta: Record<string, unknown> | undefined;
   onClose: () => void;
   onStart: (args?: Record<string, unknown>) => void;
 }) {
   const { t } = useTranslation();
+  const typed = argsDeclaration(meta) !== null;
+  const [form, setForm] = useState<ArgsFormState>({});
   const [text, setText] = useState("");
   const parsed = parseArgsInput(text);
   return (
     <ConfigFormSheet
       title={t("zconfig.workflowStart")}
-      submitDisabled={parsed.error !== undefined}
+      submitDisabled={
+        typed ? form.error !== undefined : parsed.error !== undefined
+      }
       onClose={onClose}
-      onSubmit={() => onStart(parsed.args)}
+      onSubmit={() => onStart(typed ? form.args : parsed.args)}
     >
-      <ConfigField
-        label={t("zconfig.workflowStartArgs")}
-        hint={parsed.error ? parsed.error : t("zconfig.workflowStartArgsHint")}
-      >
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={5}
-          spellCheck={false}
-          className={`${configInputClass} font-mono`}
-          placeholder={'{"target": "src/"}'}
-        />
-      </ConfigField>
+      {typed ? (
+        <WorkflowArgsForm meta={meta} onChange={setForm} />
+      ) : (
+        <ConfigField
+          label={t("zconfig.workflowStartArgs")}
+          hint={
+            parsed.error ? parsed.error : t("zconfig.workflowStartArgsHint")
+          }
+        >
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            spellCheck={false}
+            className={`${configInputClass} font-mono`}
+            placeholder={'{"target": "src/"}'}
+          />
+        </ConfigField>
+      )}
+      {typed && form.error ? (
+        <p className="px-1 text-[11px] text-red-400">{form.error}</p>
+      ) : null}
     </ConfigFormSheet>
   );
 }
 
-function DescriptionSheet({
+/**
+ * Edit the meta's two prose fields. description is required non-empty
+ * upstream; whenToUse is optional (empty = drop the key, never sent as "").
+ */
+function MetaSheet({
   initial,
   onClose,
   onSave,
 }: {
-  initial: string;
+  initial: { description: string; whenToUse: string };
   onClose: () => void;
-  onSave: (next: string) => void;
+  onSave: (next: { description: string; whenToUse: string }) => void;
 }) {
   const { t } = useTranslation();
-  const [text, setText] = useState(initial);
-  // Upstream meta.description is a non-empty string — an empty save would be
-  // rejected far away from here and surface as a confusing backend error.
+  const [description, setDescription] = useState(initial.description);
+  const [whenToUse, setWhenToUse] = useState(initial.whenToUse);
   return (
     <ConfigFormSheet
       title={t("zconfig.workflowEditDescription")}
-      submitDisabled={text.trim() === ""}
+      submitDisabled={description.trim() === ""}
       onClose={onClose}
-      onSubmit={() => onSave(text.trim())}
+      onSubmit={() =>
+        onSave({ description: description.trim(), whenToUse: whenToUse.trim() })
+      }
     >
       <ConfigField label={t("zconfig.workflowDescription")}>
         <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={4}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          className={configInputClass}
+        />
+      </ConfigField>
+      <ConfigField label={t("zconfig.workflowWhenToUse")}>
+        <textarea
+          value={whenToUse}
+          onChange={(e) => setWhenToUse(e.target.value)}
+          rows={3}
           className={configInputClass}
         />
       </ConfigField>

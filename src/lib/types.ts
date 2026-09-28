@@ -488,6 +488,8 @@ export interface WorkflowDetailResponse {
  * One history row from the journal (`workflows/runs` — cross-restart, not
  * session-bound). `parentSessionId` is the BACKEND session id: only runs this
  * app launched come with a known ACP session (the local launch memory).
+ * Lineage fields ride the upstream row extension (bridge passthrough already
+ * pinned); absent until the upstream journal projection lands.
  */
 export interface WorkflowRunRow {
   runId: string;
@@ -502,12 +504,35 @@ export interface WorkflowRunRow {
   args?: Record<string, unknown>;
   cwd?: string;
   artifacts?: Array<{ id?: string; kind?: string; title?: string }>;
+  resumedFrom?: string;
+  supersededBy?: string;
 }
 
 export interface WorkflowRunsHistoryResponse {
   ok: boolean;
   runs: WorkflowRunRow[];
   truncated?: boolean;
+}
+
+/**
+ * One declared arg on a saved workflow's meta (`args` map, upstream
+ * `zcodeSavedWorkflowArgsDeclarationSchema`): drives the typed launch form.
+ */
+export interface WorkflowArgDeclaration {
+  type?: string;
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+}
+
+/** `POST /settings/workflow-runs/{runId}/settings` (bridge 0.49.0, PR #265). */
+export interface AmendRunSettingsResponse {
+  ok: boolean;
+  /** The run that continues the work — same id in place, NEW id after supersede. */
+  runId: string;
+  toolCallId: string;
+  /** Present only when the amendment stopped and superseded a flying run. */
+  supersededRunId?: string;
 }
 
 /** A session-scoped run summary (`v4 workflowRuns` via the bridge). */

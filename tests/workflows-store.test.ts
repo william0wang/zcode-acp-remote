@@ -216,6 +216,21 @@ test("a start records the launch memory — the only run→session join there is
   });
 });
 
+test("an in-chat start pins the run to the caller's session", async () => {
+  const useAppStore = await connectedStore();
+  route("/start", ok({ ok: true, acpSessionId: "cur-1", runId: "run-10" }));
+  const res = await useAppStore.getState().startWorkflow({
+    scope: "global",
+    name: "deploy",
+    sessionId: "cur-1",
+  });
+  expect(res?.acpSessionId).toBe("cur-1");
+  expect(requested.find((r) => r.url.includes("/start"))).toMatchObject({
+    method: "POST",
+    body: { sessionId: "cur-1" },
+  });
+});
+
 test("a refused start toasts the detail and leaves no launch memory", async () => {
   const useAppStore = await connectedStore();
   route(
@@ -278,4 +293,37 @@ test("workflowAction without an instance reports and resolves null", async () =>
   expect(res).toBeNull();
   expect(useAppStore.getState().toast?.text).toContain("not connected");
   expect(requested).toHaveLength(0);
+});
+
+test("an amendment returns the continuation run — the caller re-points on a new id", async () => {
+  const useAppStore = await connectedStore();
+  route(
+    "/settings",
+    ok({
+      ok: true,
+      runId: "run-new",
+      toolCallId: "settings-1",
+      supersededRunId: "run-old",
+    }),
+  );
+  const res = await useAppStore.getState().amendWorkflowRun({
+    runId: "run-old",
+    sessionId: "acp-1",
+    body: { subagentModel: null },
+  });
+  expect(res).toMatchObject({ runId: "run-new", supersededRunId: "run-old" });
+  // The route addresses the session by QUERY (bridge 0.49.0 contract), and a
+  // `null` rides the body as a real value.
+  expect(requested.find((r) => r.url.includes("/settings?"))).toMatchObject({
+    method: "POST",
+    body: { subagentModel: null },
+  });
+});
+
+test("stopWorkflowRun without a live ACP connection reports and resolves false", async () => {
+  const useAppStore = await connectedStore();
+  // connectedStore wires the hub HTTP client only — no WS, so acp is null.
+  const ok = await useAppStore.getState().stopWorkflowRun("run-1", "acp-1");
+  expect(ok).toBe(false);
+  expect(useAppStore.getState().toast?.text).toContain("not connected");
 });
