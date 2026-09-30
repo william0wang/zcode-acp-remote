@@ -397,7 +397,7 @@ const UserMessage = memo(function UserMessage({
     );
   }
   return (
-    <MessagePrimitive.Root className="flex min-w-0 justify-end">
+    <MessagePrimitive.Root className="flex min-w-0 flex-col items-end">
       <div
         onContextMenu={copyFrom}
         className="max-w-[85%] min-w-0 break-words whitespace-pre-wrap rounded-[22px] rounded-br-md bg-raised px-4 py-2.5 text-sm text-ink select-none"
@@ -430,6 +430,17 @@ const UserMessage = memo(function UserMessage({
           </div>
         )}
       </div>
+      {/* Same trailing copy action as the assistant side — the bubble is
+          select-none, so the button (plus long-press) is the only copy path. */}
+      <ActionBarPrimitive.Root className="mt-0.5 flex justify-end">
+        <ActionBarPrimitive.Copy
+          aria-label={t("chat.copy")}
+          className="flex size-7 items-center justify-center rounded-full text-faint active:bg-white/[0.06] group"
+        >
+          <Copy className="size-3 group-data-[copied]:hidden" />
+          <Check className="hidden size-3 text-emerald-400 group-data-[copied]:block" />
+        </ActionBarPrimitive.Copy>
+      </ActionBarPrimitive.Root>
       {zoom != null && images && (
         <Lightbox
           open
