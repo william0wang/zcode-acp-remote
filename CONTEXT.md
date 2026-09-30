@@ -146,8 +146,12 @@ shows a countdown.
 _Avoid_: reset eligibility, reset permission
 
 **Usage Statistics**:
-Per-model token counts read from the machine's local agent database, bucketed
-by day. Local and historical; it does not know about the account's allowance.
+The settings page with two tabs. Local machine usage: per-model token counts
+read from the machine's agent database, bucketed by day. Platform usage: the
+account-level monitor data (365-day activity heatmap, streaks, credits with
+cache-hit trends, per-model and per-tool usage) the bridge aggregates from
+the BigModel/Z.AI monitor API — the same data the desktop app's Coding Plan
+usage tab shows.
 _Avoid_: usage quota, token quota
 
 **Config Backup**:

@@ -380,6 +380,18 @@ export class HubClient {
     return res.json();
   }
 
+  /**
+   * Platform usage (account-level monitor data). `range` is today | 7d | 30d.
+   * A 404 means the bridge predates the route — the caller treats it as an
+   * upgrade hint, not a settings-API capability gap.
+   */
+  async settingsUsagePlatform(range: string): Promise<unknown> {
+    const res = await this.fetch(
+      `/api/settings/usage-platform?range=${encodeURIComponent(range)}`,
+    );
+    return res.json();
+  }
+
   async settingsQuota(): Promise<unknown> {
     const res = await this.fetch("/api/settings/quota");
     return res.json();

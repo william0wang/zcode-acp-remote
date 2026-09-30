@@ -53,6 +53,7 @@ import {
   type ModelUpsert,
   type ResetCardStatus,
   type SettingsAll,
+  type SettingsPlatformUsage,
   type SettingsUsage,
   type ConversationRunSummary,
   type WorkflowGateBlock,
@@ -370,6 +371,13 @@ interface AppState {
   // out of order (two taps, two in-flight reads) can be recognised as stale
   // and dropped rather than shown under the wrong range button.
   configUsageRange: string;
+  // Platform usage (the account-level monitor data). Same read-on-open pattern
+  // and same stale-range guard as configUsage above; `false` in
+  // configPlatformUsageSupported means THIS hub predates the route (404), which
+  // degrades the platform tab alone instead of the whole settings API.
+  configPlatformUsage: SettingsPlatformUsage | null;
+  configPlatformUsageRange: string;
+  configPlatformUsageSupported: boolean;
   configBackups: unknown;
   configAppUpdate: unknown;
   // Install progress for the app update, polled by the update screen.
@@ -546,11 +554,12 @@ interface AppState {
   // Loads the /settings/all snapshot; a 404 marks the hub as too old.
   loadConfigAll: () => Promise<void>;
   // Loads one section's own endpoint. Called when its screen mounts; `arg`
-  // carries a section-specific option (the usage range) so a screen can
-  // refetch without the store having to know its controls.
+  // carries a section-specific option (the usage range — "7d" | "30d" | "all"
+  // for the local read, "today" | "7d" | "30d" for platform usage) so a screen
+  // can refetch without the store having to know its controls.
   loadConfigSection: (
     section: ConfigSection,
-    arg?: { range?: "7d" | "30d" | "all" },
+    arg?: { range?: "7d" | "30d" | "all" | "today" },
   ) => Promise<void>;
   // Applies a write and reports its effect class. Destructive operations
   // (delete skill / mcp / agent, restore backup) confirm at the call site.
@@ -694,6 +703,7 @@ export type ConfigSection =
   | "agents"
   | "quota"
   | "usage"
+  | "usagePlatform"
   | "backups"
   | "appUpdate"
   | "workflows";
@@ -877,6 +887,9 @@ function connectionResetPatch(): Partial<AppState> {
     configAgents: null,
     configUsage: null,
     configUsageRange: "7d",
+    configPlatformUsage: null,
+    configPlatformUsageRange: "7d",
+    configPlatformUsageSupported: true,
     configBackups: null,
     configAppUpdate: null,
     configWorkflows: null,
@@ -2037,6 +2050,9 @@ export const useAppStore = create<AppState>((set, get) => {
     configAgents: null,
     configUsage: null,
     configUsageRange: "7d",
+    configPlatformUsage: null,
+    configPlatformUsageRange: "7d",
+    configPlatformUsageSupported: true,
     configBackups: null,
     configAppUpdate: null,
     configWorkflows: null,
@@ -3212,6 +3228,34 @@ export const useAppStore = create<AppState>((set, get) => {
             const answeredRange = payload.usage?.range ?? requestedRange;
             if (answeredRange !== get().configUsageRange) return;
             set({ configUsage: payload.usage ?? null });
+            break;
+          }
+          case "usagePlatform": {
+            // Same envelope pattern (`{ok, platformUsage}`) and the same
+            // stale-range guard as the local usage read above.
+            const requestedRange = arg?.range ?? "7d";
+            set({ configPlatformUsageRange: requestedRange });
+            try {
+              const payload = (await client.settingsUsagePlatform(
+                requestedRange,
+              )) as {
+                platformUsage?: SettingsPlatformUsage;
+              };
+              const answeredRange =
+                payload.platformUsage?.range ?? requestedRange;
+              if (answeredRange !== get().configPlatformUsageRange) return;
+              set({ configPlatformUsage: payload.platformUsage ?? null });
+            } catch (e) {
+              // A 404 here means the bridge predates the route — unlike the
+              // shared catch below, it must NOT flip configSupported (that
+              // verdict belongs to /settings/all and gates every section); the
+              // platform tab shows its own upgrade note instead.
+              if (e instanceof HubApiError && e.status === 404) {
+                set({ configPlatformUsageSupported: false });
+                break;
+              }
+              throw e;
+            }
             break;
           }
           case "backups":

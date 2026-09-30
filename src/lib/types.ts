@@ -425,7 +425,8 @@ export interface WorkflowGateBlock {
 }
 
 /** The switch's write vocabulary (bridge ≥0.53): "auto" follows the remote verdict. */
-export type WorkflowGateModeSetting = "auto" | "disabled" | "onDemand" | "alwaysOn";
+export type WorkflowGateModeSetting =
+  "auto" | "disabled" | "onDemand" | "alwaysOn";
 
 export interface WorkflowGateSetResponse {
   ok: boolean;
@@ -449,8 +450,75 @@ export interface SettingsUsage {
   }>;
   daily: Array<{
     date: string;
-    models: Array<{ modelId: string; totalTokens: number }>;
+    models: Array<{ modelId: string | null; totalTokens: number }>;
   }>;
+}
+
+// ---- platform usage (bridge GET /settings/usage-platform) ----
+// The account-level monitor data behind the desktop app's Coding Plan usage
+// tab: a fixed 365-day activity window plus range-scoped credit/model/tool
+// detail. See .zcode/docs/platform-usage-backend-requirements.md for the
+// frozen contract; only `kind === "success"` carries the optional blocks.
+
+/** One heatmap square. `level` is 0-4 (0 = no usage), precomputed by the bridge. */
+export interface PlatformUsageHeatmapCell {
+  date: string;
+  level: number;
+  tokens: number;
+}
+
+export interface PlatformUsageDetailSummary {
+  /** Percent, e.g. 72.4; null when the upstream did not report it. */
+  cacheHitRate: number | null;
+  /** Period-over-period change of the metric; sign carries direction. */
+  cacheHitRateTrend: number | null;
+  totalCredits: number;
+  totalCreditsTrend: number | null;
+  averageDailyCredits: number;
+  averageDailyCreditsTrend: number | null;
+}
+
+export interface SettingsPlatformUsage {
+  kind: "success" | "auth_error" | "rate_limited" | "unavailable";
+  range: "today" | "7d" | "30d";
+  generatedAt: number;
+  activity?: {
+    summary: {
+      totalTokens: number;
+      peakDailyTokens: number;
+      peakDailyTokensDate: string | null;
+      totalUsageDurationMs: number;
+      currentStreakDays: number;
+      longestStreakDays: number;
+    };
+    heatmap: {
+      startDate: string | null;
+      endDate: string | null;
+      maxTokens: number;
+      /** Sunday-start weeks; missing days inside a week are null cells. */
+      weeks: Array<{ days: Array<PlatformUsageHeatmapCell | null> }>;
+    };
+  };
+  detail?: {
+    model: PlatformUsageDetailSummary | null;
+    tool: PlatformUsageDetailSummary | null;
+  };
+  models?: Array<{
+    name: string;
+    totalTokens: number;
+    totalCredits?: number;
+    cachedInputTokens?: number;
+    uncachedInputTokens?: number;
+    outputTokens?: number;
+    sortOrder: number;
+  }>;
+  tools?: Array<{
+    name: string;
+    totalUsageCount: number;
+    totalCredits?: number;
+  }>;
+  /** Aggregate tokens per day (or per hour today) over the selected range. */
+  series?: { granularity: "hour" | "day"; xTime: string[]; totals: number[] };
 }
 
 /**
