@@ -13,3 +13,12 @@ src-tauri/target/
 # Gradle build caches under the Tauri Android project (build logs, sessions).
 src-tauri/gen/android/**/.kotlin/
 src-tauri/gen/android/**/build/
+
+# cf/wrangler files
+.wrangler
+.cloudflare
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+!.env.local.example

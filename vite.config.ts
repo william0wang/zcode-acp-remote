@@ -3,6 +3,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 // Single version source is package.json (release.sh bumps it); injected as
 // the __APP_VERSION__ constant for the UI to display.
 const pkg = JSON.parse(
@@ -10,7 +12,7 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), cloudflare()],
   clearScreen: false,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
