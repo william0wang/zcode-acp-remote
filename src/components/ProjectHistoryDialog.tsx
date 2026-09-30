@@ -26,6 +26,7 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const profile = useAppStore((s) => s.profile);
   const resumeProjectSession = useAppStore((s) => s.resumeProjectSession);
+  const deleteSession = useAppStore((s) => s.deleteSession);
 
   // Project chooser state.
   const [projects, setProjects] = useState<HubProject[] | null>(null);
@@ -41,6 +42,7 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
   const [loadingPage, setLoadingPage] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [resuming, setResuming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   // Invalidates in-flight listing responses across view switches (back /
   // another project): a late page must never land in the wrong list — its
@@ -168,6 +170,30 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     setListError(null);
   };
 
+  // ADR-0031 delete: tombstones the row from every listing. This dialog
+  // owns its rows locally, so success just drops the row from view; a
+  // failure surfaces inline like resume's (the overlay hides the banner).
+  const removeRow = async (sessionId: string) => {
+    if (deleting || !instanceId) return;
+    setDeleting(sessionId);
+    setListError(null);
+    const ok = await deleteSession(instanceId, sessionId);
+    setDeleting(null);
+    if (ok) {
+      setRows((prev) =>
+        prev ? prev.filter((r) => r.sessionId !== sessionId) : prev,
+      );
+      return;
+    }
+    if (!mounted.current) return;
+    const n = useAppStore.getState().notice;
+    if (n) {
+      setListError(n.startsWith("notice.") ? t(n) : n);
+      // Consumed here — don't repeat it on the banner after close.
+      useAppStore.getState().dismissNotice();
+    }
+  };
+
   // The gesture mirrors the header's back button: one level up while a
   // project's session list is open, otherwise close the sheet. Both consume.
   useBackHandler(() => {
@@ -268,6 +294,7 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
                 onSelect={(_instanceId, sessionId) => void resume(sessionId)}
                 emptyHint={t("historyDialog.listEmpty")}
                 readOnly
+                onDelete={(item) => void removeRow(item.sessionId)}
                 footer={
                   cursor ? (
                     <button

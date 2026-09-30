@@ -10,10 +10,11 @@ import {
 import type { WorkflowScope } from "../../lib/types";
 
 /**
- * In-chat workflow launcher (bridge 0.48.0). Starting with `sessionId` pins
- * the run to the open session — the progress card streams into this
- * conversation, no session switch. Two views: pick a workflow, then edit the
- * optional args (same client-side validation as the config page's sheet).
+ * In-chat workflow launcher (bridge 0.48.0), mounted from the session panel.
+ * Starting with `sessionId` pins the run to the open session — the progress
+ * card streams into this conversation, no session switch. Two views: pick a
+ * workflow, then edit the optional args (same client-side validation as the
+ * config page's sheet).
  */
 export function WorkflowStartSheet({
   sessionId,
@@ -34,6 +35,9 @@ export function WorkflowStartSheet({
   }
   const [entries, setEntries] = useState<Picked[] | null>(null);
   const [failed, setFailed] = useState(false);
+  // Bare failure message from the (silent) list calls — shown under the
+  // generic failure line so the user sees WHY, not just that it failed.
+  const [failReason, setFailReason] = useState<string | null>(null);
   const [picked, setPicked] = useState<Picked | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,11 +79,13 @@ export function WorkflowStartSheet({
           "load workflows",
           (c, iid) => c.workflowsList(iid, "project"),
           true,
+          setFailReason,
         ),
         workflowAction(
           "load workflows",
           (c, iid) => c.workflowsList(iid, "global"),
           true,
+          setFailReason,
         ),
       ]);
       if (!project && !globalScope) {
@@ -106,6 +112,24 @@ export function WorkflowStartSheet({
 
   const parsed = parseArgsInput(text);
   const typed = declMeta !== undefined && argsDeclaration(declMeta) !== null;
+
+  // Known wire tokens → friendly text; anything else shows the raw message —
+  // an untranslated detail still beats a silent failure. Bridge ≥0.53 sends
+  // the verdict as "gate mode=<m> source=<s>" (HubClient prefers the body's
+  // message over the token): unknown = the fetch is broken, source=override
+  // = switched off locally, anything else = the server-side gate is off.
+  function failDetail(reason: string): string {
+    const m = reason.match(/^gate mode=(\S+) source=(\S+)$/);
+    if (m) {
+      if (m[1] === "unknown") return t("chat.workflowGateUnresolved");
+      if (m[2] === "override") return t("chat.workflowLocallyDisabled");
+      return t("chat.workflowFeatureDisabled");
+    }
+    if (reason === "workflow_disabled")
+      return t("chat.workflowFeatureDisabled");
+    if (reason === "not connected") return t("chat.workflowNotConnected");
+    return reason;
+  }
 
   async function start() {
     if (!picked) return;
@@ -155,9 +179,16 @@ export function WorkflowStartSheet({
         {!picked ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
             {failed ? (
-              <p className="px-1 py-6 text-center text-xs text-faint">
-                {t("chat.workflowLoadFailed")}
-              </p>
+              <div className="px-1 py-6 text-center">
+                <p className="text-xs text-faint">
+                  {t("chat.workflowLoadFailed")}
+                </p>
+                {failReason && (
+                  <p className="mt-1 text-[11px] text-faint">
+                    {failDetail(failReason)}
+                  </p>
+                )}
+              </div>
             ) : entries === null ? (
               <p className="px-1 py-6 text-center text-xs text-faint">
                 {t("zconfig.loading")}

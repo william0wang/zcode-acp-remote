@@ -42,7 +42,6 @@ import {
   Search,
   Square,
   Terminal,
-  Workflow,
   Wrench,
   X,
   Zap,
@@ -53,7 +52,6 @@ import "highlight.js/styles/github-dark.css";
 import { useAppStore } from "../store/appStore";
 import { MarkdownText } from "../components/Markdown";
 import { Spinner } from "../components/Spinner";
-import { WorkflowStartSheet } from "../components/chat/WorkflowStartSheet";
 import { MAX_IMAGES, attachmentDataUrl, prepareImage } from "../lib/image";
 import type {
   AcpDiffContent,
@@ -524,16 +522,6 @@ function Composer() {
   const [images, setImages] = useState<AttachmentDraft[]>([]);
   const galleryRef = useRef<HTMLInputElement | null>(null);
 
-  // In-chat workflow launcher: pins the run to THIS session (server takes
-  // `sessionId` on start), so the progress card streams in below.
-  const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const [wfOpen, setWfOpen] = useState(false);
-  // The sheet is session-bound; a session going away must not leave the
-  // flag armed — it would pop the sheet open on the NEXT session.
-  useEffect(() => {
-    if (!activeSessionId) setWfOpen(false);
-  }, [activeSessionId]);
-
   // The workflow "create via conversation" entry stages its prompt here
   // (server ADR-0029: prefill the draft, never auto-send). Consumed exactly
   // once — the clear must happen in the same commit, or a re-render would
@@ -760,15 +748,6 @@ function Composer() {
         >
           <ImagePlus className="size-5" />
         </button>
-        <button
-          type="button"
-          onClick={() => setWfOpen(true)}
-          disabled={!activeSessionId}
-          aria-label={t("chat.workflowPickTitle")}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-dim active:bg-white/[0.06] disabled:opacity-40"
-        >
-          <Workflow className="size-5" />
-        </button>
         {/* leading-5 + py-2 = 36px: the single-line input matches the size-9
             buttons exactly, so items-end aligns them instead of dropping
             them below the inherited-1.5 text line. */}
@@ -815,12 +794,6 @@ function Composer() {
           </button>
         )}
       </ComposerPrimitive.Root>
-      {wfOpen && activeSessionId && (
-        <WorkflowStartSheet
-          sessionId={activeSessionId}
-          onClose={() => setWfOpen(false)}
-        />
-      )}
     </ThreadPrimitive.ViewportFooter>
   );
 }

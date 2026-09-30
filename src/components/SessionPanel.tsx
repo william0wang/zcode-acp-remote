@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Workflow } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { ConfigSheet } from "./ConfigSheet";
 import { PanelShell } from "./SidePanel";
 import { QuotaSection, SectionLabel } from "./QuotaSection";
+import { WorkflowStartSheet } from "./chat/WorkflowStartSheet";
 import { bareModelIdFromConfigValue } from "../lib/modelValue";
 
 // Session-scoped right panel shown in chat: config options (model / mode /
@@ -15,10 +17,38 @@ export function SessionPanel({ onClose }: { onClose: () => void }) {
   const configOptions = useAppStore((s) => s.configOptions);
   const usageStats = useAppStore((s) => s.usageStats);
   const quotaUnavailable = useAppStore((s) => s.quotaUnavailable);
+  const workflowGate = useAppStore((s) => s.configWorkflowGate);
+  const loadWorkflowGate = useAppStore((s) => s.loadWorkflowGate);
   const [configOpen, setConfigOpen] = useState<string | null>(null);
+  const [wfOpen, setWfOpen] = useState(false);
+
+  // The launcher's visibility rides the per-instance gate verdict (the same
+  // fail-closed rule the config screen applies to its workflows entry), so
+  // the panel probes it when it is still unknown.
+  useEffect(() => {
+    if (workflowGate === null) void loadWorkflowGate();
+  }, [workflowGate, loadWorkflowGate]);
 
   return (
-    <PanelShell title={t("panel.session")} onClose={onClose}>
+    // In-chat workflow launcher: a header button, not another stacked row —
+    // starting with `sessionId` pins the run to THIS session (the server
+    // takes it on start), so the progress card streams into the open
+    // conversation.
+    <PanelShell
+      title={t("panel.session")}
+      onClose={onClose}
+      action={
+        activeSessionId != null && workflowGate?.enabled === true ? (
+          <button
+            onClick={() => setWfOpen(true)}
+            aria-label={t("chat.workflowPickTitle")}
+            className="flex size-8 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+          >
+            <Workflow className="size-4" />
+          </button>
+        ) : undefined
+      }
+    >
       {/* Session-scoped config — meaningless until a session is attached. */}
       {activeSessionId != null && configOptions.length > 0 && (
         <>
@@ -58,6 +88,12 @@ export function SessionPanel({ onClose }: { onClose: () => void }) {
         <ConfigSheet
           optionId={configOpen}
           onClose={() => setConfigOpen(null)}
+        />
+      )}
+      {wfOpen && activeSessionId && (
+        <WorkflowStartSheet
+          sessionId={activeSessionId}
+          onClose={() => setWfOpen(false)}
         />
       )}
     </PanelShell>

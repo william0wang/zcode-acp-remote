@@ -79,6 +79,26 @@ test("projectSessions passes the composite cursor verbatim", async () => {
   expect(url.searchParams.get("beforeId")).toBe("row9");
 });
 
+test("deleteSession POSTs the per-instance tombstone route", async () => {
+  const calls: Array<{ url: string; method: string }> = [];
+  (globalThis as Record<string, unknown>).fetch = async (
+    input: unknown,
+    init?: { method?: string },
+  ) => {
+    calls.push({ url: String(input), method: init?.method ?? "GET" });
+    return Response.json({ ok: true, deleted: true });
+  };
+  await client().deleteSession("inst 1", "sess/a");
+  expect(calls).toEqual([
+    {
+      // The session id is encoded, the instance id rides raw — same shape
+      // as closeSession/renameSession (instance ids are hub-numeric).
+      url: "http://hub/api/instances/inst 1/sessions/sess%2Fa/delete",
+      method: "POST",
+    },
+  ]);
+});
+
 test("fsFileText trusts X-Zcode-First-Line and strips the trailing newline", async () => {
   responses.push(
     new Response("a\nb\nc\n", {

@@ -409,8 +409,28 @@ export interface SettingsAll {
   /**
    * Dynamic-workflow gate verdict (bridge 0.48.0, ADR-0029). Absent on an
    * older bridge — read as "off", which hides the workflows section.
+   * `source:"override"` + `override` (bridge ≥0.53) mark a local override;
+   * `mode:"unknown"` means the verdict could not be resolved (fail-closed).
    */
-  workflow?: { enabled: boolean; mode: string; source: string };
+  workflow?: WorkflowGateBlock;
+}
+
+/** The gate verdict block (GET /settings/all and PUT /settings/workflow-gate). */
+export interface WorkflowGateBlock {
+  enabled: boolean;
+  mode: string;
+  source: string;
+  /** Present only under a local override: which position produced this. */
+  override?: "disabled" | "onDemand" | "alwaysOn";
+}
+
+/** The switch's write vocabulary (bridge ≥0.53): "auto" follows the remote verdict. */
+export type WorkflowGateModeSetting = "auto" | "disabled" | "onDemand" | "alwaysOn";
+
+export interface WorkflowGateSetResponse {
+  ok: boolean;
+  /** The effective verdict the next gate read sees. */
+  gate: WorkflowGateBlock;
 }
 
 export interface SettingsUsage {

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Archive,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useAppStore, type ConfigSection } from "../store/appStore";
 import { ConfigPageFrame } from "../components/config/ConfigPage";
+import { gatePosition, WorkflowGateSheet } from "../components/config/WorkflowGateSheet";
 import { ModelsPage } from "./config/ModelsPage";
 import { SkillsPage } from "./config/SkillsPage";
 import { McpPage } from "./config/McpPage";
@@ -44,6 +45,7 @@ export function ZCodeConfigScreen() {
   const loadConfigAll = useAppStore((s) => s.loadConfigAll);
   const loadConfigSection = useAppStore((s) => s.loadConfigSection);
   const loadWorkflowGate = useAppStore((s) => s.loadWorkflowGate);
+  const [gateSheetOpen, setGateSheetOpen] = useState(false);
 
   // The snapshot load resolves the machine-level `supported` verdict (and
   // caches the body other screens read), so it runs once when this screen
@@ -153,6 +155,12 @@ export function ZCodeConfigScreen() {
       : []),
   ];
 
+  const gateLabelKey = {
+    auto: "zconfig.workflowGateAuto",
+    on: "zconfig.workflowGateOn",
+    off: "zconfig.workflowGateOff",
+  }[gatePosition(workflowGate)];
+
   return (
     <ConfigPageFrame
       title={t("zconfig.title")}
@@ -184,7 +192,30 @@ export function ZCodeConfigScreen() {
             <ChevronRight className="size-4 shrink-0 text-faint" />
           </button>
         ))}
+        {/* Machine-level workflow switch (bridge ≥0.53): ALWAYS visible —
+            with the remote verdict off this override is the only way in, so
+            unlike the gated workflows entry above it must not hide. On an
+            older bridge the write 404s into the standard failure toast. */}
+        <button
+          onClick={() => setGateSheetOpen(true)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
+        >
+          <Workflow className="size-4.5 shrink-0 text-faint" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm text-ink">
+              {t("zconfig.workflowGate")}
+            </span>
+            <span className="block truncate text-[11px] text-faint">
+              {t(gateLabelKey)}
+            </span>
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-faint" />
+        </button>
       </div>
+
+      {gateSheetOpen && (
+        <WorkflowGateSheet onClose={() => setGateSheetOpen(false)} />
+      )}
 
       {/* A needs-restart write landed somewhere in these screens and has not
           been applied yet — say so at the top level, where the user returns. */}

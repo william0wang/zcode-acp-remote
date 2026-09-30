@@ -177,6 +177,55 @@ test("a refused gate probe leaves the entry hidden, not errored", async () => {
   expect(useAppStore.getState().toast).toBeNull();
 });
 
+test("setWorkflowGate PUTs the mode and stores the returned verdict", async () => {
+  const useAppStore = await connectedStore();
+  route(
+    "/settings/all",
+    ok({
+      ok: true,
+      workflow: { enabled: false, mode: "disabled", source: "default" },
+    }),
+  );
+  await useAppStore.getState().loadWorkflowGate();
+  expect(useAppStore.getState().configWorkflowGate?.enabled).toBe(false);
+
+  route(
+    "workflow-gate",
+    ok({
+      ok: true,
+      gate: {
+        enabled: true,
+        mode: "alwaysOn",
+        source: "override",
+        override: "alwaysOn",
+      },
+    }),
+  );
+  const gate = await useAppStore.getState().setWorkflowGate("alwaysOn");
+  // The store rides the PUT's answer, so every gate-driven surface (config
+  // entry, session-panel launcher) flips without a follow-up probe.
+  expect(gate).toMatchObject({ enabled: true, source: "override" });
+  expect(useAppStore.getState().configWorkflowGate).toMatchObject({
+    override: "alwaysOn",
+    enabled: true,
+  });
+  expect(
+    requested.find((r) => r.url.includes("workflow-gate")),
+  ).toMatchObject({
+    method: "PUT",
+    body: { mode: "alwaysOn" },
+  });
+});
+
+test("setWorkflowGate without an instance reports and resolves null", async () => {
+  const useAppStore = await store();
+  useAppStore.getState().connectToHub({ hubUrl: "http://hub/", token: "tok" });
+  const gate = await useAppStore.getState().setWorkflowGate("auto");
+  expect(gate).toBeNull();
+  expect(useAppStore.getState().toast?.text).toContain("not connected");
+  expect(requested).toHaveLength(0);
+});
+
 test("a 404 on the workflows list is a retriable error, not 'unsupported'", async () => {
   const useAppStore = await connectedStore();
   route(
@@ -293,6 +342,37 @@ test("workflowAction without an instance reports and resolves null", async () =>
   expect(res).toBeNull();
   expect(useAppStore.getState().toast?.text).toContain("not connected");
   expect(requested).toHaveLength(0);
+});
+
+test("workflowAction hands silent callers the bare failure message via onError", async () => {
+  const useAppStore = await store();
+  useAppStore.getState().connectToHub({ hubUrl: "http://hub/", token: "tok" });
+  const reasons: string[] = [];
+
+  // Not connected: "not connected" reaches the caller, silent means no toast.
+  await useAppStore.getState().workflowAction(
+    "load workflows",
+    () => Promise.resolve({ ok: true }),
+    true,
+    (m) => reasons.push(m),
+  );
+  expect(reasons).toEqual(["not connected"]);
+  expect(useAppStore.getState().toast).toBeNull();
+
+  // A refused call: the wire reason token (here the gate) reaches the caller.
+  useAppStore.setState({ instanceId: "1" });
+  route(
+    "settings/workflows",
+    refused(403, { ok: false, error: "workflow_disabled" }),
+  );
+  await useAppStore.getState().workflowAction(
+    "load workflows",
+    (c, iid) => c.workflowsList(iid, "project"),
+    true,
+    (m) => reasons.push(m),
+  );
+  expect(reasons).toEqual(["not connected", "workflow_disabled"]);
+  expect(useAppStore.getState().toast).toBeNull();
 });
 
 test("an amendment returns the continuation run — the caller re-points on a new id", async () => {

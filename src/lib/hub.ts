@@ -18,6 +18,8 @@ import type {
   WorkflowArtifactReadResponse,
   WorkflowCreatePromptResponse,
   WorkflowDetailResponse,
+  WorkflowGateModeSetting,
+  WorkflowGateSetResponse,
   WorkflowListResponse,
   WorkflowNodeResultResponse,
   WorkflowRunEventsResponse,
@@ -236,6 +238,21 @@ export class HubClient {
       `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/rename`,
       "POST",
       { title },
+    );
+  }
+
+  /**
+   * Soft-deletes (tombstones) a session from EVERY listing (bridge ≥0.53,
+   * server ADR-0031): project history, discovery, the CLI /resume picker,
+   * and the desktop app's sidebar — the conversation bytes stay in the
+   * backend store, nothing is purged. Refused with 409 while the session
+   * is live or a turn is in flight (deleting history is this route's job);
+   * 503 when the tasks index is unavailable.
+   */
+  async deleteSession(instanceId: string, sessionId: string): Promise<void> {
+    await this.fetch(
+      `/api/instances/${instanceId}/sessions/${encodeURIComponent(sessionId)}/delete`,
+      "POST",
     );
   }
 
@@ -616,6 +633,23 @@ export class HubClient {
   async instanceSettingsAll(instanceId: string): Promise<SettingsAll> {
     const res = await this.fetch(`${this.instSettings(instanceId)}/all`);
     return (await res.json()) as SettingsAll;
+  }
+
+  /**
+   * The machine-level gate override switch (bridge ≥0.53): persists
+   * `workflow.mode` in the bridge's user config ("auto" = follow the remote
+   * verdict) and answers the effective verdict the next gate read sees.
+   */
+  async workflowGateSet(
+    instanceId: string,
+    mode: WorkflowGateModeSetting,
+  ): Promise<WorkflowGateSetResponse> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-gate`,
+      "PUT",
+      { mode },
+    );
+    return (await res.json()) as WorkflowGateSetResponse;
   }
 
   async workflowsList(

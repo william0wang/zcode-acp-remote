@@ -55,6 +55,8 @@ import {
   type SettingsAll,
   type SettingsUsage,
   type ConversationRunSummary,
+  type WorkflowGateBlock,
+  type WorkflowGateModeSetting,
   type WorkflowListResponse,
   type WorkflowScope,
   type AmendRunSettingsResponse,
@@ -483,6 +485,11 @@ interface AppState {
   // conversations self-heal back on their next use. Refused (409 notice)
   // while a turn runs.
   closeRemoteSession: (instanceId: string, sessionId: string) => Promise<void>;
+  // Soft-deletes (tombstones) a session from every listing (bridge ≥0.53,
+  // server ADR-0031) — the history surface's row removal. Live/running
+  // sessions are refused server-side (409 notice). Resolves true when the
+  // tombstone landed; callers own their local row state.
+  deleteSession: (instanceId: string, sessionId: string) => Promise<boolean>;
   // Renames a session via the hub's HTTP rename endpoint (bridge 0.11.9).
   // The one-shot auto-title never revises a title; this is the manual path.
   // Updates the local list optimistically; the bridge broadcasts the change
@@ -613,15 +620,26 @@ interface AppState {
   // (the entry list's visibility source). A 404 marks the hub too old; any
   // other failure just leaves the gate unread — the entry stays hidden.
   loadWorkflowGate: () => Promise<void>;
+  // Writes the machine-level gate override (bridge ≥0.53 PUT
+  // /settings/workflow-gate) and stores the returned verdict, so every
+  // gate-driven surface (config entry, session-panel launcher) flips live.
+  // Resolves null when the write was refused (workflowAction posture).
+  setWorkflowGate: (
+    mode: WorkflowGateModeSetting,
+  ) => Promise<WorkflowGateBlock | null>;
   // Runs one hub call with the connected client and the connected instance
   // bound in; notifies on failure and resolves null (no client, no instance,
   // or the call refused). Every workflow read/write the screens make goes
   // through here so the error posture lives in one place. `silent` serves
   // the run-detail poller: a dead session must not toast every 3s tick.
+  // `onError` hands silent callers the bare failure message ("not connected"
+  // or the thrown error's text) so a screen can show WHY alongside its own
+  // empty/failed state instead of a toast.
   workflowAction: <T>(
     label: string,
     fn: (client: HubClient, instanceId: string) => Promise<T>,
     silent?: boolean,
+    onError?: (message: string) => void,
   ) => Promise<T | null>;
   // Launches a saved workflow; records the run in the local launch memory so
   // its rows stay actionable (open session, run detail, resume) later.
@@ -2523,6 +2541,30 @@ export const useAppStore = create<AppState>((set, get) => {
       reconnectAttempt = 0;
     },
 
+    deleteSession: async (instanceId, sessionId) => {
+      const client = hub();
+      if (!client) return false;
+      try {
+        await client.deleteSession(instanceId, sessionId);
+      } catch (e) {
+        // 409 = the conversation is still live somewhere (an editor or
+        // another client holds it) or a turn is in flight; stopping it is
+        // stop's job, this route only deletes history.
+        if (e instanceof HubApiError && e.status === 409) {
+          set({ notice: "notice.sessionDeleteLive" });
+        } else {
+          set({
+            notice: `delete session failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          });
+        }
+        return false;
+      }
+      set({ notice: "notice.sessionDeleted" });
+      return true;
+    },
+
     renameSession: async (instanceId, sessionId, title) => {
       const trimmed = title.trim().slice(0, 80);
       if (!trimmed) return;
@@ -3515,6 +3557,15 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
+    setWorkflowGate: async (mode) => {
+      const res = await get().workflowAction("set workflow gate", (c, iid) =>
+        c.workflowGateSet(iid, mode),
+      );
+      if (!res) return null;
+      set({ configWorkflowGate: res.gate });
+      return res.gate;
+    },
+
     loadWorkflows: async (scope) => {
       const client = hub();
       if (!client) return;
@@ -3545,20 +3596,20 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    workflowAction: async (label, fn, silent = false) => {
+    workflowAction: async (label, fn, silent = false, onError) => {
       const client = hub();
       const instanceId = get().instanceId;
       if (!client || !instanceId) {
         if (!silent) get().notify(`${label} failed: not connected`);
+        onError?.("not connected");
         return null;
       }
       try {
         return await fn(client, instanceId);
       } catch (e) {
-        if (!silent)
-          get().notify(
-            `${label} failed: ${e instanceof Error ? e.message : String(e)}`,
-          );
+        const message = e instanceof Error ? e.message : String(e);
+        if (!silent) get().notify(`${label} failed: ${message}`);
+        onError?.(message);
         return null;
       }
     },

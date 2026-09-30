@@ -7,13 +7,16 @@ import { QuotaSection } from "./QuotaSection";
 
 // Shared right slide-over frame. What goes inside depends on where it opens:
 // global settings on the entry screen, session-scoped info in chat.
+// `action` adds an icon button slot in the header, left of the close button.
 export function PanelShell({
   title,
   onClose,
+  action,
   children,
 }: {
   title: string;
   onClose: () => void;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -32,13 +35,16 @@ export function PanelShell({
       >
         <div className="flex items-center justify-between px-4 pb-2">
           <h2 className="text-sm font-semibold">{title}</h2>
-          <button
-            onClick={onClose}
-            aria-label={t("common.close")}
-            className="flex size-8 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {action}
+            <button
+              onClick={onClose}
+              aria-label={t("common.close")}
+              className="flex size-8 items-center justify-center rounded-full text-dim active:bg-white/[0.06]"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
         {children}
       </aside>

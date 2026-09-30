@@ -186,6 +186,7 @@ export function SessionList({
   onSelect,
   emptyHint,
   readOnly = false,
+  onDelete,
   footer,
 }: {
   sessions: SessionRowItem[];
@@ -194,9 +195,11 @@ export function SessionList({
   onSelect: (instanceId: string, sessionId: string) => void;
   emptyHint: string;
   // History mode (ADR-0008): rows are store entries a bridge may not even
-  // hold, so the long-press action sheet (rename/retire — both
-  // instance-scoped) is off; rows just navigate.
+  // hold, so the full action sheet (rename/retire — both instance-scoped
+  // bridge ops) is off. Pass `onDelete` to arm a delete-only sheet instead
+  // (ADR-0031 tombstone — the history surface's own row action).
   readOnly?: boolean;
+  onDelete?: (item: SessionRowItem) => void;
   // Rendered at the bottom of the scroll area (e.g. a "load more" button).
   footer?: ReactNode;
 }) {
@@ -264,7 +267,11 @@ export function SessionList({
             active={activeKey === `${s.instanceId}:${s.sessionId}`}
             disabled={connecting}
             onSelect={() => onSelect(s.instanceId, s.sessionId)}
-            onLongPress={readOnly ? undefined : () => openActions(s)}
+            onLongPress={
+              readOnly && !onDelete
+                ? undefined
+                : () => openActions(s)
+            }
           />
         ))}
         {footer}
@@ -284,11 +291,13 @@ export function SessionList({
                 {actionTarget.title || t("chat.untitled")}
               </h2>
               <p className="mt-1 text-xs text-faint">
-              {renaming
-                ? t("chat.renameSessionHint")
-                : actionTarget.origin === "serve"
-                  ? t("chat.shutdownInstanceHint")
-                  : t("chat.closeSessionHint")}
+                {renaming
+                  ? t("chat.renameSessionHint")
+                  : readOnly
+                    ? t("chat.deleteSessionHint")
+                    : actionTarget.origin === "serve"
+                      ? t("chat.shutdownInstanceHint")
+                      : t("chat.closeSessionHint")}
               </p>
             </div>
             {renaming ? (
@@ -328,36 +337,53 @@ export function SessionList({
               </div>
             ) : (
               <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
-                <button
-                  onClick={openRename}
-                  className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
-                >
-                  {t("chat.renameSession")}
-                </button>
+                {!readOnly && (
+                  <button
+                    onClick={openRename}
+                    className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08]"
+                  >
+                    {t("chat.renameSession")}
+                  </button>
+                )}
                 {/* One destructive action per origin: app-incubated instances
                     (serve) shut the whole window/bridge down — that IS the
-                    close; editor conversations only retire from this list. */}
-                {actionTarget.origin === "serve" ? (
+                    close; editor conversations only retire from this list.
+                    Delete (when offered) is a separate, always-available
+                    tombstone — it hides the conversation everywhere. */}
+                {!readOnly &&
+                  (actionTarget.origin === "serve" ? (
+                    <button
+                      onClick={() => {
+                        const { instanceId } = actionTarget;
+                        setActionTarget(null);
+                        void shutdownInstance(instanceId);
+                      }}
+                      className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+                    >
+                      {t("chat.shutdownInstance")}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        const { instanceId, sessionId } = actionTarget;
+                        setActionTarget(null);
+                        void closeRemoteSession(instanceId, sessionId);
+                      }}
+                      className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
+                    >
+                      {t("chat.closeSession")}
+                    </button>
+                  ))}
+                {onDelete && (
                   <button
                     onClick={() => {
-                      const { instanceId } = actionTarget;
+                      const target = actionTarget;
                       setActionTarget(null);
-                      void shutdownInstance(instanceId);
+                      onDelete(target);
                     }}
                     className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
                   >
-                    {t("chat.shutdownInstance")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      const { instanceId, sessionId } = actionTarget;
-                      setActionTarget(null);
-                      void closeRemoteSession(instanceId, sessionId);
-                    }}
-                    className="rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20"
-                  >
-                    {t("chat.closeSession")}
+                    {t("chat.deleteSession")}
                   </button>
                 )}
                 <button
