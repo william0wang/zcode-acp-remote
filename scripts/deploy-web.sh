@@ -18,4 +18,7 @@ if [[ -f .env.local ]]; then
   set -a; . ./.env.local; set +a
 fi
 
+# Web-deploy-only vite build: enables the cloudflare plugin (see vite.config.ts).
+export WEB_DEPLOY_BUILD=1
+
 pnpm exec cf deploy

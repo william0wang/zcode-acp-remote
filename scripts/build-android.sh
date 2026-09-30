@@ -19,6 +19,10 @@ OUT="dist/ZCode-ACP-v${VERSION}-${BUILD_TYPE}.apk"
 echo "==> building ${BUILD_TYPE} APK (v${VERSION})"
 # arm64-only: real devices running this app are all aarch64; the other ABIs
 # (armv7/x86/x86_64) only tripled the APK size (36M -> 12M).
+# dist/ is tauri's frontendDist and gets embedded into the APK whole; a
+# leftover APK from an earlier build would ride along (v0.20.0 shipped the
+# v0.19.0 APK inside its native lib, +4 MB).
+rm -f dist/*.apk
 pnpm exec tauri android build --apk --target aarch64 ${DEBUG_FLAG}
 
 mkdir -p dist
