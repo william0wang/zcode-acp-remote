@@ -83,7 +83,7 @@ test("deleteSession POSTs the per-instance tombstone route", async () => {
   const calls: Array<{ url: string; method: string }> = [];
   (globalThis as Record<string, unknown>).fetch = async (
     input: unknown,
-    init?: { method?: string },
+    init?: { method: string },
   ) => {
     calls.push({ url: String(input), method: init?.method ?? "GET" });
     return Response.json({ ok: true, deleted: true });
@@ -95,6 +95,31 @@ test("deleteSession POSTs the per-instance tombstone route", async () => {
       // as closeSession/renameSession (instance ids are hub-numeric).
       url: "http://hub/api/instances/inst 1/sessions/sess%2Fa/delete",
       method: "POST",
+    },
+  ]);
+});
+
+test("deleteProject POSTs the workspace tombstone route with the path in the body", async () => {
+  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  (globalThis as Record<string, unknown>).fetch = async (
+    input: unknown,
+    init?: { method?: string; body?: unknown },
+  ) => {
+    calls.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      body: JSON.parse(String(init?.body ?? "null")),
+    });
+    return Response.json({ ok: true, deletedTasks: 3 });
+  };
+  await client().deleteProject("/Users/me/my proj");
+  expect(calls).toEqual([
+    {
+      url: "http://hub/api/projects/delete",
+      method: "POST",
+      // Hub-level route (no instance scoping); the workspace path is JSON,
+      // not a query param, so any path shape survives unencoded.
+      body: { workspacePath: "/Users/me/my proj" },
     },
   ]);
 });

@@ -334,6 +334,7 @@
     "sessionClosed": "Session closed",
     "sessionDeleted": "Session deleted",
     "sessionDeleteLive": "Session is still open or running — stop or close it first",
+    "projectDeleted": "Project deleted",
     "sessionRenamed": "Session renamed",
     "sessionRenameFailed": "Rename failed",
     "projectUnknown": "Unknown project — refresh the list and pick again",
@@ -369,7 +370,9 @@
     "loadingMore": "Loading…",
     "end": "Beginning of history",
     "retry": "Retry",
-    "tooOld": "Bridge 0.19.0+ required for session history"
+    "tooOld": "Bridge 0.19.0+ required for session history",
+    "deleteProject": "Delete project",
+    "deleteProjectHint": "Hides this project and ALL its conversations from every list — this app, the desktop app, and the CLI. Nothing is purged; the project reappears when a new session starts in it."
   },
   "common": {
     "cancel": "Cancel",

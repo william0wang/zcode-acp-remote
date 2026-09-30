@@ -333,6 +333,7 @@
     "sessionClosed": "会话已关闭",
     "sessionDeleted": "会话已删除",
     "sessionDeleteLive": "会话仍在打开或运行中——请先停止或关闭它",
+    "projectDeleted": "项目已删除",
     "sessionRenamed": "会话已重命名",
     "sessionRenameFailed": "重命名失败",
     "projectUnknown": "未知项目——请刷新列表后重选",
@@ -367,7 +368,9 @@
     "loadingMore": "加载中…",
     "end": "已到最早记录",
     "retry": "重试",
-    "tooOld": "会话历史需要 bridge 0.19.0+"
+    "tooOld": "会话历史需要 bridge 0.19.0+",
+    "deleteProject": "删除项目",
+    "deleteProjectHint": "在所有列表中隐藏该项目及其全部会话（本 App、桌面端、CLI）。不会清除内容；该项目出现新会话时会重新显示。"
   },
   "common": {
     "cancel": "取消",

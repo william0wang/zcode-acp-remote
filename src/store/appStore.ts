@@ -490,6 +490,11 @@ interface AppState {
   // sessions are refused server-side (409 notice). Resolves true when the
   // tombstone landed; callers own their local row state.
   deleteSession: (instanceId: string, sessionId: string) => Promise<boolean>;
+  // Soft-deletes (tombstones) a whole workspace (hub ≥0.53, server ADR-0031):
+  // the project and all its sessions vanish from every listing; a new session
+  // in it records a fresh row and brings it back. Resolves true on success;
+  // callers own their local list state.
+  deleteProject: (workspacePath: string) => Promise<boolean>;
   // Renames a session via the hub's HTTP rename endpoint (bridge 0.11.9).
   // The one-shot auto-title never revises a title; this is the manual path.
   // Updates the local list optimistically; the bridge broadcasts the change
@@ -2562,6 +2567,23 @@ export const useAppStore = create<AppState>((set, get) => {
         return false;
       }
       set({ notice: "notice.sessionDeleted" });
+      return true;
+    },
+
+    deleteProject: async (workspacePath) => {
+      const client = hub();
+      if (!client) return false;
+      try {
+        await client.deleteProject(workspacePath);
+      } catch (e) {
+        set({
+          notice: `delete project failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        });
+        return false;
+      }
+      set({ notice: "notice.projectDeleted" });
       return true;
     },
 

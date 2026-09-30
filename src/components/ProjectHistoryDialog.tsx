@@ -10,7 +10,7 @@ import type {
 } from "../lib/types";
 import { fmtRelative } from "../lib/time";
 import { useAppStore } from "../store/appStore";
-import { SessionList, type SessionRowItem } from "./SessionList";
+import { SessionList, useLongPress, type SessionRowItem } from "./SessionList";
 import { projectName } from "./ProjectCreateDialog";
 
 // Per-project session history (bridge 0.19.0, ADR-0015): browse a project's
@@ -23,10 +23,11 @@ import { projectName } from "./ProjectCreateDialog";
 // every project would spawn bridges for all of them.
 
 export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const profile = useAppStore((s) => s.profile);
   const resumeProjectSession = useAppStore((s) => s.resumeProjectSession);
   const deleteSession = useAppStore((s) => s.deleteSession);
+  const deleteProject = useAppStore((s) => s.deleteProject);
 
   // Project chooser state.
   const [projects, setProjects] = useState<HubProject[] | null>(null);
@@ -43,6 +44,11 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [resuming, setResuming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  // Project-level delete (server ADR-0031): the chooser row's long-press
+  // target + its in-flight guard.
+  const [projAction, setProjAction] = useState<HubProject | null>(null);
+  const [projDeleting, setProjDeleting] = useState(false);
 
   // Invalidates in-flight listing responses across view switches (back /
   // another project): a late page must never land in the wrong list — its
@@ -194,10 +200,36 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // Project delete (server ADR-0031): tombstones the whole workspace — the
+  // chooser owns its list locally, so success just drops the row; a failure
+  // surfaces in the chooser's error slot like resume's does in the list's.
+  const removeProject = async (workspacePath: string) => {
+    if (projDeleting) return;
+    setProjDeleting(true);
+    setError(null);
+    const ok = await deleteProject(workspacePath);
+    setProjDeleting(false);
+    if (ok) {
+      setProjAction(null);
+      setProjects((prev) =>
+        prev ? prev.filter((p) => p.workspacePath !== workspacePath) : prev,
+      );
+      return;
+    }
+    if (!mounted.current) return;
+    const n = useAppStore.getState().notice;
+    if (n) {
+      setError(n.startsWith("notice.") ? t(n) : n);
+      useAppStore.getState().dismissNotice();
+    }
+  };
+
   // The gesture mirrors the header's back button: one level up while a
   // project's session list is open, otherwise close the sheet. Both consume.
   useBackHandler(() => {
-    if (selected) {
+    if (projAction) {
+      setProjAction(null);
+    } else if (selected) {
       if (resuming === null) back();
     } else {
       onClose();
@@ -349,34 +381,98 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
                 </p>
               )}
               {visible.map((p) => (
-                <button
+                <ProjectRow
                   key={p.workspacePath}
-                  onClick={() => void openProject(p.workspacePath)}
+                  project={p}
                   disabled={loadingPage}
-                  className="mb-1 flex w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2.5 text-left active:bg-white/[0.05] disabled:opacity-50"
-                >
-                  <span className="flex w-full items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-sm text-ink">
-                      {projectName(p.workspacePath)}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-faint">
-                      {t("projectDialog.sessionCount", { count: p.sessions })}
-                    </span>
-                  </span>
-                  <span className="flex w-full items-center gap-2 text-[10px] text-faint">
-                    <span className="min-w-0 flex-1 truncate font-mono">
-                      {p.workspacePath}
-                    </span>
-                    <span className="shrink-0">
-                      {fmtRelative(p.lastActive, i18n.language)}
-                    </span>
-                  </span>
-                </button>
+                  onOpen={() => void openProject(p.workspacePath)}
+                  onLongPress={() => setProjAction(p)}
+                />
               ))}
             </div>
           </>
         )}
       </div>
+
+      {projAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 pb-[max(var(--safe-bottom),1rem)]"
+          onClick={() => (projDeleting ? undefined : setProjAction(null))}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-hairline bg-surface"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 pt-4">
+              <h2 className="truncate text-sm font-semibold text-ink">
+                {projectName(projAction.workspacePath)}
+              </h2>
+              <p className="mt-1 text-xs text-faint">
+                {t("historyDialog.deleteProjectHint")}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
+              <button
+                onClick={() => void removeProject(projAction.workspacePath)}
+                disabled={projDeleting}
+                className="flex items-center justify-center gap-2 rounded-xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-400 ring-1 ring-inset ring-red-500/40 active:bg-red-500/20 disabled:opacity-50"
+              >
+                {projDeleting && <Loader2 className="size-4 animate-spin" />}
+                {t("historyDialog.deleteProject")}
+              </button>
+              <button
+                onClick={() => setProjAction(null)}
+                disabled={projDeleting}
+                className="rounded-xl bg-raised px-4 py-3 text-sm font-medium text-ink ring-1 ring-inset ring-hairline active:bg-white/[0.08] disabled:opacity-50"
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// Chooser row: tap opens the project, long-press offers its delete — the
+// same gesture + sheet pattern as the session rows.
+function ProjectRow({
+  project,
+  disabled,
+  onOpen,
+  onLongPress,
+}: {
+  project: HubProject;
+  disabled?: boolean;
+  onOpen: () => void;
+  onLongPress: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const press = useLongPress(onLongPress);
+  return (
+    <button
+      onClick={onOpen}
+      disabled={disabled}
+      {...press}
+      className="mb-1 flex w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2.5 text-left select-none [-webkit-touch-callout:none] active:bg-white/[0.05] disabled:opacity-50"
+    >
+      <span className="flex w-full items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-sm text-ink">
+          {projectName(project.workspacePath)}
+        </span>
+        <span className="shrink-0 text-[10px] text-faint">
+          {t("projectDialog.sessionCount", { count: project.sessions })}
+        </span>
+      </span>
+      <span className="flex w-full items-center gap-2 text-[10px] text-faint">
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {project.workspacePath}
+        </span>
+        <span className="shrink-0">
+          {fmtRelative(project.lastActive, i18n.language)}
+        </span>
+      </span>
+    </button>
   );
 }

@@ -91,8 +91,9 @@ function baseName(path: string | undefined): string {
 // Long-press (H5-friendly retire gesture, ADR-0006): a pointerdown timer
 // cancelled by movement (scroll intent) or release. Spread onto the row.
 // The trailing click after a fired long-press is swallowed, else releasing
-// the finger would also open the session.
-function useLongPress(onLongPress: (() => void) | undefined, ms = 500) {
+// the finger would also open the session. Exported for the project
+// chooser's delete gesture (same sheet pattern).
+export function useLongPress(onLongPress: (() => void) | undefined, ms = 500) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const origin = useRef<{ x: number; y: number } | null>(null);
   const fired = useRef(false);

@@ -202,6 +202,18 @@ export class HubClient {
   }
 
   /**
+   * Soft-deletes (tombstones) a whole project (hub ≥0.53, server ADR-0031):
+   * every tasks row of the workspace flips to deleted=1, hiding the project
+   * and all its sessions from every listing (both app surfaces, the CLI
+   * /resume picker, the desktop sidebar — same index). Bytes are kept, and a
+   * NEW session in the project records a fresh row so it reappears — a hide,
+   * not a ban. Idempotent.
+   */
+  async deleteProject(workspacePath: string): Promise<void> {
+    await this.fetch("/api/projects/delete", "POST", { workspacePath });
+  }
+
+  /**
    * Retires a session from remote discovery (ADR-0006). Close, not delete —
    * backend store and editor storage are untouched; an editor-side-still-open
    * conversation self-heals back into discovery on its next use. Refused with

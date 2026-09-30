@@ -3,7 +3,8 @@
 // names the instance + session, success resolves true with a confirmation
 // notice, 409 (the conversation is still live somewhere) explains itself
 // instead of surfacing a raw error, and any other failure resolves false
-// carrying the wire message. Callers own their local row state.
+// carrying the wire message. Callers own their local row state. The project
+// delete (same tombstone family) follows the same success/failure contract.
 import { beforeAll, beforeEach, expect, test } from "vitest";
 
 let routes: Array<{ match: string; res: Response }> = [];
@@ -87,4 +88,32 @@ test("other failures resolve false carrying the wire message", async () => {
   expect(useAppStore.getState().notice).toBe(
     "delete session failed: tasks index unavailable",
   );
+});
+
+test("deleteProject tombstones the workspace and confirms", async () => {
+  const useAppStore = await store();
+  useAppStore.getState().connectToHub({ hubUrl: "http://hub/", token: "t" });
+  routes.push({
+    match: "/api/projects/delete",
+    res: Response.json({ ok: true, deletedTasks: 7 }),
+  });
+  await expect(
+    useAppStore.getState().deleteProject("/Users/me/proj"),
+  ).resolves.toBe(true);
+  expect(useAppStore.getState().notice).toBe("notice.projectDeleted");
+});
+
+test("deleteProject failures resolve false carrying the wire message", async () => {
+  const useAppStore = await store();
+  useAppStore.getState().connectToHub({ hubUrl: "http://hub/", token: "t" });
+  routes.push({
+    match: "/api/projects/delete",
+    res: new Response(JSON.stringify({ ok: false, error: "boom" }), {
+      status: 500,
+    }),
+  });
+  await expect(
+    useAppStore.getState().deleteProject("/Users/me/proj"),
+  ).resolves.toBe(false);
+  expect(useAppStore.getState().notice).toBe("delete project failed: boom");
 });
