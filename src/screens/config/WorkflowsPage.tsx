@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Plus } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
@@ -6,7 +6,6 @@ import {
   ConfigBlock,
   ConfigEmpty,
   ConfigPageFrame,
-  ConfigRow,
   fmtStamp,
   fmtTokens,
 } from "../../components/config/ConfigPage";
@@ -28,29 +27,34 @@ import {
 import type {
   ConversationRunSummary,
   WorkflowDetailResponse,
+  WorkflowHubGroup,
   WorkflowRunRow,
   WorkflowScope,
 } from "../../lib/types";
 
-// Dynamic workflows (bridge 0.48.0, server ADR-0029). The management plane
-// the chat side deliberately leaves out: saved workflows, their run history,
-// and the launch/resume entry points. Everything rides the per-instance
-// settings routes, so the whole page is inert without a connected bridge.
+// Dynamic workflows (bridge 0.48.0, server ADR-0029). Desktop hub parity:
+// the list groups GLOBAL workflows plus every hub instance's PROJECT
+// workflows with a per-name last-run badge — a workflow saved in another
+// project's chat stays visible no matter which instance the app is
+// connected to. Everything rides the per-instance settings routes, so the
+// whole page is inert without a connected hub.
 //
 // Run rows split by what the app can KNOW: a run this app launched carries
 // its ACP session in the local launch memory (open / inspect / resume);
 // every other row — an editor-driven run, or one whose bridge died — is
 // read-only, because the journal only records the backend session id.
 
+/** Journal status tokens that keep the 5s list poll alive. */
+const RUN_ACTIVE = new Set(["pending", "running"]);
+
 export function WorkflowsPage() {
   const { t } = useTranslation();
-  const workflows = useAppStore((s) => s.configWorkflows);
-  const scope = useAppStore((s) => s.configWorkflowScope);
+  const hubGroups = useAppStore((s) => s.workflowHub);
+  const loading = useAppStore((s) => s.workflowHubLoading);
   const supported = useAppStore((s) => s.configSupported);
-  const loading = useAppStore((s) => s.configLoading);
   const error = useAppStore((s) => s.configError);
   const instanceId = useAppStore((s) => s.instanceId);
-  const loadWorkflows = useAppStore((s) => s.loadWorkflows);
+  const loadWorkflowHub = useAppStore((s) => s.loadWorkflowHub);
   const workflowAction = useAppStore((s) => s.workflowAction);
   const setComposerPrefill = useAppStore((s) => s.setComposerPrefill);
   const closeConfig = useAppStore((s) => s.closeConfig);
@@ -58,23 +62,37 @@ export function WorkflowsPage() {
   const [selected, setSelected] = useState<{
     scope: WorkflowScope;
     name: string;
+    instanceId: string;
   } | null>(null);
   const [runDetail, setRunDetail] = useState<{
     sessionId: string;
     runId: string;
     name: string;
+    instanceId: string;
   } | null>(null);
 
   // First paint is seeded by the ZCodeConfigScreen mount effect (the section
-  // case in loadConfigSection); the scope buttons and refresh call
-  // loadWorkflows directly. No page-level mount effect — child effects run
-  // before the parent's, so one here would double-fire the seed GET.
+  // case in loadConfigSection → loadWorkflowHub); returning from a detail
+  // page re-seeds here. No page-level mount effect — child effects run
+  // before the parent's, so one here would double-fire the seed read.
+
+  // While any group's newest run is still active, refresh every 5s — the
+  // remote stand-in for the desktop's directory watch + live projection.
+  const anyRunning =
+    hubGroups?.some((g) =>
+      Object.values(g.lastRuns).some((r) => RUN_ACTIVE.has(r.status)),
+    ) ?? false;
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = setInterval(() => void loadWorkflowHub(), 5000);
+    return () => clearInterval(timer);
+  }, [anyRunning, loadWorkflowHub]);
 
   // "Create via conversation": the bridge hands back the desktop's prefilled
   // prompt; the app stages it as the composer draft and never auto-sends.
   async function createViaChat() {
     const res = await workflowAction("load create prompt", (c, iid) =>
-      c.workflowCreatePrompt(iid, scope),
+      c.workflowCreatePrompt(iid, "project"),
     );
     if (!res) return;
     setComposerPrefill(res.prompt);
@@ -86,14 +104,14 @@ export function WorkflowsPage() {
     }
   }
 
-  if (runDetail && instanceId) {
+  if (runDetail) {
     return (
       <WorkflowRunDetail
         // A supersede re-points the run id; the key FORCES a remount so no
         // poller state (afterSequence cursors, loaded tabs) survives from the
         // old run's journal — its sequence numbers do not carry over.
         key={runDetail.runId}
-        instanceId={instanceId}
+        instanceId={runDetail.instanceId}
         sessionId={runDetail.sessionId}
         runId={runDetail.runId}
         title={runDetail.name}
@@ -110,26 +128,34 @@ export function WorkflowsPage() {
       <WorkflowDetail
         scope={selected.scope}
         name={selected.name}
-        onBack={() => setSelected(null)}
-        onOpenRun={(sessionId, runId, name) =>
-          setRunDetail({ sessionId, runId, name })
+        instanceId={selected.instanceId}
+        onBack={() => {
+          setSelected(null);
+          void loadWorkflowHub();
+        }}
+        onOpenRun={(sessionId, runId, name, ownerInstanceId) =>
+          setRunDetail({ sessionId, runId, name, instanceId: ownerInstanceId })
         }
       />
     );
   }
 
-  const rows = workflows?.workflows ?? [];
-  const invalid = workflows?.invalid ?? [];
+  const groups = hubGroups ?? [];
+  const allEmpty =
+    groups.length > 0 &&
+    groups.every(
+      (g) => g.error === null && g.workflows.length === 0 && g.invalid.length === 0,
+    );
 
   return (
     <ConfigPageFrame
       title={t("zconfig.workflows")}
       onBack={() => useAppStore.getState().openConfig(null)}
-      onRefresh={() => void loadWorkflows(scope)}
+      onRefresh={() => void loadWorkflowHub()}
       refreshing={loading}
       unsupported={supported === false}
       error={error}
-      hasLoaded={workflows !== null}
+      hasLoaded={hubGroups !== null}
     >
       {!instanceId && (
         <p className="mx-4 mt-2 rounded-xl bg-surface px-4 py-3 text-xs text-amber-300 ring-1 ring-hairline">
@@ -137,62 +163,18 @@ export function WorkflowsPage() {
         </p>
       )}
 
-      {/* Scope segmented control — the two roots the backend scans. */}
-      <div className="flex gap-1 px-4 pb-1 pt-1">
-        {(["project", "global"] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => void loadWorkflows(s)}
-            className={`flex-1 rounded-lg px-2 py-1.5 text-xs ${
-              scope === s
-                ? "bg-white/[0.1] font-medium text-ink"
-                : "text-dim active:bg-white/[0.05]"
-            }`}
-          >
-            {t(`zconfig.workflowScope_${s}`)}
-          </button>
-        ))}
-      </div>
-
-      {rows.length === 0 && invalid.length === 0 ? (
+      {allEmpty ? (
         <ConfigEmpty text={t("zconfig.workflowsEmpty")} />
       ) : (
-        <ConfigBlock>
-          {rows.map((w) => (
-            <button
-              key={`${w.scope ?? scope}/${w.name}`}
-              onClick={() => setSelected({ scope, name: w.name })}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm text-ink">{w.name}</span>
-                {w.description && (
-                  <span className="block truncate text-[11px] text-faint">
-                    {w.description}
-                  </span>
-                )}
-              </span>
-              <ChevronRight className="size-4 shrink-0 text-faint" />
-            </button>
-          ))}
-        </ConfigBlock>
-      )}
-
-      {invalid.length > 0 && (
-        <ConfigBlock title={t("zconfig.workflowInvalid")} divided>
-          {invalid.map((e, i) => (
-            <div key={i} className="px-4 py-2.5">
-              <p className="truncate font-mono text-[10px] text-faint">
-                {e.path}
-              </p>
-              {e.reason && (
-                <p className="truncate text-[11px] text-amber-300/80">
-                  {e.reason}
-                </p>
-              )}
-            </div>
-          ))}
-        </ConfigBlock>
+        groups.map((g) => (
+          <GroupBlock
+            key={g.scope === "global" ? "global" : g.instanceId}
+            group={g}
+            onOpen={(name) =>
+              setSelected({ scope: g.scope, name, instanceId: g.instanceId })
+            }
+          />
+        ))
       )}
 
       <div className="px-4">
@@ -208,27 +190,103 @@ export function WorkflowsPage() {
   );
 }
 
+/** One group: the global workflows, or one instance's project workflows. */
+function GroupBlock({
+  group,
+  onOpen,
+}: {
+  group: WorkflowHubGroup;
+  onOpen: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const label =
+    group.scope === "global"
+      ? t("zconfig.workflowScope_global")
+      : (group.workspace.split("/").pop() || group.workspace);
+  if (group.error) {
+    return (
+      <ConfigBlock title={label} divided>
+        <p className="px-4 py-2.5 text-[11px] text-faint">
+          {t("zconfig.workflowInstanceUnavailable")}
+        </p>
+      </ConfigBlock>
+    );
+  }
+  // An empty project group renders nothing — the noise-free form of "this
+  // project has no saved workflows" (the all-empty card covers the rest).
+  if (group.workflows.length === 0 && group.invalid.length === 0) return null;
+  return (
+    <ConfigBlock title={label} divided>
+      {group.workflows.map((w) => {
+        const last = group.lastRuns[w.name];
+        return (
+          <button
+            key={w.name}
+            onClick={() => onOpen(w.name)}
+            className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm text-ink">{w.name}</span>
+              {w.description && (
+                <span className="block truncate text-[11px] text-faint">
+                  {w.description}
+                </span>
+              )}
+              {last?.updatedAt ? (
+                <span className="mt-0.5 block text-[10px] text-faint">
+                  {fmtStamp(last.updatedAt)}
+                </span>
+              ) : null}
+            </span>
+            {last ? <StatusBadge status={last.status} /> : null}
+            <ChevronRight className="size-4 shrink-0 text-faint" />
+          </button>
+        );
+      })}
+      {group.invalid.length > 0 &&
+        group.invalid.map((e, i) => (
+          <div key={i} className="px-4 py-2.5">
+            <p className="truncate font-mono text-[10px] text-faint">
+              {e.path}
+            </p>
+            {e.reason && (
+              <p className="truncate text-[11px] text-amber-300/80">
+                {e.reason}
+              </p>
+            )}
+          </div>
+        ))}
+    </ConfigBlock>
+  );
+}
+
 // ---------- L1: one saved workflow ----------
 
 function WorkflowDetail({
   scope,
   name,
+  instanceId,
   onBack,
   onOpenRun,
 }: {
   scope: WorkflowScope;
   name: string;
+  /** The instance whose group opened this page — actions address it. */
+  instanceId: string;
   onBack: () => void;
-  onOpenRun: (sessionId: string, runId: string, name: string) => void;
+  onOpenRun: (
+    sessionId: string,
+    runId: string,
+    name: string,
+    ownerInstance: string,
+  ) => void;
 }) {
   const { t } = useTranslation();
   const workflowAction = useAppStore((s) => s.workflowAction);
-  const loadWorkflows = useAppStore((s) => s.loadWorkflows);
   const loadRunSummaries = useAppStore((s) => s.loadRunSummaries);
   const startWorkflow = useAppStore((s) => s.startWorkflow);
   const resumeWorkflowRun = useAppStore((s) => s.resumeWorkflowRun);
   const openSession = useAppStore((s) => s.openSession);
-  const instanceId = useAppStore((s) => s.instanceId);
 
   const [detail, setDetail] = useState<WorkflowDetailResponse | null>(null);
   const [runs, setRuns] = useState<WorkflowRunRow[] | null>(null);
@@ -243,12 +301,20 @@ function WorkflowDetail({
 
   async function load() {
     setLoading(true);
-    const res = await workflowAction("load workflow", (c, iid) =>
-      c.workflowGet(iid, scope, name),
+    const res = await workflowAction(
+      "load workflow",
+      (c, iid) => c.workflowGet(iid, scope, name),
+      false,
+      undefined,
+      instanceId,
     );
     if (res) setDetail(res);
-    const history = await workflowAction("load runs", (c, iid) =>
-      c.workflowRunsHistory(iid, { scope, name }),
+    const history = await workflowAction(
+      "load runs",
+      (c, iid) => c.workflowRunsHistory(iid, { scope, name }),
+      false,
+      undefined,
+      instanceId,
     );
     // Only a landed answer updates the list: a failed read keeps `null`, and
     // the render below shows nothing rather than dressing the error up as
@@ -264,7 +330,8 @@ function WorkflowDetail({
           .filter((sid): sid is string => Boolean(sid)),
       ),
     );
-    if (sessionIds.length > 0) setSummaries(await loadRunSummaries(sessionIds));
+    if (sessionIds.length > 0)
+      setSummaries(await loadRunSummaries(sessionIds, instanceId));
     setLoading(false);
   }
 
@@ -273,14 +340,21 @@ function WorkflowDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const description = useMemo(() => {
-    const d = detail?.meta?.["description"];
-    return typeof d === "string" ? d : "";
-  }, [detail]);
-  const whenToUse = useMemo(() => {
-    const w = detail?.meta?.["whenToUse"];
-    return typeof w === "string" ? w : "";
-  }, [detail]);
+  // While this workflow's newest run is active, refresh the history rows so
+  // the badge and the resume affordance follow the run (bridge 5s poll).
+  const runActive =
+    runs?.some((r) => RUN_ACTIVE.has(r.status)) ?? false;
+  useEffect(() => {
+    if (!runActive) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runActive]);
+
+  const description = detail?.meta?.["description"];
+  const descText = typeof description === "string" ? description : "";
+  const whenToUseRaw = detail?.meta?.["whenToUse"];
+  const whenToUse = typeof whenToUseRaw === "string" ? whenToUseRaw : "";
 
   async function saveMeta(next: { description: string; whenToUse: string }) {
     setEditingDesc(false);
@@ -295,12 +369,17 @@ function WorkflowDetail({
     // strings or absence, never "") — strip the OLD value before merging, or
     // the spread below would silently carry it back in.
     const { whenToUse: _old, ...rest } = detail.meta ?? {};
-    const res = await workflowAction("save description", (c, iid) =>
-      c.workflowUpdateMeta(iid, scope, name, {
-        ...rest,
-        description: next.description,
-        ...(next.whenToUse.trim() ? { whenToUse: next.whenToUse.trim() } : {}),
-      }),
+    const res = await workflowAction(
+      "save description",
+      (c, iid) =>
+        c.workflowUpdateMeta(iid, scope, name, {
+          ...rest,
+          description: next.description,
+          ...(next.whenToUse.trim() ? { whenToUse: next.whenToUse.trim() } : {}),
+        }),
+      false,
+      undefined,
+      instanceId,
     );
     setLoading(false);
     if (res) void load();
@@ -325,10 +404,15 @@ function WorkflowDetail({
 
   async function start(args?: Record<string, unknown>) {
     setStarting(false);
-    const res = await startWorkflow({ scope, name, args });
+    const res = await startWorkflow({
+      scope,
+      name,
+      args,
+      instanceId,
+    });
     if (!res) return;
     useAppStore.getState().closeConfig();
-    if (instanceId) void openSession(instanceId, res.acpSessionId);
+    void openSession(instanceId, res.acpSessionId);
   }
 
   async function resume(row: WorkflowRunRow) {
@@ -338,6 +422,7 @@ function WorkflowDetail({
       runId: row.runId,
       sessionId: launch.acpSessionId,
       ...(row.name ? { name: row.name } : {}),
+      instanceId,
     });
     if (ok) {
       useAppStore.getState().closeConfig();
@@ -347,20 +432,26 @@ function WorkflowDetail({
 
   async function remove() {
     setConfirmDelete(false);
-    const res = await workflowAction("delete workflow", (c, iid) =>
-      c.workflowDelete(iid, scope, name),
+    const res = await workflowAction(
+      "delete workflow",
+      (c, iid) => c.workflowDelete(iid, scope, name),
+      false,
+      undefined,
+      instanceId,
     );
     if (!res) return;
-    await loadWorkflows(scope);
     onBack();
   }
 
   async function moveToProject() {
-    const res = await workflowAction("move workflow", (c, iid) =>
-      c.workflowMove(iid, scope, name),
+    const res = await workflowAction(
+      "move workflow",
+      (c, iid) => c.workflowMove(iid, scope, name),
+      false,
+      undefined,
+      instanceId,
     );
     if (!res) return;
-    await loadWorkflows("project");
     onBack();
   }
 
@@ -374,21 +465,32 @@ function WorkflowDetail({
       hasLoaded={detail !== null}
     >
       <ConfigBlock>
-        <ConfigRow label={t("zconfig.workflowScopeLabel")} value={scope} />
-        {description ? (
-          <ConfigRow
-            label={t("zconfig.workflowDescription")}
-            value={description}
-          />
+        <div className="flex items-center gap-2 px-4 pt-3">
+          <span className="rounded-md bg-white/[0.08] px-1.5 py-0.5 text-[10px] text-dim">
+            {t(`zconfig.workflowScope_${scope}`)}
+          </span>
+          {scope === "project" && (
+            <span className="truncate text-[10px] text-faint">
+              {instanceId}
+            </span>
+          )}
+        </div>
+        {descText ? (
+          <div className="px-4 py-2.5">
+            <p className="text-xs text-dim">{descText}</p>
+          </div>
         ) : null}
         {whenToUse ? (
-          <ConfigRow label={t("zconfig.workflowWhenToUse")} value={whenToUse} />
+          <div className="px-4 pb-2.5">
+            <p className="text-[11px] text-faint">{whenToUse}</p>
+          </div>
         ) : null}
         {detail?.path && (
-          <ConfigRow
-            label={t("zconfig.workflowPath")}
-            value={<span className="font-mono text-xs">{detail.path}</span>}
-          />
+          <div className="px-4 pb-2.5">
+            <p className="break-all font-mono text-[10px] text-faint">
+              {detail.path}
+            </p>
+          </div>
         )}
         {detail && (
           <div className="px-4 py-2.5">
@@ -517,7 +619,12 @@ function WorkflowDetail({
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button
                       onClick={() =>
-                        onOpenRun(launch.acpSessionId, r.runId, r.name ?? name)
+                        onOpenRun(
+                          launch.acpSessionId,
+                          r.runId,
+                          r.name ?? name,
+                          launch.instanceId,
+                        )
                       }
                       className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
                     >
@@ -560,7 +667,7 @@ function WorkflowDetail({
       )}
       {editingDesc && (
         <MetaSheet
-          initial={{ description, whenToUse }}
+          initial={{ description: descText, whenToUse }}
           onClose={() => setEditingDesc(false)}
           onSave={(next) => void saveMeta(next)}
         />

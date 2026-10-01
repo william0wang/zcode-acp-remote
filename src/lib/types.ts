@@ -603,6 +603,26 @@ export interface WorkflowRunsHistoryResponse {
 }
 
 /**
+ * One group of the management page's cross-instance list (desktop hub
+ * parity): the GLOBAL workflows (one machine-wide group — `instanceId` is
+ * whichever instance answered) or one hub instance's PROJECT workflows.
+ * `lastRuns` is the per-name newest journal row (the list badge source,
+ * desktop `lastRunByWorkflowName` semantics — model-renamed runs that match
+ * no saved name are simply not joined). `error` marks an instance that
+ * refused (gate off, offline, old bridge) — the group still renders.
+ */
+export interface WorkflowHubGroup {
+  instanceId: string;
+  scope: WorkflowScope;
+  /** Display label: the instance's workspace basename (global group uses the scope label). */
+  workspace: string;
+  workflows: WorkflowEntry[];
+  invalid: Array<{ path?: string; reason?: string }>;
+  lastRuns: Record<string, WorkflowRunRow>;
+  error: string | null;
+}
+
+/**
  * One declared arg on a saved workflow's meta (`args` map, upstream
  * `zcodeSavedWorkflowArgsDeclarationSchema`): drives the typed launch form.
  */

@@ -94,7 +94,12 @@
     "upgrade": "Check hub update",
     "upgradeBusy": "Checking / restarting…",
     "upgradeLatest": "Hub is up to date ({{version}})",
-    "upgradeRestarted": "Hub restarted onto {{version}}"
+    "upgradeRestarted": "Hub restarted onto {{version}}",
+    "workflows": "Workflows",
+    "workflowLaunch": "Start a workflow…",
+    "workflowManage": "Manage workflows…",
+    "workflowSessionRuns": "Runs in this session",
+    "workflowNoRuns": "No runs yet"
   },
   "zconfig": {
     "title": "ZCode configuration",
@@ -323,7 +328,8 @@
     "workflowLineageBy": "superseded by",
     "workflowWhenToUse": "When to use",
     "workflowPromoteGlobal": "Promote to global",
-    "workflowBinary": "Binary artifact — {{bytes}} bytes"
+    "workflowBinary": "Binary artifact — {{bytes}} bytes",
+    "workflowInstanceUnavailable": "Unavailable on this instance (workflows disabled or bridge too old)"
   },
   "config": {
     "title": "Session",

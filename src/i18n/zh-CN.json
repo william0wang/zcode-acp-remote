@@ -94,7 +94,12 @@
     "upgrade": "检查 Hub 更新",
     "upgradeBusy": "检查/重启中…",
     "upgradeLatest": "Hub 已是最新 ({{version}})",
-    "upgradeRestarted": "Hub 已重启到 {{version}}"
+    "upgradeRestarted": "Hub 已重启到 {{version}}",
+    "workflows": "工作流",
+    "workflowLaunch": "启动工作流…",
+    "workflowManage": "管理工作流…",
+    "workflowSessionRuns": "本会话的运行",
+    "workflowNoRuns": "暂无运行"
   },
   "zconfig": {
     "title": "ZCode 配置",
@@ -322,7 +327,8 @@
     "workflowLineageBy": "被替代为",
     "workflowWhenToUse": "适用场景",
     "workflowPromoteGlobal": "提升为全局",
-    "workflowBinary": "二进制产物——{{bytes}} 字节"
+    "workflowBinary": "二进制产物——{{bytes}} 字节",
+    "workflowInstanceUnavailable": "此实例不可用（工作流未开启或桥版本过旧）"
   },
   "config": {
     "title": "会话",

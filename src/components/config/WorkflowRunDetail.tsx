@@ -262,13 +262,13 @@ export function WorkflowRunDetail({
   }, [tab]);
 
   async function resume() {
-    const ok = await resumeWorkflowRun({ runId, sessionId });
+    const ok = await resumeWorkflowRun({ runId, sessionId, instanceId });
     if (ok) void refreshSummary();
   }
 
   async function stop() {
     setStopping(true);
-    const ok = await stopWorkflowRun(runId, sessionId);
+    const ok = await stopWorkflowRun(runId, sessionId, instanceId);
     setStopping(false);
     if (ok) void refreshSummary();
   }
@@ -522,7 +522,7 @@ export function WorkflowRunDetail({
           onClose={() => setAmending(false)}
           onAmend={async (body) => {
             setAmending(false);
-            const res = await amendWorkflowRun({ runId, sessionId, body });
+            const res = await amendWorkflowRun({ runId, sessionId, body, instanceId });
             if (!res) return;
             // A supersede answers with the NEW run's id — re-point the whole
             // view so the poller and every tab follow the continuation.

@@ -58,7 +58,9 @@ import {
   type ConversationRunSummary,
   type WorkflowGateBlock,
   type WorkflowGateModeSetting,
+  type WorkflowHubGroup,
   type WorkflowListResponse,
+  type WorkflowRunRow,
   type WorkflowScope,
   type AmendRunSettingsResponse,
   type WorkflowStartResponse,
@@ -420,6 +422,17 @@ interface AppState {
   // reports no `enabled` field at all, so this is the only honest source for
   // "show the workflows entry". Null = not probed (reads as hidden).
   configWorkflowGate: SettingsAll["workflow"] | null;
+  // Cross-instance saved-workflow groups for the management page (desktop
+  // hub parity): one global group + one per hub instance (its project's
+  // workflows), each with per-name last-run rows for badges. A group whose
+  // instance refuses (gate off / offline) carries `error` and shows as
+  // unavailable instead of hiding the project.
+  workflowHub: WorkflowHubGroup[] | null;
+  workflowHubLoading: boolean;
+  loadWorkflowHub: () => Promise<void>;
+  // Runs of the CURRENT session (session panel's observation block):
+  // journal summaries via the per-instance conversationRuns query.
+  loadSessionRuns: (sessionId: string) => Promise<ConversationRunSummary[] | null>;
   // Text the next mounted composer adopts as its draft (the workflow
   // "create via conversation" entry). Nonce-keyed so the same text twice
   // still reads as a new request; consumed exactly once.
@@ -654,6 +667,8 @@ interface AppState {
     fn: (client: HubClient, instanceId: string) => Promise<T>,
     silent?: boolean,
     onError?: (message: string) => void,
+    /** Target instance for cross-group actions (defaults to the connected one). */
+    iidOverride?: string,
   ) => Promise<T | null>;
   // Launches a saved workflow; records the run in the local launch memory so
   // its rows stay actionable (open session, run detail, resume) later.
@@ -664,11 +679,14 @@ interface AppState {
     name: string;
     args?: Record<string, unknown>;
     sessionId?: string;
+    /** Owning instance for a launch started from another instance's group. */
+    instanceId?: string;
   }) => Promise<WorkflowStartResponse | null>;
   resumeWorkflowRun: (input: {
     runId: string;
     sessionId: string;
     name?: string;
+    instanceId?: string;
   }) => Promise<boolean>;
   // Amend a flying run's settings (bridge 0.49.0). Returns the run that
   // continues the work — SAME id for in-place changes, a NEW id (plus
@@ -678,16 +696,21 @@ interface AppState {
     runId: string;
     sessionId: string;
     body: { subagentModel?: string | null; maxConcurrency?: number | null };
+    /** Owning instance for a run opened from another instance's group. */
+    instanceId?: string;
   }) => Promise<AmendRunSettingsResponse | null>;
-  // Stop a flying run through the ACP extension the bridge already forwards
-  // (`session/cancelBackgroundTask`, taskId ≡ runId — the same identity
-  // equation as resume/amend). Reflects as the run card's stopped state.
-  stopWorkflowRun: (runId: string, sessionId: string) => Promise<boolean>;
+  // Stop a flying run (`session/cancelBackgroundTask`, taskId ≡ runId — the
+  // same identity equation as resume/amend). With `instanceId` it rides the
+  // hub route and reaches ANY instance's run; the ACP fallback below only
+  // reaches the instance the socket is bound to.
+  stopWorkflowRun: (runId: string, sessionId: string, instanceId?: string) => Promise<boolean>;
   // Best-effort per-session run summaries for the runs list (the `resumable`
   // verdict lives there). Silent on failure: a session the bridge no longer
   // knows simply contributes no summaries and its rows stay read-only.
   loadRunSummaries: (
     sessionIds: string[],
+    /** Owning instance for a detail page opened from another group. */
+    instanceId?: string,
   ) => Promise<Record<string, ConversationRunSummary[]>>;
   // Restarts the backend of the instance that owns the configuration, so
   // needs-restart writes take effect. Returns the interrupted-turn count.
@@ -741,6 +764,24 @@ function isTransientConnError(e: unknown): boolean {
   return (
     msg.includes("connection closed") || msg.includes("connection not open")
   );
+}
+
+/**
+ * Per workflow NAME, the newest journal row (`updatedAt` desc, first seen) —
+ * the desktop hub's `lastRunByWorkflowName` semantics for the list badge: a
+ * run the model named differently is simply not joined to any saved entry.
+ */
+function lastRunByName(
+  runs: WorkflowRunRow[],
+): Record<string, WorkflowRunRow> {
+  const byName: Record<string, WorkflowRunRow> = {};
+  const sorted = [...runs].sort(
+    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+  );
+  for (const r of sorted) {
+    if (r.name && !byName[r.name]) byName[r.name] = r;
+  }
+  return byName;
 }
 
 /**
@@ -895,6 +936,8 @@ function connectionResetPatch(): Partial<AppState> {
     configWorkflows: null,
     configWorkflowScope: "project",
     configWorkflowGate: null,
+    workflowHub: null,
+    workflowHubLoading: false,
     composerPrefill: null,
   };
 }
@@ -1914,6 +1957,18 @@ export const useAppStore = create<AppState>((set, get) => {
           }));
           // respond is captured by answerPermission through the stored request id.
           pendingResponds.set(req.id, respond);
+          // Foreground visibility: the approval sheet renders only inside its
+          // own session — when the user is elsewhere in the app, announce the
+          // ask once so a blocked approval never waits in silence (the
+          // backgrounded/locked-phone case is the bridge's push, not ours).
+          if (get().activeSessionId !== sessionId) {
+            const raw = req.params as { toolCall?: { title?: unknown }; toolName?: unknown };
+            const title =
+              (typeof raw.toolCall?.title === "string" && raw.toolCall.title) ||
+              (typeof raw.toolName === "string" && raw.toolName) ||
+              "tool";
+            get().notify(`approval requested: ${title.slice(0, 60)}`);
+          }
         } else if (req.method === "elicitation/create") {
           // AskUserQuestion / plan-approval form — the bridge's preferred
           // channel once any client advertises elicitation.form, which we
@@ -1928,6 +1983,11 @@ export const useAppStore = create<AppState>((set, get) => {
               },
             }));
             pendingElicitResponds.set(req.id, respond);
+            if (get().activeSessionId !== parsed.sessionId) {
+              get().notify(
+                `agent question: ${parsed.message.slice(0, 60) || "waiting for your answer"}`,
+              );
+            }
           } else {
             // Unparseable schema: decline rather than leave the request
             // dangling (first-response-wins; Zed may still answer).
@@ -2058,6 +2118,8 @@ export const useAppStore = create<AppState>((set, get) => {
     configWorkflows: null,
     configWorkflowScope: "project",
     configWorkflowGate: null,
+    workflowHub: null,
+    workflowHubLoading: false,
     composerPrefill: null,
     appUpdateInstall: null,
     resetCards: null,
@@ -3267,10 +3329,10 @@ export const useAppStore = create<AppState>((set, get) => {
             });
             break;
           case "workflows":
-            // The list is scope-parameterised; the workflows screen drives
-            // loadWorkflows itself (mount + scope taps), this mount-effect
-            // path just seeds the current scope's first paint.
-            await get().loadWorkflows(get().configWorkflowScope);
+            // The grouped cross-instance list is driven by the workflows
+            // screen itself (mount + running poll); this mount-effect path
+            // just seeds its first paint.
+            await get().loadWorkflowHub();
             break;
           case "quota":
             // The plan-quota screen reuses the hub-level quota the side panels
@@ -3662,9 +3724,9 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    workflowAction: async (label, fn, silent = false, onError) => {
+    workflowAction: async (label, fn, silent = false, onError, iidOverride) => {
       const client = hub();
-      const instanceId = get().instanceId;
+      const instanceId = iidOverride ?? get().instanceId;
       if (!client || !instanceId) {
         if (!silent) get().notify(`${label} failed: not connected`);
         onError?.("not connected");
@@ -3681,11 +3743,16 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     startWorkflow: async (input) => {
-      const res = await get().workflowAction("start workflow", (client, iid) =>
-        client.workflowStart(iid, input.scope, input.name, {
-          ...(input.args ? { args: input.args } : {}),
-          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-        }),
+      const res = await get().workflowAction(
+        "start workflow",
+        (client, iid) =>
+          client.workflowStart(iid, input.scope, input.name, {
+            ...(input.args ? { args: input.args } : {}),
+            ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+          }),
+        false,
+        undefined,
+        input.instanceId,
       );
       if (!res) return null;
       // Remember the join the response just minted: `runId → acpSessionId`
@@ -3696,7 +3763,7 @@ export const useAppStore = create<AppState>((set, get) => {
         rememberLaunch({
           runId: res.runId,
           acpSessionId: res.acpSessionId,
-          instanceId: get().instanceId ?? "",
+          instanceId: input.instanceId ?? get().instanceId ?? "",
           name: input.name,
           scope: input.scope,
           at: Date.now(),
@@ -3706,22 +3773,43 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     resumeWorkflowRun: async (input) => {
-      const res = await get().workflowAction("resume run", (client, iid) =>
-        client.workflowResume(iid, input.runId, {
-          sessionId: input.sessionId,
-          ...(input.name ? { name: input.name } : {}),
-        }),
+      const res = await get().workflowAction(
+        "resume run",
+        (client, iid) =>
+          client.workflowResume(iid, input.runId, {
+            sessionId: input.sessionId,
+            ...(input.name ? { name: input.name } : {}),
+          }),
+        false,
+        undefined,
+        input.instanceId,
       );
       return res !== null;
     },
 
     amendWorkflowRun: async (input) => {
-      return get().workflowAction("amend run settings", (client, iid) =>
-        client.amendRunSettings(iid, input.runId, input.sessionId, input.body),
+      return get().workflowAction(
+        "amend run settings",
+        (client, iid) => client.amendRunSettings(iid, input.runId, input.sessionId, input.body),
+        false,
+        undefined,
+        input.instanceId,
       );
     },
 
-    stopWorkflowRun: async (runId, sessionId) => {
+    stopWorkflowRun: async (runId, sessionId, instanceId) => {
+      // The hub route reaches a run on ANY instance; the ACP socket below is
+      // bound to the connected one only.
+      if (instanceId) {
+        const res = await get().workflowAction(
+          "stop run",
+          (client, iid) => client.workflowStop(iid, runId, { sessionId }),
+          false,
+          undefined,
+          instanceId,
+        );
+        return res !== null;
+      }
       const conn = acp;
       if (!conn) {
         get().notify("stop run failed: not connected");
@@ -3745,9 +3833,9 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    loadRunSummaries: async (sessionIds) => {
+    loadRunSummaries: async (sessionIds, iidOverride) => {
       const client = hub();
-      const instanceId = get().instanceId;
+      const instanceId = iidOverride ?? get().instanceId;
       if (!client || !instanceId) return {};
       const out: Record<string, ConversationRunSummary[]> = {};
       await Promise.allSettled(
@@ -3757,6 +3845,113 @@ export const useAppStore = create<AppState>((set, get) => {
         }),
       );
       return out;
+    },
+
+    loadSessionRuns: async (sessionId) => {
+      const client = hub();
+      const instanceId = get().instanceId;
+      if (!client || !instanceId) return null;
+      try {
+        const res = await client.conversationRuns(instanceId, sessionId);
+        return res?.runs ?? [];
+      } catch {
+        // Unknown session (bridge restart, closed) — read as "no rows".
+        return null;
+      }
+    },
+
+    // Desktop hub parity for the management page's list: global group once
+    // (whichever instance answers — the global dir is machine-wide) + one
+    // project group PER hub instance, each joined with its per-name newest
+    // journal row for the running/terminal badge. All instance reads run in
+    // parallel and a failing instance degrades to an `error` group (the
+    // workflow saved in ANOTHER project's chat must not vanish from the page
+    // just because the app is connected elsewhere — observed 2026-10-01).
+    loadWorkflowHub: async () => {
+      const client = hub();
+      if (!client) return;
+      set({ workflowHubLoading: true });
+      const instances = get().instances;
+      // Preallocated per-instance slots keep the groups in instance order —
+      // completion-order pushes made the sections reorder on every 5s
+      // refresh once instance reads started racing.
+      const slots: Array<WorkflowHubGroup | null> = instances.map(() => null);
+      let globalList: WorkflowListResponse | null = null;
+      let globalRuns: WorkflowRunRow[] = [];
+      let globalInstanceId = "";
+      const globalAwaits: Promise<void>[] = [];
+      const groupAwaits = instances.map(async (inst, idx) => {
+        // Global scans race from every instance as a LIST+RUNS PAIR: the
+        // first fully-settled pair claims the whole group (a gate-off
+        // instance rejects, another answers for the machine). Racing the
+        // runs read separately let the journal answer land before the list
+        // it belongs to — the badge rows were then dropped with nobody to
+        // re-write them, and active global runs never armed the poller.
+        globalAwaits.push(
+          Promise.all([
+            client.workflowsList(inst.id, "global"),
+            client.workflowRunsHistory(inst.id, { scope: "global", limit: 50 }),
+          ])
+            .then(([list, runs]) => {
+              if (globalList !== null) return;
+              globalList = list;
+              globalRuns = runs?.runs ?? [];
+              // Actions on the global group must address the instance that
+              // actually answered — pinning instances[0] breaks them all
+              // whenever that bridge is offline.
+              globalInstanceId = inst.id;
+            })
+            .catch(() => {}),
+        );
+        const [list, runs] = await Promise.all([
+          client.workflowsList(inst.id, "project").catch((e: unknown) => ({
+            error: e instanceof Error ? e.message : String(e),
+          })),
+          client
+            .workflowRunsHistory(inst.id, { scope: "project", limit: 50 })
+            .catch(() => null),
+        ]);
+        if (list && "error" in list) {
+          slots[idx] = {
+            instanceId: inst.id,
+            scope: "project",
+            workspace: inst.workspace ?? inst.id,
+            workflows: [],
+            invalid: [],
+            lastRuns: {},
+            error: list.error,
+          };
+          return;
+        }
+        const ok = list as WorkflowListResponse;
+        slots[idx] = {
+          instanceId: inst.id,
+          scope: "project",
+          workspace: inst.workspace ?? inst.id,
+          workflows: ok.workflows ?? [],
+          invalid: ok.invalid ?? [],
+          lastRuns: lastRunByName(runs?.runs ?? []),
+          error: null,
+        };
+      });
+      await Promise.all([...groupAwaits, ...globalAwaits]);
+      const groups = slots.filter((g): g is WorkflowHubGroup => g !== null);
+      // The global group leads the page once every read has settled. (The
+      // cast defeats TS's closure-blind narrowing: globalList is only ever
+      // assigned inside the settled promises above.)
+      const gList = globalList as WorkflowListResponse | null;
+      if (gList !== null) {
+        groups.unshift({
+          instanceId: globalInstanceId,
+          scope: "global",
+          workspace: "",
+          workflows: gList.workflows ?? [],
+          invalid: gList.invalid ?? [],
+          lastRuns: lastRunByName(globalRuns),
+          error: null,
+        });
+      }
+      set({ workflowHub: groups, workflowHubLoading: false });
     },
 
     restartConfigBackend: async () => {

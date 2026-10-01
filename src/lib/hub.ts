@@ -764,6 +764,24 @@ export class HubClient {
   }
 
   /**
+   * Stop a flying run (bridge 0.56.0): `session/cancelBackgroundTask` via the
+   * hub, so a run on ANY instance is stoppable — the live ACP socket only
+   * reaches the instance it is bound to. 409 = not running (already settled).
+   */
+  async workflowStop(
+    instanceId: string,
+    runId: string,
+    body: { sessionId: string },
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/stop`,
+      "POST",
+      body,
+    );
+    return res.json();
+  }
+
+  /**
    * Amend a run's settings (bridge 0.49.0). Three-state per field: the key's
    * PRESENCE is the discriminator — absent = keep, `null` = revert to
    * default, value = set. `?sessionId=` is required by the route.
