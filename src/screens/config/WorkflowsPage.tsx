@@ -71,6 +71,16 @@ export function WorkflowsPage() {
     instanceId: string;
   } | null>(null);
 
+  // Deep link (a session-panel run row tap): open straight at that run's
+  // detail. Consumed exactly once so a later plain visit starts at the list.
+  useEffect(() => {
+    const target = useAppStore.getState().workflowRunTarget;
+    if (target) {
+      setRunDetail(target);
+      useAppStore.getState().clearWorkflowRunTarget();
+    }
+  }, []);
+
   // First paint is seeded by the ZCodeConfigScreen mount effect (the section
   // case in loadConfigSection → loadWorkflowHub); returning from a detail
   // page re-seeds here. No page-level mount effect — child effects run
@@ -150,7 +160,9 @@ export function WorkflowsPage() {
   return (
     <ConfigPageFrame
       title={t("zconfig.workflows")}
-      onBack={() => useAppStore.getState().openConfig(null)}
+      // Deep-opened from the session panel → back returns to the chat, not to
+      // the settings entry list the user never saw.
+      onBack={() => useAppStore.getState().backFromConfigSection()}
       onRefresh={() => void loadWorkflowHub()}
       refreshing={loading}
       unsupported={supported === false}

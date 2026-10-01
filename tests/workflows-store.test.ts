@@ -407,3 +407,42 @@ test("stopWorkflowRun without a live ACP connection reports and resolves false",
   expect(ok).toBe(false);
   expect(useAppStore.getState().toast?.text).toContain("not connected");
 });
+
+test("config deep entry: section back closes the screen, root navigation keeps the list", async () => {
+  const useAppStore = await store();
+  // Deep entry (session panel): back from the section returns to the caller,
+  // never to an entry list the user did not navigate through.
+  useAppStore.getState().openConfig("workflows");
+  expect(useAppStore.getState().configDeepEntry).toBe(true);
+  useAppStore.getState().backFromConfigSection();
+  expect(useAppStore.getState().configOpen).toBe(false);
+  expect(useAppStore.getState().configSection).toBeNull();
+
+  // Root → section navigation: back returns to the entry list.
+  useAppStore.getState().openConfig(null);
+  useAppStore.getState().openConfig("workflows");
+  expect(useAppStore.getState().configDeepEntry).toBe(false);
+  useAppStore.getState().backFromConfigSection();
+  expect(useAppStore.getState().configOpen).toBe(true);
+  expect(useAppStore.getState().configSection).toBeNull();
+
+  useAppStore.getState().closeConfig();
+});
+
+test("openWorkflowRun stages the run deep link and deep-opens the workflows page", async () => {
+  const useAppStore = await store();
+  useAppStore.getState().openWorkflowRun({
+    sessionId: "s1",
+    runId: "r1",
+    name: "deploy",
+    instanceId: "i1",
+  });
+  expect(useAppStore.getState().configOpen).toBe(true);
+  expect(useAppStore.getState().configSection).toBe("workflows");
+  expect(useAppStore.getState().configDeepEntry).toBe(true);
+  expect(useAppStore.getState().workflowRunTarget).toMatchObject({ runId: "r1" });
+  // Consumed exactly once by the page's mount.
+  useAppStore.getState().clearWorkflowRunTarget();
+  expect(useAppStore.getState().workflowRunTarget).toBeNull();
+  useAppStore.getState().closeConfig();
+});

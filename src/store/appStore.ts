@@ -356,6 +356,11 @@ interface AppState {
   configOpen: boolean;
   // Which configuration section is open; null = the entry list.
   configSection: ConfigSection | null;
+  // True when the screen OPENED straight at a section (session panel's
+  // workflow manage, a run deep link) — the entry list was never shown, so a
+  // section page's back must CLOSE the screen (return to the caller) instead
+  // of revealing a list the user never navigated through.
+  configDeepEntry: boolean;
   configSupported: boolean | null;
   configLoading: boolean;
   configError: string | null;
@@ -430,6 +435,21 @@ interface AppState {
   workflowHub: WorkflowHubGroup[] | null;
   workflowHubLoading: boolean;
   loadWorkflowHub: () => Promise<void>;
+  // Deep link: open the management page straight at one run's detail (a
+  // session-panel run row tap). Consumed exactly once by the page's mount.
+  workflowRunTarget: {
+    sessionId: string;
+    runId: string;
+    name: string;
+    instanceId: string;
+  } | null;
+  openWorkflowRun: (target: {
+    sessionId: string;
+    runId: string;
+    name: string;
+    instanceId: string;
+  }) => void;
+  clearWorkflowRunTarget: () => void;
   // Runs of the CURRENT session (session panel's observation block):
   // journal summaries via the per-instance conversationRuns query.
   loadSessionRuns: (sessionId: string) => Promise<ConversationRunSummary[] | null>;
@@ -564,6 +584,9 @@ interface AppState {
   // Opens/closes the configuration screen. `section` null = the entry list.
   openConfig: (section?: ConfigSection | null) => void;
   closeConfig: () => void;
+  // A section page's back: to the entry list, or straight out when the screen
+  // was deep-opened at the section (configDeepEntry).
+  backFromConfigSection: () => void;
   // Loads the /settings/all snapshot; a 404 marks the hub as too old.
   loadConfigAll: () => Promise<void>;
   // Loads one section's own endpoint. Called when its screen mounts; `arg`
@@ -938,6 +961,7 @@ function connectionResetPatch(): Partial<AppState> {
     configWorkflowGate: null,
     workflowHub: null,
     workflowHubLoading: false,
+    workflowRunTarget: null,
     composerPrefill: null,
   };
 }
@@ -2099,6 +2123,7 @@ export const useAppStore = create<AppState>((set, get) => {
     loadingSession: false,
     configOpen: false,
     configSection: null,
+    configDeepEntry: false,
     configSupported: null,
     configLoading: false,
     configError: null,
@@ -2120,6 +2145,7 @@ export const useAppStore = create<AppState>((set, get) => {
     configWorkflowGate: null,
     workflowHub: null,
     workflowHubLoading: false,
+    workflowRunTarget: null,
     composerPrefill: null,
     appUpdateInstall: null,
     resetCards: null,
@@ -3202,9 +3228,21 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     openConfig: (section = null) =>
-      set({ configOpen: true, configSection: section }),
+      set((s) => ({
+        configOpen: true,
+        configSection: section,
+        // Deep entry only when the screen was CLOSED before this call —
+        // navigating list → section keeps the list as the back target.
+        configDeepEntry: section !== null && !s.configOpen,
+      })),
 
-    closeConfig: () => set({ configOpen: false, configSection: null }),
+    closeConfig: () =>
+      set({ configOpen: false, configSection: null, configDeepEntry: false }),
+
+    backFromConfigSection: () => {
+      if (get().configDeepEntry) get().closeConfig();
+      else get().openConfig(null);
+    },
 
     loadConfigAll: async () => {
       const client = hub();
@@ -3859,6 +3897,13 @@ export const useAppStore = create<AppState>((set, get) => {
         return null;
       }
     },
+
+    openWorkflowRun: (target) => {
+      set({ workflowRunTarget: target });
+      get().openConfig("workflows");
+    },
+
+    clearWorkflowRunTarget: () => set({ workflowRunTarget: null }),
 
     // Desktop hub parity for the management page's list: global group once
     // (whichever instance answers — the global dir is machine-wide) + one

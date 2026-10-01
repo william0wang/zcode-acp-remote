@@ -96,7 +96,7 @@
     "upgradeLatest": "Hub is up to date ({{version}})",
     "upgradeRestarted": "Hub restarted onto {{version}}",
     "workflows": "Workflows",
-    "workflowLaunch": "Start a workflow…",
+    "workflowStopRun": "Stop",
     "workflowManage": "Manage workflows…",
     "workflowSessionRuns": "Runs in this session",
     "workflowNoRuns": "No runs yet"

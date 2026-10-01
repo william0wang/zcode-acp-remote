@@ -96,7 +96,7 @@
     "upgradeLatest": "Hub 已是最新 ({{version}})",
     "upgradeRestarted": "Hub 已重启到 {{version}}",
     "workflows": "工作流",
-    "workflowLaunch": "启动工作流…",
+    "workflowStopRun": "停止",
     "workflowManage": "管理工作流…",
     "workflowSessionRuns": "本会话的运行",
     "workflowNoRuns": "暂无运行"
