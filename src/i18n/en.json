@@ -358,7 +358,6 @@
     "sessionRenameFailed": "Rename failed",
     "projectUnknown": "Unknown project — refresh the list and pick again",
     "configNeedsRestart": "Saved — restart the backend to apply it",
-    "configResetDenied": "Not right now — the backend declined a reset",
     "configResetSpent": "Card spent — the window is reset",
     "configResetSpendFailed": "The card wasn't spent",
     "configResetStale": "That reset attempt expired — the card list was refreshed, try again",

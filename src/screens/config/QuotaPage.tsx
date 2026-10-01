@@ -113,7 +113,6 @@ export function QuotaPage() {
   const resetNextTryAt = useAppStore((s) => s.resetNextTryAt);
   const supported = useAppStore((s) => s.configSupported);
   const loadResetCards = useAppStore((s) => s.loadResetCards);
-  const requestResetOpportunity = useAppStore((s) => s.requestResetOpportunity);
   const spendResetCard = useAppStore((s) => s.spendResetCard);
   const markResetHistoryRead = useAppStore((s) => s.markResetHistoryRead);
   const [confirm, setConfirm] = useState<SpendStage | null>(null);
@@ -155,19 +154,20 @@ export function QuotaPage() {
 
   async function spend(resetType: ResetType) {
     // Capture BOTH halves of the spend now, while the confirm dialog is still
-    // open and the user cannot switch provider underneath. A gesture spans two
-    // round trips (opportunity, then spend); re-reading the store at entry time
-    // of the second would let a provider switch redirect the spend at another
-    // plan's card — spending is irreversible, so the wrong provider is the one
-    // failure mode worth engineering against.
+    // open and the user cannot switch provider underneath. Re-reading the store
+    // inside the action would let a provider switch redirect the spend at
+    // another plan's card — spending is irreversible, so the wrong provider is
+    // the one failure mode worth engineering against.
     const spendProviderId = providerId;
     const spendNonce = resetCards?.nonce ?? "";
     if (!spendProviderId || !spendNonce) return;
     setConfirm(null);
-    // Ask first: the backend answers "not now" with a next-try time, and a
-    // granted opportunity is what makes the spend worth committing to.
-    const granted = await requestResetOpportunity(spendProviderId);
-    if (!granted) return;
+    // Spend straight off the status inventory, the way the desktop app does.
+    // /opportunity is the GRANT endpoint: while an unconsumed card is held its
+    // per-type issuance cap answers "denied", so gating a spend on a fresh
+    // grant made every spend on an available card abort before /use ever ran
+    // ("后端拒绝了这次重置"). The desktop never asks opportunity before use —
+    // availability in /status is the only gate.
     await spendResetCard({
       providerId: spendProviderId,
       nonce: spendNonce,

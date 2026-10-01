@@ -646,12 +646,10 @@ interface AppState {
   // editing, creating, and the built-ins' model override.
   upsertAgent: (name: string, body: AgentUpsert) => Promise<Effect | undefined>;
   restoreBackup: (file: string, path: string) => Promise<Effect | undefined>;
-  // Reset cards: read the inventory, ask for an opportunity, spend a card.
-  // Both actions take the provider (and the spend its nonce) explicitly: a
-  // gesture spans two round trips, and reading the store at entry time of the
-  // SECOND one would let a provider switch mid-gesture spend the wrong card.
+  // Reset cards: read the inventory, spend a card. Both actions take the
+  // provider (and the spend its nonce) explicitly: reading the store at action
+  // entry would let a provider switch mid-gesture spend the wrong card.
   loadResetCards: (providerId: string) => Promise<void>;
-  requestResetOpportunity: (providerId: string) => Promise<boolean>;
   spendResetCard: (input: {
     providerId: string;
     nonce: string;
@@ -3554,41 +3552,6 @@ export const useAppStore = create<AppState>((set, get) => {
         get().notify(
           `reset card status failed: ${e instanceof Error ? e.message : String(e)}`,
         );
-      }
-    },
-
-    requestResetOpportunity: async (providerId) => {
-      const client = hub();
-      if (!client || !providerId) return false;
-      // The provider is the caller's, captured when the gesture began. Reading
-      // the store here would let a switch that landed while the request was in
-      // flight redirect the spend at the new provider's card.
-      if (get().resetProviderId && get().resetProviderId !== providerId)
-        return false;
-      set({ resetBusy: true });
-      try {
-        const res = await client.requestResetOpportunity({
-          providerId,
-          idempotencyKey: newIdempotencyKey(),
-        });
-        set({ resetBusy: false });
-        if (!res.opportunity?.granted) {
-          // A denial is a normal answer carrying when to try again — the screen
-          // shows the countdown rather than an error.
-          set({
-            notice: "notice.configResetDenied",
-            resetNextTryAt: res.opportunity?.nextTryAt ?? null,
-          });
-          return false;
-        }
-        set({ resetNextTryAt: null });
-        return true;
-      } catch (e) {
-        set({ resetBusy: false });
-        get().notify(
-          `reset opportunity failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        return false;
       }
     },
 

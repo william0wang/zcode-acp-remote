@@ -357,7 +357,6 @@
     "sessionRenameFailed": "重命名失败",
     "projectUnknown": "未知项目——请刷新列表后重选",
     "configNeedsRestart": "已保存，重启后端后生效",
-    "configResetDenied": "暂时不可用，后端拒绝了这次重置",
     "configResetSpent": "已使用，对应窗口已重置",
     "configResetSpendFailed": "重置卡未被使用",
     "configResetStale": "这次重置已过期——卡片列表已刷新，请重试",
