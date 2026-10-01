@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus, X } from "lucide-react";
 import { useAppStore } from "../../store/appStore";
 import {
   ConfigBlock,
@@ -177,6 +177,18 @@ export function WorkflowsPage() {
         </p>
       )}
 
+      {/* The live zone: everything workflow-related lives INSIDE this page
+          (the session panel keeps only the entry row) — in-flight runs get
+          the big area up top, settled history stays in each workflow. */}
+      {instanceId && (
+        <ActiveRunsBlock
+          instanceId={instanceId}
+          onOpenRun={(sessionId, runId, name, ownerInstanceId) =>
+            setRunDetail({ sessionId, runId, name, instanceId: ownerInstanceId })
+          }
+        />
+      )}
+
       {allEmpty ? (
         <ConfigEmpty text={t("zconfig.workflowsEmpty")} />
       ) : (
@@ -201,6 +213,114 @@ export function WorkflowsPage() {
         </button>
       </div>
     </ConfigPageFrame>
+  );
+}
+
+/**
+ * The instance's in-flight runs — the live zone at the top of the management
+ * page. Hidden entirely when nothing is flying (the page stays quiet), 5s
+ * poll while visible: rows settle, and a run started elsewhere (editor,
+ * another client) must appear here too.
+ */
+function ActiveRunsBlock({
+  instanceId,
+  onOpenRun,
+}: {
+  instanceId: string;
+  onOpenRun: (
+    sessionId: string,
+    runId: string,
+    name: string,
+    ownerInstanceId: string,
+  ) => void;
+}) {
+  const { t } = useTranslation();
+  const workflowAction = useAppStore((s) => s.workflowAction);
+  const stopWorkflowRun = useAppStore((s) => s.stopWorkflowRun);
+  const [rows, setRows] = useState<WorkflowRunRow[] | null>(null);
+  // Epoch guard: an in-flight read from a PREVIOUS instance (or a closed
+  // page) must not land — its rows would misattribute stop actions to the
+  // wrong instance for up to a poll cycle.
+  const epoch = useRef(0);
+
+  // Silent by design: a background poll — a transient failure just keeps the
+  // previous rows; the groups below carry the visible error stories.
+  async function load() {
+    const at = epoch.current;
+    const res = await workflowAction(
+      "load active runs",
+      (c, iid) => c.workflowRunsHistory(iid, { limit: 50 }),
+      true,
+      undefined,
+      instanceId,
+    );
+    if (at !== epoch.current) return;
+    if (res) setRows(res.runs.filter((r) => RUN_ACTIVE.has(r.status)));
+  }
+
+  useEffect(() => {
+    epoch.current += 1;
+    setRows(null);
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => {
+      epoch.current += 1;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  if (rows === null || rows.length === 0) return null;
+
+  async function stop(row: WorkflowRunRow) {
+    const launch = lookupLaunch(row.runId);
+    const sessionId = launch?.acpSessionId ?? row.acpSessionId;
+    if (!sessionId) return;
+    const ok = await stopWorkflowRun(
+      row.runId,
+      sessionId,
+      launch?.instanceId ?? instanceId,
+    );
+    if (ok) void load();
+  }
+
+  return (
+    <ConfigBlock title={t("zconfig.workflowActiveTitle")} divided>
+      {rows.map((r) => {
+        const launch = lookupLaunch(r.runId);
+        const rowSessionId = launch?.acpSessionId ?? r.acpSessionId;
+        const rowInstanceId = launch?.instanceId ?? instanceId;
+        const label = r.name ?? r.runId.slice(0, 12);
+        return (
+          <div key={r.runId} className="px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">
+                {label}
+              </span>
+              <StatusBadge status={r.status} />
+            </div>
+            {rowSessionId && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() =>
+                    onOpenRun(rowSessionId, r.runId, r.name ?? label, rowInstanceId)
+                  }
+                  className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
+                >
+                  {t("zconfig.workflowRunDetail")}
+                </button>
+                <button
+                  onClick={() => void stop(r)}
+                  className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-[11px] font-medium text-red-300 active:bg-red-500/25"
+                >
+                  {t("zconfig.workflowStopRun")}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </ConfigBlock>
   );
 }
 
@@ -447,6 +567,35 @@ function WorkflowDetail({
     }
   }
 
+  // Dismissal (bridge 0.58.0 hide list): the journal has no delete — a
+  // dismissed settled run disappears from every list the bridge serves,
+  // this page's history included.
+  async function dismissRun(row: WorkflowRunRow) {
+    const ok = await workflowAction(
+      "dismiss run",
+      (c, iid) => c.dismissWorkflowRun(iid, row.runId),
+      false,
+      undefined,
+      instanceId,
+    );
+    if (ok) void load();
+  }
+
+  async function clearFinished() {
+    const ids = (runs ?? [])
+      .filter((r) => !RUN_ACTIVE.has(r.status))
+      .map((r) => r.runId);
+    if (ids.length === 0) return;
+    const res = await workflowAction(
+      "clear finished runs",
+      (c, iid) => c.dismissWorkflowRuns(iid, ids),
+      false,
+      undefined,
+      instanceId,
+    );
+    if (res) void load();
+  }
+
   async function remove() {
     setConfirmDelete(false);
     const res = await workflowAction(
@@ -589,6 +738,15 @@ function WorkflowDetail({
       )}
 
       <ConfigBlock title={t("zconfig.workflowRunsTitle")} divided>
+        {runs !== null &&
+          runs.some((r) => !RUN_ACTIVE.has(r.status)) && (
+            <button
+              onClick={() => void clearFinished()}
+              className="w-full px-4 py-2 text-left text-[11px] text-faint active:bg-white/[0.05]"
+            >
+              {t("zconfig.workflowClearFinished")}
+            </button>
+          )}
         {runs === null ? (
           // Loading only while a read is in flight; a FAILED read keeps
           // `runs` null with no spinner — the toast owns that story.
@@ -636,6 +794,16 @@ function WorkflowDetail({
                     )}
                   </span>
                   <StatusBadge status={summary?.status ?? r.status} />
+                  {!RUN_ACTIVE.has(summary?.status ?? r.status) && (
+                    <button
+                      onClick={() => void dismissRun(r)}
+                      aria-label={t("zconfig.workflowDismissRun")}
+                      title={t("zconfig.workflowDismissRun")}
+                      className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint active:bg-white/[0.1]"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
                 </div>
                 {rowSessionId ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">

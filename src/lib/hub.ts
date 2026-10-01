@@ -810,11 +810,41 @@ export class HubClient {
     if (opts.scope) q.set("scope", opts.scope);
     if (opts.name) q.set("name", opts.name);
     if (opts.limit !== undefined) q.set("limit", String(opts.limit));
-    const qs = q.size > 0 ? `?${q}` : "";
+    const qs = q.size > 0 ? `?${q.toString()}` : "";
     const res = await this.fetch(
       `${this.instSettings(instanceId)}/workflows/runs${qs}`,
     );
     return (await res.json()) as WorkflowRunsHistoryResponse;
+  }
+
+  /**
+   * Hide one settled journal run from the bridge's run lists (bridge 0.58.0
+   * bridge-side hide list — the journal itself has no delete). 409 while the
+   * run is still flying.
+   */
+  async dismissWorkflowRun(instanceId: string, runId: string): Promise<{ ok: boolean }> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/dismiss`,
+      "POST",
+    );
+    return (await res.json()) as { ok: boolean };
+  }
+
+  /** Batch variant: still-running ids are skipped, the settled ones hidden. */
+  async dismissWorkflowRuns(
+    instanceId: string,
+    runIds: string[],
+  ): Promise<{ ok: boolean; dismissed: number; skippedActive: number }> {
+    const res = await this.fetch(
+      `${this.instSettings(instanceId)}/workflow-runs/dismiss-batch`,
+      "POST",
+      { runIds },
+    );
+    return (await res.json()) as {
+      ok: boolean;
+      dismissed: number;
+      skippedActive: number;
+    };
   }
 
   /** The desktop's prefilled "create via conversation" prompt. */

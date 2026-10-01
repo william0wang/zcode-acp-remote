@@ -455,9 +455,6 @@ interface AppState {
     instanceId: string;
   }) => void;
   clearWorkflowRunTarget: () => void;
-  // Runs of the CURRENT session (session panel's observation block):
-  // journal summaries via the per-instance conversationRuns query.
-  loadSessionRuns: (sessionId: string) => Promise<ConversationRunSummary[] | null>;
   // Text the next mounted composer adopts as its draft (the workflow
   // "create via conversation" entry). Nonce-keyed so the same text twice
   // still reads as a new request; consumed exactly once.
@@ -3892,19 +3889,6 @@ export const useAppStore = create<AppState>((set, get) => {
         }),
       );
       return out;
-    },
-
-    loadSessionRuns: async (sessionId) => {
-      const client = hub();
-      const instanceId = get().instanceId;
-      if (!client || !instanceId) return null;
-      try {
-        const res = await client.conversationRuns(instanceId, sessionId);
-        return res?.runs ?? [];
-      } catch {
-        // Unknown session (bridge restart, closed) — read as "no rows".
-        return null;
-      }
     },
 
     openWorkflowRun: (target) => {
