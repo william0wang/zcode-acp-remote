@@ -22,6 +22,7 @@ import type {
   WorkflowGateSetResponse,
   WorkflowListResponse,
   WorkflowNodeResultResponse,
+  WorkflowOverviewResponse,
   WorkflowRunEventsResponse,
   WorkflowRunsHistoryResponse,
   WorkflowScope,
@@ -685,6 +686,17 @@ export class HubClient {
       `${this.instSettings(instanceId)}/workflows${q}`,
     );
     return (await res.json()) as WorkflowListResponse;
+  }
+
+  /**
+   * The machine-level workflow page payload (hub, bridge 0.60.0): one group
+   * per workspace (deduped hub-side), pre-joined badges, plus the machine-wide
+   * active-run list. Not instance-addressed — the hub aggregates every
+   * registered bridge; the app renders the answer as-is.
+   */
+  async workflowOverview(): Promise<WorkflowOverviewResponse> {
+    const res = await this.fetch("/api/workflow-overview");
+    return (await res.json()) as WorkflowOverviewResponse;
   }
 
   async workflowGet(

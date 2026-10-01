@@ -115,6 +115,132 @@ test("loadWorkflows stores the list for the scope asked", async () => {
   expect(useAppStore.getState().configWorkflowScope).toBe("project");
 });
 
+test("loadWorkflowHub consumes the hub's pre-aggregated overview as-is", async () => {
+  const useAppStore = await connectedStore();
+  route(
+    "/api/workflow-overview",
+    ok({
+      ok: true,
+      groups: [
+        {
+          instanceId: "i1",
+          scope: "global",
+          workspace: "",
+          workflows: [{ name: "nightly" }],
+          invalid: [],
+          lastRuns: {},
+          error: null,
+        },
+        {
+          instanceId: "i2",
+          scope: "project",
+          workspace: "/proj/a",
+          workflows: [{ name: "deploy" }],
+          invalid: [],
+          lastRuns: { deploy: { runId: "r1", name: "deploy", status: "running" } },
+          error: null,
+        },
+      ],
+      activeRuns: [
+        {
+          runId: "r1",
+          name: "deploy",
+          status: "running",
+          acpSessionId: "sess",
+          ownerInstanceId: "i2",
+        },
+      ],
+    }),
+  );
+  await useAppStore.getState().loadWorkflowHub();
+  const s = useAppStore.getState();
+  // One group per WORKSPACE, exactly as served — no per-instance fan-out and
+  // no client-side merge to get wrong.
+  expect(s.workflowHub?.map((g) => g.workspace)).toEqual(["", "/proj/a"]);
+  expect(s.workflowActiveRuns?.[0]).toMatchObject({
+    runId: "r1",
+    ownerInstanceId: "i2",
+  });
+  // The ONLY request is the hub-level route — per-instance reads are gone.
+  expect(requested.filter((r) => r.url.includes("workflow"))).toEqual([
+    expect.objectContaining({ url: expect.stringContaining("/api/workflow-overview") }),
+  ]);
+});
+
+test("a 404 overview is the actionable hub-too-old story, cleared by a later success", async () => {
+  const useAppStore = await connectedStore();
+  route(
+    "/api/workflow-overview",
+    refused(404, { ok: false, error: "not found" }),
+  );
+  await useAppStore.getState().loadWorkflowHub();
+  let s = useAppStore.getState();
+  // First load failed: an empty list that has "loaded" plus the actionable
+  // error — the page shows the restart-the-hub story, not a dead spinner.
+  expect(s.workflowHub).toEqual([]);
+  expect(s.workflowHubError).toContain("restart the hub");
+  expect(s.workflowHubLoading).toBe(false);
+  expect(s.toast).toBeNull();
+
+  // The hub comes back (restarted): the next successful poll clears the
+  // error and lands real groups.
+  route(
+    "/api/workflow-overview",
+    ok({
+      ok: true,
+      groups: [
+        {
+          instanceId: "i1",
+          scope: "global",
+          workspace: "",
+          workflows: [],
+          invalid: [],
+          lastRuns: {},
+          error: null,
+        },
+      ],
+      activeRuns: [],
+    }),
+  );
+  await useAppStore.getState().loadWorkflowHub();
+  s = useAppStore.getState();
+  expect(s.workflowHubError).toBeNull();
+  expect(s.workflowHub).toHaveLength(1);
+});
+
+test("a transient overview failure keeps the last groups without an error paint", async () => {
+  const useAppStore = await connectedStore();
+  route(
+    "/api/workflow-overview",
+    ok({
+      ok: true,
+      groups: [
+        {
+          instanceId: "i1",
+          scope: "global",
+          workspace: "",
+          workflows: [{ name: "nightly" }],
+          invalid: [],
+          lastRuns: {},
+          error: null,
+        },
+      ],
+      activeRuns: [],
+    }),
+  );
+  await useAppStore.getState().loadWorkflowHub();
+
+  route(
+    "/api/workflow-overview",
+    refused(500, { ok: false, error: "boom" }),
+  );
+  await useAppStore.getState().loadWorkflowHub();
+  const s = useAppStore.getState();
+  expect(s.workflowHub).toHaveLength(1); // the working list stays on screen
+  expect(s.workflowHubError).toBeNull();
+  expect(s.workflowHubLoading).toBe(false);
+});
+
 test("a scope answer that lands after a newer ask is dropped, not painted", async () => {
   const useAppStore = await connectedStore();
   // Two taps, two in-flight reads: the slower (project) answer must not

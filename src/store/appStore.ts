@@ -427,12 +427,22 @@ interface AppState {
   // reports no `enabled` field at all, so this is the only honest source for
   // "show the workflows entry". Null = not probed (reads as hidden).
   configWorkflowGate: SettingsAll["workflow"] | null;
-  // Cross-instance saved-workflow groups for the management page (desktop
-  // hub parity): one global group + one per hub instance (its project's
-  // workflows), each with per-name last-run rows for badges. A group whose
-  // instance refuses (gate off / offline) carries `error` and shows as
+  // Machine-level saved-workflow groups for the management page, served
+  // pre-aggregated by the hub (/api/workflow-overview, bridge 0.60.0): one
+  // global group + one per WORKSPACE (a project with two bridges renders
+  // once — the hub dedupes), each with per-name last-run rows for badges.
+  // A workspace whose every bridge failed carries `error` and shows as
   // unavailable instead of hiding the project.
   workflowHub: WorkflowHubGroup[] | null;
+  // The same overview's machine-wide active-run list (journal rows with
+  // status pending/running, owner-instance annotated by the hub). The
+  // page's live zone renders exactly this — no per-instance queries.
+  workflowActiveRuns: WorkflowRunRow[] | null;
+  // The overview load's own error (a hub too old to serve the route, or a
+  // transport failure on the first load). Kept SEPARATE from configError:
+  // the list-changed notification can refresh the hub while another section
+  // is open, and that refresh must never stomp the other section's error.
+  workflowHubError: string | null;
   workflowHubLoading: boolean;
   loadWorkflowHub: () => Promise<void>;
   // Bridge-side directory watch (bridge 0.57.0): the connected instance's
@@ -790,24 +800,6 @@ function isTransientConnError(e: unknown): boolean {
 }
 
 /**
- * Per workflow NAME, the newest journal row (`updatedAt` desc, first seen) —
- * the desktop hub's `lastRunByWorkflowName` semantics for the list badge: a
- * run the model named differently is simply not joined to any saved entry.
- */
-function lastRunByName(
-  runs: WorkflowRunRow[],
-): Record<string, WorkflowRunRow> {
-  const byName: Record<string, WorkflowRunRow> = {};
-  const sorted = [...runs].sort(
-    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-  );
-  for (const r of sorted) {
-    if (r.name && !byName[r.name]) byName[r.name] = r;
-  }
-  return byName;
-}
-
-/**
  * Idempotency key for one reset-card GESTURE.
  *
  * A spent card is gone, so the backend keys a spend on this value: a retry
@@ -960,6 +952,8 @@ function connectionResetPatch(): Partial<AppState> {
     configWorkflowScope: "project",
     configWorkflowGate: null,
     workflowHub: null,
+    workflowActiveRuns: null,
+    workflowHubError: null,
     workflowHubLoading: false,
     workflowRunTarget: null,
     composerPrefill: null,
@@ -2148,6 +2142,8 @@ export const useAppStore = create<AppState>((set, get) => {
     configWorkflowScope: "project",
     configWorkflowGate: null,
     workflowHub: null,
+    workflowActiveRuns: null,
+    workflowHubError: null,
     workflowHubLoading: false,
     workflowRunTarget: null,
     composerPrefill: null,
@@ -3865,98 +3861,43 @@ export const useAppStore = create<AppState>((set, get) => {
       if (get().workflowHub !== null) void get().loadWorkflowHub();
     },
 
-    // Desktop hub parity for the management page's list: global group once
-    // (whichever instance answers — the global dir is machine-wide) + one
-    // project group PER hub instance, each joined with its per-name newest
-    // journal row for the running/terminal badge. All instance reads run in
-    // parallel and a failing instance degrades to an `error` group (the
-    // workflow saved in ANOTHER project's chat must not vanish from the page
-    // just because the app is connected elsewhere — observed 2026-10-01).
+    // The management page's machine-level list, served PRE-AGGREGATED by the
+    // hub (/api/workflow-overview — bridge 0.60.0): one global group + one
+    // project group per WORKSPACE (the hub dedupes the editor/serve bridge
+    // pair and races the reads), each joined hub-side with its per-name
+    // newest journal row, plus the machine-wide active-run list. The app
+    // renders the answer as-is — no cross-instance merging here.
     loadWorkflowHub: async () => {
       const client = hub();
       if (!client) return;
       set({ workflowHubLoading: true });
-      const instances = get().instances;
-      // Preallocated per-instance slots keep the groups in instance order —
-      // completion-order pushes made the sections reorder on every 5s
-      // refresh once instance reads started racing.
-      const slots: Array<WorkflowHubGroup | null> = instances.map(() => null);
-      let globalList: WorkflowListResponse | null = null;
-      let globalRuns: WorkflowRunRow[] = [];
-      let globalInstanceId = "";
-      const globalAwaits: Promise<void>[] = [];
-      const groupAwaits = instances.map(async (inst, idx) => {
-        // Global scans race from every instance as a LIST+RUNS PAIR: the
-        // first fully-settled pair claims the whole group (a gate-off
-        // instance rejects, another answers for the machine). Racing the
-        // runs read separately let the journal answer land before the list
-        // it belongs to — the badge rows were then dropped with nobody to
-        // re-write them, and active global runs never armed the poller.
-        globalAwaits.push(
-          Promise.all([
-            client.workflowsList(inst.id, "global"),
-            client.workflowRunsHistory(inst.id, { scope: "global", limit: 50 }),
-          ])
-            .then(([list, runs]) => {
-              if (globalList !== null) return;
-              globalList = list;
-              globalRuns = runs?.runs ?? [];
-              // Actions on the global group must address the instance that
-              // actually answered — pinning instances[0] breaks them all
-              // whenever that bridge is offline.
-              globalInstanceId = inst.id;
-            })
-            .catch(() => {}),
-        );
-        const [list, runs] = await Promise.all([
-          client.workflowsList(inst.id, "project").catch((e: unknown) => ({
-            error: e instanceof Error ? e.message : String(e),
-          })),
-          client
-            .workflowRunsHistory(inst.id, { scope: "project", limit: 50 })
-            .catch(() => null),
-        ]);
-        if (list && "error" in list) {
-          slots[idx] = {
-            instanceId: inst.id,
-            scope: "project",
-            workspace: inst.workspace ?? inst.id,
-            workflows: [],
-            invalid: [],
-            lastRuns: {},
-            error: list.error,
-          };
-          return;
-        }
-        const ok = list as WorkflowListResponse;
-        slots[idx] = {
-          instanceId: inst.id,
-          scope: "project",
-          workspace: inst.workspace ?? inst.id,
-          workflows: ok.workflows ?? [],
-          invalid: ok.invalid ?? [],
-          lastRuns: lastRunByName(runs?.runs ?? []),
-          error: null,
-        };
-      });
-      await Promise.all([...groupAwaits, ...globalAwaits]);
-      const groups = slots.filter((g): g is WorkflowHubGroup => g !== null);
-      // The global group leads the page once every read has settled. (The
-      // cast defeats TS's closure-blind narrowing: globalList is only ever
-      // assigned inside the settled promises above.)
-      const gList = globalList as WorkflowListResponse | null;
-      if (gList !== null) {
-        groups.unshift({
-          instanceId: globalInstanceId,
-          scope: "global",
-          workspace: "",
-          workflows: gList.workflows ?? [],
-          invalid: gList.invalid ?? [],
-          lastRuns: lastRunByName(globalRuns),
-          error: null,
+      try {
+        const res = await client.workflowOverview();
+        set({
+          workflowHub: res.groups ?? [],
+          workflowActiveRuns: res.activeRuns ?? [],
+          workflowHubError: null,
+          workflowHubLoading: false,
+        });
+      } catch (e) {
+        // 404 = the hub PREDATES the overview route: a version gap, not a
+        // transient failure — surface the actionable "restart the hub" story.
+        // Anything else is a blip: keep the last groups, no error paint over
+        // working content (the FIRST load of a broken connection still needs
+        // a story, so an empty list with nothing yet loaded takes the error).
+        const message =
+          e instanceof HubApiError && e.status === 404
+            ? "the hub does not serve the workflow overview yet — restart the hub to update it"
+            : e instanceof Error
+              ? e.message
+              : String(e);
+        const hadData = get().workflowHub !== null;
+        set({
+          ...(hadData ? {} : { workflowHub: [], workflowActiveRuns: [] }),
+          workflowHubError: hadData ? get().workflowHubError : message,
+          workflowHubLoading: false,
         });
       }
-      set({ workflowHub: groups, workflowHubLoading: false });
     },
 
     restartConfigBackend: async () => {

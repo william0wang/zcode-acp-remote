@@ -40,6 +40,15 @@ test("settingsAll reads the machine-level mount, not an instance", async () => {
   expect(requested[0]!.url).toBe("http://hub/api/settings/all");
 });
 
+test("workflowOverview is a hub-level read (the hub aggregates the instances)", async () => {
+  responses.push(Response.json({ ok: true, groups: [], activeRuns: [] }));
+  const res = await client().workflowOverview();
+  expect(res.groups).toEqual([]);
+  // NOT instance-addressed — the whole point of the route is that the hub
+  // dedupes bridges and merges the machine-wide journal server-side.
+  expect(requested[0]!.url).toBe("http://hub/api/workflow-overview");
+});
+
 test("section reads hit their own routes with the usage range encoded", async () => {
   responses.push(Response.json({ ok: true }));
   responses.push(Response.json({ ok: true }));

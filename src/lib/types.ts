@@ -604,12 +604,34 @@ export interface WorkflowRunRow {
   artifacts?: Array<{ id?: string; kind?: string; title?: string }>;
   resumedFrom?: string;
   supersededBy?: string;
+  /**
+   * Hub annotation on the overview's active runs (bridge 0.60.0): the
+   * instance whose live session list currently holds this run's session —
+   * the address for stop/resume from a client attached elsewhere. Absent
+   * when no instance lists the session (fall back to launch memory).
+   */
+  ownerInstanceId?: string;
 }
 
 export interface WorkflowRunsHistoryResponse {
   ok: boolean;
   runs: WorkflowRunRow[];
   truncated?: boolean;
+}
+
+/**
+ * The hub's machine-level workflow page payload (`/api/workflow-overview`,
+ * bridge 0.60.0): one group per WORKSPACE (a project with an editor + serve
+ * bridge renders once — the hub dedupes), each pre-joined with its per-name
+ * newest journal row, plus the machine-wide active-run list (the journal is
+ * shared across projects; a client attached to one instance must still see
+ * another project's flying runs). The app renders this as-is — no client-side
+ * merging or dedupe.
+ */
+export interface WorkflowOverviewResponse {
+  ok: boolean;
+  groups: WorkflowHubGroup[];
+  activeRuns: WorkflowRunRow[];
 }
 
 /**

@@ -52,9 +52,11 @@ const RUN_ACTIVE = new Set(["pending", "running"]);
 export function WorkflowsPage() {
   const { t } = useTranslation();
   const hubGroups = useAppStore((s) => s.workflowHub);
+  const activeRuns = useAppStore((s) => s.workflowActiveRuns);
   const loading = useAppStore((s) => s.workflowHubLoading);
   const supported = useAppStore((s) => s.configSupported);
   const error = useAppStore((s) => s.configError);
+  const hubError = useAppStore((s) => s.workflowHubError);
   const instanceId = useAppStore((s) => s.instanceId);
   const loadWorkflowHub = useAppStore((s) => s.loadWorkflowHub);
   const workflowAction = useAppStore((s) => s.workflowAction);
@@ -88,12 +90,16 @@ export function WorkflowsPage() {
   // page re-seeds here. No page-level mount effect — child effects run
   // before the parent's, so one here would double-fire the seed read.
 
-  // While any group's newest run is still active, refresh every 5s — the
+  // While anything is live anywhere on the machine — a group's newest run
+  // OR any active run on the machine-wide list (a project whose saved
+  // workflows the user never opened still counts) — refresh every 5s: the
   // remote stand-in for the desktop's directory watch + live projection.
   const anyRunning =
-    hubGroups?.some((g) =>
+    (hubGroups?.some((g) =>
       Object.values(g.lastRuns).some((r) => RUN_ACTIVE.has(r.status)),
-    ) ?? false;
+    ) ??
+      false) ||
+    (activeRuns?.some((r) => RUN_ACTIVE.has(r.status)) ?? false);
   useEffect(() => {
     if (!anyRunning) return;
     const timer = setInterval(() => void loadWorkflowHub(), 5000);
@@ -168,7 +174,7 @@ export function WorkflowsPage() {
       onRefresh={() => void loadWorkflowHub()}
       refreshing={loading}
       unsupported={supported === false}
-      error={error}
+      error={error ?? hubError}
       hasLoaded={hubGroups !== null}
     >
       {!instanceId && (
@@ -179,15 +185,16 @@ export function WorkflowsPage() {
 
       {/* The live zone: everything workflow-related lives INSIDE this page
           (the session panel keeps only the entry row) — in-flight runs get
-          the big area up top, settled history stays in each workflow. */}
-      {instanceId && (
-        <ActiveRunsBlock
-          instanceId={instanceId}
-          onOpenRun={(sessionId, runId, name, ownerInstanceId) =>
-            setRunDetail({ sessionId, runId, name, instanceId: ownerInstanceId })
-          }
-        />
-      )}
+          the big area up top, settled history stays in each workflow. Not
+          gated on a connected instance: the run list is machine-wide (hub
+          overview) and each row carries its owner instance, so runs started
+          in projects this app is NOT attached to still show up. */}
+      <ActiveRunsBlock
+        instanceId={instanceId}
+        onOpenRun={(sessionId, runId, name, ownerInstanceId) =>
+          setRunDetail({ sessionId, runId, name, instanceId: ownerInstanceId })
+        }
+      />
 
       {allEmpty ? (
         <ConfigEmpty text={t("zconfig.workflowsEmpty")} />
@@ -217,16 +224,22 @@ export function WorkflowsPage() {
 }
 
 /**
- * The instance's in-flight runs — the live zone at the top of the management
- * page. Hidden entirely when nothing is flying (the page stays quiet), 5s
- * poll while visible: rows settle, and a run started elsewhere (editor,
- * another client) must appear here too.
+ * The machine-wide in-flight runs — the live zone at the top of the page,
+ * rendered STRAIGHT from the hub's overview (bridge 0.60.0): the journal is
+ * shared across every project, so this list covers all of them, and each row
+ * carries the hub-annotated `ownerInstanceId` (the instance whose live
+ * session list holds the run's session) so stop/detail address the right
+ * bridge even though they are not the connected one. Hidden entirely when
+ * nothing flies; the page's 5s overview poll follows the same store state.
  */
 function ActiveRunsBlock({
   instanceId,
   onOpenRun,
 }: {
-  instanceId: string;
+  /** The connected instance — LAST-RESORT action address; null when the app
+   *  is not attached to any session (the hub's owner annotation still routes
+   *  stop/detail correctly). */
+  instanceId: string | null;
   onOpenRun: (
     sessionId: string,
     runId: string,
@@ -238,13 +251,12 @@ function ActiveRunsBlock({
   const workflowAction = useAppStore((s) => s.workflowAction);
   const stopWorkflowRun = useAppStore((s) => s.stopWorkflowRun);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const [rows, setRows] = useState<WorkflowRunRow[] | null>(null);
+  const rows = useAppStore((s) => s.workflowActiveRuns);
   // Last-resort session join: runId → the CURRENT ACP session, filled from
-  // conversationRuns. The panel-era management actions were always available
-  // for this session's runs (they addressed activeSessionId directly); the
-  // journal rows rely on launch memory + the bridge's acpSessionId join,
-  // and BOTH can miss (cleared app data, bridge < 0.57, an alias the bridge
-  // cannot resolve) — this map restores those rows' actions.
+  // conversationRuns. The hub's `acpSessionId` join covers editor-launched
+  // runs and launch memory covers this app's own, but a run started in the
+  // open session before this app's data survived (or that the bridge cannot
+  // alias-resolve) is only reachable through this map.
   const [sessionRuns, setSessionRuns] = useState<Map<string, string>>(
     new Map(),
   );
@@ -253,39 +265,25 @@ function ActiveRunsBlock({
   // wrong instance for up to a poll cycle.
   const epoch = useRef(0);
 
-  // Silent by design: a background poll — a transient failure just keeps the
-  // previous rows; the groups below carry the visible error stories.
-  async function load() {
-    const at = epoch.current;
-    const res = await workflowAction(
-      "load active runs",
-      (c, iid) => c.workflowRunsHistory(iid, { limit: 50 }),
-      true,
-      undefined,
-      instanceId,
-    );
-    if (at !== epoch.current) return;
-    if (res) setRows(res.runs.filter((r) => RUN_ACTIVE.has(r.status)));
-    if (!activeSessionId) return;
-    const conv = await workflowAction(
-      "load session runs",
-      (c) => c.conversationRuns(instanceId, activeSessionId),
-      true,
-    );
-    if (at !== epoch.current) return;
-    // A failed read keeps the previous map: a transient network blip must
-    // not flash the rows action-less. Stale keys are runId-exact, so a kept
-    // entry can only act on a run that was in this session.
-    if (conv)
-      setSessionRuns(
-        new Map(conv.runs.map((r) => [r.runId, activeSessionId])),
-      );
-  }
-
   useEffect(() => {
     epoch.current += 1;
-    setRows(null);
     setSessionRuns(new Map());
+    if (!activeSessionId || !instanceId) return;
+    // Silent by design: a background poll — a transient failure just keeps
+    // the previous map. Stale keys are runId-exact, so a kept entry can only
+    // act on a run that was in this session.
+    const iid = instanceId;
+    const sid = activeSessionId;
+    async function load() {
+      const at = epoch.current;
+      const conv = await workflowAction(
+        "load session runs",
+        (c) => c.conversationRuns(iid, sid),
+        true,
+      );
+      if (at !== epoch.current) return;
+      if (conv) setSessionRuns(new Map(conv.runs.map((r) => [r.runId, sid])));
+    }
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
@@ -302,12 +300,13 @@ function ActiveRunsBlock({
     const sessionId =
       launch?.acpSessionId ?? row.acpSessionId ?? sessionRuns.get(row.runId);
     if (!sessionId) return;
-    const ok = await stopWorkflowRun(
-      row.runId,
-      sessionId,
-      launch?.instanceId ?? instanceId,
-    );
-    if (ok) void load();
+    // The hub's owner annotation is the live truth (that instance currently
+    // lists the session); launch memory is the fallback for rows the hub
+    // could not place.
+    const ownerInstanceId =
+      row.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? undefined;
+    const ok = await stopWorkflowRun(row.runId, sessionId, ownerInstanceId);
+    if (ok) void useAppStore.getState().loadWorkflowHub();
   }
 
   return (
@@ -316,7 +315,8 @@ function ActiveRunsBlock({
         const launch = lookupLaunch(r.runId);
         const rowSessionId =
           launch?.acpSessionId ?? r.acpSessionId ?? sessionRuns.get(r.runId);
-        const rowInstanceId = launch?.instanceId ?? instanceId;
+        const rowInstanceId =
+          r.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? "";
         const label = r.name ?? r.runId.slice(0, 12);
         return (
           <div key={r.runId} className="px-4 py-3">
@@ -326,7 +326,7 @@ function ActiveRunsBlock({
               </span>
               <StatusBadge status={r.status} />
             </div>
-            {rowSessionId && (
+            {rowSessionId && rowInstanceId && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <button
                   onClick={() =>
