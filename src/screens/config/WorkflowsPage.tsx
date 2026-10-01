@@ -237,7 +237,17 @@ function ActiveRunsBlock({
   const { t } = useTranslation();
   const workflowAction = useAppStore((s) => s.workflowAction);
   const stopWorkflowRun = useAppStore((s) => s.stopWorkflowRun);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
   const [rows, setRows] = useState<WorkflowRunRow[] | null>(null);
+  // Last-resort session join: runId → the CURRENT ACP session, filled from
+  // conversationRuns. The panel-era management actions were always available
+  // for this session's runs (they addressed activeSessionId directly); the
+  // journal rows rely on launch memory + the bridge's acpSessionId join,
+  // and BOTH can miss (cleared app data, bridge < 0.57, an alias the bridge
+  // cannot resolve) — this map restores those rows' actions.
+  const [sessionRuns, setSessionRuns] = useState<Map<string, string>>(
+    new Map(),
+  );
   // Epoch guard: an in-flight read from a PREVIOUS instance (or a closed
   // page) must not land — its rows would misattribute stop actions to the
   // wrong instance for up to a poll cycle.
@@ -256,11 +266,26 @@ function ActiveRunsBlock({
     );
     if (at !== epoch.current) return;
     if (res) setRows(res.runs.filter((r) => RUN_ACTIVE.has(r.status)));
+    if (!activeSessionId) return;
+    const conv = await workflowAction(
+      "load session runs",
+      (c) => c.conversationRuns(instanceId, activeSessionId),
+      true,
+    );
+    if (at !== epoch.current) return;
+    // A failed read keeps the previous map: a transient network blip must
+    // not flash the rows action-less. Stale keys are runId-exact, so a kept
+    // entry can only act on a run that was in this session.
+    if (conv)
+      setSessionRuns(
+        new Map(conv.runs.map((r) => [r.runId, activeSessionId])),
+      );
   }
 
   useEffect(() => {
     epoch.current += 1;
     setRows(null);
+    setSessionRuns(new Map());
     void load();
     const timer = setInterval(() => void load(), 5000);
     return () => {
@@ -268,13 +293,14 @@ function ActiveRunsBlock({
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId]);
+  }, [instanceId, activeSessionId]);
 
   if (rows === null || rows.length === 0) return null;
 
   async function stop(row: WorkflowRunRow) {
     const launch = lookupLaunch(row.runId);
-    const sessionId = launch?.acpSessionId ?? row.acpSessionId;
+    const sessionId =
+      launch?.acpSessionId ?? row.acpSessionId ?? sessionRuns.get(row.runId);
     if (!sessionId) return;
     const ok = await stopWorkflowRun(
       row.runId,
@@ -288,7 +314,8 @@ function ActiveRunsBlock({
     <ConfigBlock title={t("zconfig.workflowActiveTitle")} divided>
       {rows.map((r) => {
         const launch = lookupLaunch(r.runId);
-        const rowSessionId = launch?.acpSessionId ?? r.acpSessionId;
+        const rowSessionId =
+          launch?.acpSessionId ?? r.acpSessionId ?? sessionRuns.get(r.runId);
         const rowInstanceId = launch?.instanceId ?? instanceId;
         const label = r.name ?? r.runId.slice(0, 12);
         return (
