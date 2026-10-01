@@ -40,9 +40,11 @@ import type {
 // whole page is inert without a connected hub.
 //
 // Run rows split by what the app can KNOW: a run this app launched carries
-// its ACP session in the local launch memory (open / inspect / resume);
-// every other row — an editor-driven run, or one whose bridge died — is
-// read-only, because the journal only records the backend session id.
+// its ACP session in the local launch memory (open / inspect / resume), and
+// an editor-launched run carries the bridge-joined acpSessionId (bridge
+// 0.57.0 resolves the journal's backend session id to an attachable alias).
+// A row with NEITHER — an old journal row, or one whose bridge lost every
+// alias — stays read-only.
 
 /** Journal status tokens that keep the 5s list poll alive. */
 const RUN_ACTIVE = new Set(["pending", "running"]);
@@ -332,13 +334,14 @@ function WorkflowDetail({
     // the render below shows nothing rather than dressing the error up as
     // "no runs recorded yet" (the toast already said what went wrong).
     if (history) setRuns(history.runs);
-    // Refresh the resumable verdicts for the sessions this app launched
-    // into — silent per design (loadRunSummaries), so dead sessions simply
+    // Refresh the resumable verdicts for every session a row can act on —
+    // this app's launches AND the bridge-joined aliases of editor-launched
+    // runs — silent per design (loadRunSummaries), so dead sessions simply
     // leave their rows without a resume button.
     const sessionIds = Array.from(
       new Set(
         (history?.runs ?? [])
-          .map((r) => lookupLaunch(r.runId)?.acpSessionId)
+          .flatMap((r) => [lookupLaunch(r.runId)?.acpSessionId, r.acpSessionId])
           .filter((sid): sid is string => Boolean(sid)),
       ),
     );
@@ -429,16 +432,18 @@ function WorkflowDetail({
 
   async function resume(row: WorkflowRunRow) {
     const launch = lookupLaunch(row.runId);
-    if (!launch) return;
+    const sessionId = launch?.acpSessionId ?? row.acpSessionId;
+    if (!sessionId) return;
+    const ownerInstance = launch?.instanceId ?? instanceId;
     const ok = await resumeWorkflowRun({
       runId: row.runId,
-      sessionId: launch.acpSessionId,
+      sessionId,
       ...(row.name ? { name: row.name } : {}),
-      instanceId,
+      instanceId: ownerInstance,
     });
     if (ok) {
       useAppStore.getState().closeConfig();
-      void openSession(launch.instanceId, launch.acpSessionId);
+      void openSession(ownerInstance, sessionId);
     }
   }
 
@@ -597,8 +602,13 @@ function WorkflowDetail({
         ) : (
           runs.map((r) => {
             const launch = lookupLaunch(r.runId);
-            const summary = launch
-              ? summaries[launch.acpSessionId]?.find((s) => s.runId === r.runId)
+            // The launch memory wins for runs this app started (it knows the
+            // owning instance); the bridge-joined alias (bridge 0.57.0) makes
+            // editor-launched runs actionable too. Neither = read-only row.
+            const rowSessionId = launch?.acpSessionId ?? r.acpSessionId;
+            const rowInstanceId = launch?.instanceId ?? instanceId;
+            const summary = rowSessionId
+              ? summaries[rowSessionId]?.find((s) => s.runId === r.runId)
               : undefined;
             return (
               <div key={r.runId} className="px-4 py-3">
@@ -627,25 +637,18 @@ function WorkflowDetail({
                   </span>
                   <StatusBadge status={summary?.status ?? r.status} />
                 </div>
-                {launch ? (
+                {rowSessionId ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <button
                       onClick={() =>
-                        onOpenRun(
-                          launch.acpSessionId,
-                          r.runId,
-                          r.name ?? name,
-                          launch.instanceId,
-                        )
+                        onOpenRun(rowSessionId, r.runId, r.name ?? name, rowInstanceId)
                       }
                       className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
                     >
                       {t("zconfig.workflowRunDetail")}
                     </button>
                     <button
-                      onClick={() =>
-                        void openSession(launch.instanceId, launch.acpSessionId)
-                      }
+                      onClick={() => void openSession(rowInstanceId, rowSessionId)}
                       className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
                     >
                       {t("zconfig.workflowOpenSession")}

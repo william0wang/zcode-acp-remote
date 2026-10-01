@@ -435,6 +435,11 @@ interface AppState {
   workflowHub: WorkflowHubGroup[] | null;
   workflowHubLoading: boolean;
   loadWorkflowHub: () => Promise<void>;
+  // Bridge-side directory watch (bridge 0.57.0): the connected instance's
+  // workflow lists changed by any means. Reloads only when the hub list is
+  // already loaded — nobody is watching otherwise, and the workflows page's
+  // own poll still covers active runs.
+  refreshWorkflowHubIfLoaded: () => void;
   // Deep link: open the management page straight at one run's detail (a
   // session-panel run row tap). Consumed exactly once by the page's mount.
   workflowRunTarget: {
@@ -1959,6 +1964,10 @@ export const useAppStore = create<AppState>((set, get) => {
         if (localPromptActive) return;
         set({ isRunning: false });
         flushPending();
+      },
+      onWorkflowListChanged: () => {
+        if (stale()) return;
+        get().refreshWorkflowHubIfLoaded();
       },
       onServerRequest: (req, respond) => {
         if (stale()) return;
@@ -3904,6 +3913,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     clearWorkflowRunTarget: () => set({ workflowRunTarget: null }),
+
+    refreshWorkflowHubIfLoaded: () => {
+      if (get().workflowHub !== null) void get().loadWorkflowHub();
+    },
 
     // Desktop hub parity for the management page's list: global group once
     // (whichever instance answers — the global dir is machine-wide) + one

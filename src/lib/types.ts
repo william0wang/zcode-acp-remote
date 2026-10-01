@@ -52,6 +52,13 @@ export interface HubHistorySession {
   // running = a turn is in flight. Both absent on the wire when false.
   live?: boolean;
   running?: boolean;
+  // Journal workflow activity joined bridge-side (bridge 0.57.0): runs of
+  // this session still pending/running in the journal's newest window, plus
+  // the newest run. Absent = gate off / no runs / older bridge.
+  workflowActivity?: {
+    active: number;
+    last?: { status: string; updatedAt?: number; name?: string };
+  };
   [key: string]: unknown;
 }
 
@@ -574,8 +581,10 @@ export interface WorkflowDetailResponse {
 
 /**
  * One history row from the journal (`workflows/runs` — cross-restart, not
- * session-bound). `parentSessionId` is the BACKEND session id: only runs this
- * app launched come with a known ACP session (the local launch memory).
+ * session-bound). `parentSessionId` is the BACKEND session id; `acpSessionId`
+ * is the attachable alias the bridge joined onto it (bridge 0.57.0) — present
+ * means an editor-launched run is actionable (open session / resume) without
+ * this app's own launch memory.
  * Lineage fields ride the upstream row extension (bridge passthrough already
  * pinned); absent until the upstream journal projection lands.
  */
@@ -588,6 +597,7 @@ export interface WorkflowRunRow {
   updatedAt?: number;
   spentTokens?: number;
   parentSessionId?: string;
+  acpSessionId?: string;
   toolCallId?: string;
   args?: Record<string, unknown>;
   cwd?: string;

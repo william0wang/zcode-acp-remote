@@ -25,6 +25,10 @@ export interface AcpHandlers {
   // Bridge extension `$/zcode/turnState`: a turn started/ended somewhere the
   // client can't infer (another client's prompt, restored after re-attach).
   onTurnState?: (sessionId: string, running: boolean) => void;
+  // Bridge extension `$/zcode/workflowListChanged` (bridge 0.57.0): the
+  // directory watch fired — a workflow was saved/deleted/moved by any means
+  // on the connected instance.
+  onWorkflowListChanged?: () => void;
 }
 
 interface PendingEntry {
@@ -210,6 +214,8 @@ export class AcpConnection {
         ) {
           this.handlers.onTurnState?.(p.sessionId, p.running);
         }
+      } else if (msg.method === "$/zcode/workflowListChanged") {
+        this.handlers.onWorkflowListChanged?.();
       } else if (msg.method === "$/cancel_request") {
         const id = (msg.params as { id?: number } | undefined)?.id;
         if (typeof id === "number") this.handlers.onCancelRequest(id);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Search } from "lucide-react";
+import { Search, Workflow } from "lucide-react";
 import { useAppStore } from "../store/appStore";
 import { fmtRelative } from "../lib/time";
 
@@ -20,6 +20,10 @@ export interface SessionRowItem {
   // Coarse "running" | "idle" from the hub heartbeat (REST) — used when no
   // instance connection exists to feed the live broadcast-based activity.
   status?: string;
+  // Journal workflow runs of this session still pending/running (bridge
+  // 0.57.0 workflowActivity join) — history rows only; renders the workflow
+  // chip. Absent on gate-off/older bridges = no chip.
+  workflowActive?: number;
 }
 
 // Session Activity (CONTEXT.md): awaiting confirmation > running > just
@@ -163,6 +167,12 @@ function SessionRow({
         >
           {item.title || t("chat.untitled")}
         </span>
+        {(item.workflowActive ?? 0) > 0 && (
+          <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-violet-300">
+            <Workflow className="size-3 animate-pulse" />
+            {item.workflowActive}
+          </span>
+        )}
         <ActivityBadge
           sessionId={item.sessionId}
           restRunning={item.status === "running"}

@@ -249,6 +249,7 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
           : undefined,
         workspace: s.cwd,
         status: s.running ? "running" : undefined,
+        workflowActive: s.workflowActivity?.active,
       })),
     [rows, instanceId],
   );
