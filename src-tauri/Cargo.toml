@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.20.1"
+version = "0.21.0"
 description = "Mobile remote client for zcode-acp: attach to a Hub over WebSocket"
 authors = ["William Wang"]
 license = "MIT"
