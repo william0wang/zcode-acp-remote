@@ -46,8 +46,12 @@ import type {
 // A row with NEITHER — an old journal row, or one whose bridge lost every
 // alias — stays read-only.
 
-/** Journal status tokens that keep the 5s list poll alive. */
+/** Journal status tokens for a run that is still flying (drives the poll cadence). */
 const RUN_ACTIVE = new Set(["pending", "running"]);
+
+/** Overview poll cadence: fast while anything is live anywhere, slow when idle. */
+const POLL_LIVE_MS = 5000;
+const POLL_IDLE_MS = 30_000;
 
 export function WorkflowsPage() {
   const { t } = useTranslation();
@@ -90,10 +94,13 @@ export function WorkflowsPage() {
   // page re-seeds here. No page-level mount effect — child effects run
   // before the parent's, so one here would double-fire the seed read.
 
-  // While anything is live anywhere on the machine — a group's newest run
-  // OR any active run on the machine-wide list (a project whose saved
-  // workflows the user never opened still counts) — refresh every 5s: the
-  // remote stand-in for the desktop's directory watch + live projection.
+  // Poll the overview for as long as the page is open — NOT gated on a
+  // one-shot read: a journal row can be terminal-and-wrong (bridge-side
+  // correction only happens per read), and a run started in another project
+  // must appear without a manual refresh. The cadence is adaptive: 5s while
+  // anything is live anywhere on the machine (badges and resume affordances
+  // follow the run), 30s once everything is settled — a steady 5s idle poll
+  // is pure hub churn for a page that rarely changes.
   const anyRunning =
     (hubGroups?.some((g) =>
       Object.values(g.lastRuns).some((r) => RUN_ACTIVE.has(r.status)),
@@ -101,8 +108,10 @@ export function WorkflowsPage() {
       false) ||
     (activeRuns?.some((r) => RUN_ACTIVE.has(r.status)) ?? false);
   useEffect(() => {
-    if (!anyRunning) return;
-    const timer = setInterval(() => void loadWorkflowHub(), 5000);
+    const timer = setInterval(
+      () => void loadWorkflowHub(),
+      anyRunning ? POLL_LIVE_MS : POLL_IDLE_MS,
+    );
     return () => clearInterval(timer);
   }, [anyRunning, loadWorkflowHub]);
 
@@ -230,7 +239,8 @@ export function WorkflowsPage() {
  * carries the hub-annotated `ownerInstanceId` (the instance whose live
  * session list holds the run's session) so stop/detail address the right
  * bridge even though they are not the connected one. Hidden entirely when
- * nothing flies; the page's 5s overview poll follows the same store state.
+ * nothing flies; the page's overview poll (5s live / 30s idle) follows the
+ * same store state.
  */
 function ActiveRunsBlock({
   instanceId,
@@ -265,10 +275,14 @@ function ActiveRunsBlock({
   // wrong instance for up to a poll cycle.
   const epoch = useRef(0);
 
+  // The fallback join only matters while live rows are on screen; with an
+  // empty list this poll would be a second idle 5s loop for nothing.
+  const hasRows = rows !== null && rows.length > 0;
+
   useEffect(() => {
     epoch.current += 1;
     setSessionRuns(new Map());
-    if (!activeSessionId || !instanceId) return;
+    if (!activeSessionId || !instanceId || !hasRows) return;
     // Silent by design: a background poll — a transient failure just keeps
     // the previous map. Stale keys are runId-exact, so a kept entry can only
     // act on a run that was in this session.
@@ -291,7 +305,7 @@ function ActiveRunsBlock({
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId, activeSessionId]);
+  }, [instanceId, activeSessionId, hasRows]);
 
   if (rows === null || rows.length === 0) return null;
 
