@@ -301,6 +301,7 @@
     "workflowSessionLost": "此运行所属的会话已不被桥接认识——展示最后的数据，仅只读",
     "workflowEvents": "事件",
     "workflowEventsEmpty": "此运行的日志里没有事件",
+    "workflowPhaseNodes": "{{n}} 个节点",
     "workflowArtifacts": "产物",
     "workflowArtifactsEmpty": "没有产物",
     "workflowWorkspace": "工作区",

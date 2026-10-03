@@ -338,6 +338,11 @@ function ActiveRunsBlock({
               <span className="min-w-0 flex-1 truncate text-sm text-ink">
                 {label}
               </span>
+              {r.updatedAt ? (
+                <span className="shrink-0 text-[10px] text-faint">
+                  {fmtStamp(r.updatedAt)}
+                </span>
+              ) : null}
               <StatusBadge status={r.status} />
             </div>
             {rowSessionId && rowInstanceId && (
@@ -394,27 +399,49 @@ function GroupBlock({
     <ConfigBlock title={label} divided>
       {group.workflows.map((w) => {
         const last = group.lastRuns[w.name];
+        // Desktop-parity card content: name + status, two-line description,
+        // and a footer of last-run time plus the last run's arg names.
+        const argNames = Object.keys(last?.args ?? {});
         return (
           <button
             key={w.name}
             onClick={() => onOpen(w.name)}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
+            className="flex w-full flex-col gap-1 px-4 py-3 text-left active:bg-white/[0.05]"
           >
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-ink">{w.name}</span>
-              {w.description && (
-                <span className="block truncate text-[11px] text-faint">
-                  {w.description}
-                </span>
-              )}
-              {last?.updatedAt ? (
-                <span className="mt-0.5 block text-[10px] text-faint">
-                  {fmtStamp(last.updatedAt)}
-                </span>
-              ) : null}
+            <span className="flex w-full items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">
+                {w.name}
+              </span>
+              {last ? <StatusBadge status={last.status} /> : null}
+              <ChevronRight className="size-4 shrink-0 text-faint" />
             </span>
-            {last ? <StatusBadge status={last.status} /> : null}
-            <ChevronRight className="size-4 shrink-0 text-faint" />
+            {w.description && (
+              <span className="line-clamp-2 text-[11px] leading-snug text-faint">
+                {w.description}
+              </span>
+            )}
+            {(last?.updatedAt || argNames.length > 0) && (
+              <span className="mt-0.5 flex w-full flex-wrap items-center gap-1.5">
+                {last?.updatedAt ? (
+                  <span className="text-[10px] text-faint">
+                    {fmtStamp(last.updatedAt)}
+                  </span>
+                ) : null}
+                {argNames.slice(0, 3).map((a) => (
+                  <span
+                    key={a}
+                    className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-dim"
+                  >
+                    {a}
+                  </span>
+                ))}
+                {argNames.length > 3 && (
+                  <span className="text-[10px] text-faint">
+                    +{argNames.length - 3}
+                  </span>
+                )}
+              </span>
+            )}
           </button>
         );
       })}

@@ -302,6 +302,7 @@
     "workflowSessionLost": "This run's session is no longer known to the bridge — showing the last data, read-only",
     "workflowEvents": "Events",
     "workflowEventsEmpty": "No events in this run's journal",
+    "workflowPhaseNodes": "{{n}} nodes",
     "workflowArtifacts": "Artifacts",
     "workflowArtifactsEmpty": "No artifacts produced",
     "workflowWorkspace": "Workspace",

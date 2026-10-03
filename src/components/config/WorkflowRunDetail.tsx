@@ -33,31 +33,40 @@ import {
 // invalidates, so a 3s tick while the run is active appends only the new
 // lines, and a settled run costs exactly one fetch per tab.
 
-/** Badge palette for a run/node status token (unknown tokens fall back gray). */
-const STATUS_STYLE: Record<string, string> = {
-  pending: "bg-white/[0.08] text-dim",
-  running: "bg-sky-500/20 text-sky-300",
-  completed: "bg-emerald-500/20 text-emerald-300",
-  errored: "bg-red-500/20 text-red-300",
-  failed: "bg-red-500/20 text-red-300",
-  stopped: "bg-amber-500/20 text-amber-300",
-  cancelled: "bg-amber-500/20 text-amber-300",
-  ok: "bg-emerald-500/20 text-emerald-300",
-  waiting: "bg-white/[0.08] text-dim",
-  queued: "bg-white/[0.08] text-dim",
-  dispatched: "bg-sky-500/20 text-sky-300",
-  executing: "bg-sky-500/20 text-sky-300",
-  settled: "bg-emerald-500/20 text-emerald-300",
+/**
+ * Desktop-parity status presentation (upstream run-status-presentation): a
+ * colored dot ALWAYS pairs with the word. Semantic split — success emerald,
+ * failure red with a halo, live sky (pulsing), pending an empty ring, and the
+ * stopped family (stopped/cancelled/superseded/interrupted) deliberately
+ * NEUTRAL: a stopped run is not an error. Unknown tokens fall back neutral.
+ */
+const STATUS_DOT: Record<string, string> = {
+  completed: "bg-emerald-400",
+  ok: "bg-emerald-400",
+  settled: "bg-emerald-400",
+  errored: "bg-red-400 ring-2 ring-red-400/25",
+  failed: "bg-red-400 ring-2 ring-red-400/25",
+  running: "bg-sky-400 animate-pulse",
+  dispatched: "bg-sky-400 animate-pulse",
+  executing: "bg-sky-400 animate-pulse",
+  pending: "bg-transparent ring-1 ring-white/40",
+  queued: "bg-transparent ring-1 ring-white/40",
+  waiting: "bg-transparent ring-1 ring-white/40",
+  stopped: "bg-white/35",
+  cancelled: "bg-white/35",
+  superseded: "bg-white/35",
+  interrupted: "bg-white/35",
 };
 
 export function StatusBadge({ status }: { status?: string }) {
   const token = status ?? "";
   return (
-    <span
-      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
-        STATUS_STYLE[token] ?? "bg-white/[0.08] text-dim"
-      }`}
-    >
+    <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-dim">
+      <span
+        className={`size-1.5 shrink-0 rounded-full ${
+          STATUS_DOT[token] ?? "bg-white/35"
+        }`}
+      />
       {token || "?"}
     </span>
   );
@@ -91,6 +100,32 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Desktop-parity op tile (upstream WorkflowWorkspaceCard's kind tile): a
+ * small colored square keyed by the op family — read/search/git/exec/write —
+ * so a long node list scans by color before it reads by text.
+ */
+const OP_TILE: Array<[RegExp, string]> = [
+  [/read|file|cat|list/, "bg-sky-500/15 text-sky-300"],
+  [/search|grep|glob|find|scan/, "bg-violet-500/15 text-violet-300"],
+  [/git/, "bg-amber-500/15 text-amber-300"],
+  [/shell|bash|exec|spawn|terminal|run/, "bg-emerald-500/15 text-emerald-300"],
+  [/write|edit|patch|apply|create|delete|move/, "bg-rose-500/15 text-rose-300"],
+];
+
+function opTileClass(op?: string): string {
+  if (op) for (const [re, cls] of OP_TILE) if (re.test(op)) return cls;
+  return "bg-white/[0.07] text-dim";
+}
+
+/** Wall time between two epoch-ms stamps, compact ("12s" / "3m41s"). */
+function fmtDuration(from?: number, to?: number): string | null {
+  if (!from || !to || to < from) return null;
+  const s = Math.round((to - from) / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
 /**
@@ -291,6 +326,35 @@ export function WorkflowRunDetail({
     [events],
   );
 
+  // Events sliced at every phase-entered boundary (the journal has no
+  // phase-exited — entering N implies N-1 done): each slice renders as one
+  // phase section with its actors and aggregated nodes underneath. A leading
+  // slice (phase: null) holds whatever preceded the first phase.
+  const phaseSlices = useMemo<PhaseSlice[]>(() => {
+    const out: PhaseSlice[] = [];
+    let cur: PhaseSlice = { phase: null, events: [] };
+    const pushIfUsed = () => {
+      if (cur.events.length > 0 || cur.phase !== null) out.push(cur);
+    };
+    for (const e of events ?? []) {
+      if (e.type === "phase-entered") {
+        const p = e.payload ?? {};
+        const name =
+          typeof p.phaseName === "string" && p.phaseName
+            ? p.phaseName
+            : typeof p.name === "string" && p.name
+              ? p.name
+              : "?";
+        pushIfUsed();
+        cur = { phase: name, events: [] };
+        continue;
+      }
+      cur.events.push(e);
+    }
+    pushIfUsed();
+    return out;
+  }, [events]);
+
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "events", label: t("zconfig.workflowEvents") },
     { id: "artifacts", label: t("zconfig.workflowArtifacts") },
@@ -315,8 +379,15 @@ export function WorkflowRunDetail({
           <h1 className="truncate text-base font-semibold">{title}</h1>
           <p className="flex items-center gap-1.5 text-[11px] text-faint">
             <StatusBadge status={summary?.status} />
-            {summary?.updatedAt ? fmtStamp(summary.updatedAt) : ""}
-            {summary?.failureMessage ? ` · ${summary.failureMessage}` : ""}
+            <span className="min-w-0 flex-1 truncate">
+              {[
+                summary?.updatedAt ? fmtStamp(summary.updatedAt) : "",
+                summary?.stopReason ?? "",
+                summary?.failureMessage ?? "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
           </p>
           {(summary?.resumedFrom || summary?.supersededBy) && (
             <p className="mt-0.5 truncate text-[10px] text-faint">
@@ -382,28 +453,16 @@ export function WorkflowRunDetail({
         )}
         {tab === "events" && (
           <>
-            {phases.length > 0 && (
-              <div className="mx-4 mb-2 flex flex-wrap items-center gap-1">
-                {phases.map((p, i) => (
-                  <span
-                    key={`${i}-${p}`}
-                    className={`rounded-md px-1.5 py-0.5 text-[10px] ${
-                      i === phases.length - 1
-                        ? "bg-sky-500/20 font-medium text-sky-300"
-                        : "bg-white/[0.06] text-faint"
-                    }`}
-                  >
-                    {p}
-                  </span>
-                ))}
-              </div>
-            )}
+            {phases.length > 0 && <PhaseTimeline phases={phases} running={active} />}
             {events !== null && events.length === 0 ? (
               <ConfigEmpty text={t("zconfig.workflowEventsEmpty")} />
             ) : (
               <div className="px-4">
-                {(events ?? []).map((ev) => (
-                  <EventRow key={ev.sequence} ev={ev} />
+                {phaseSlices.map((slice, i) => (
+                  <PhaseSection
+                    key={`${i}-${slice.phase ?? "pre"}`}
+                    slice={slice}
+                  />
                 ))}
                 {events === null && !sessionDead && !active && (
                   <button
@@ -470,18 +529,37 @@ export function WorkflowRunDetail({
               <ConfigBlock>
                 {(nodes ?? []).map((n, i) => {
                   const key = `${n.siteId ?? "?"}:${n.ordinal ?? i}`;
+                  const dur = fmtDuration(n.createdAt, n.updatedAt);
+                  const exitBad =
+                    n.summary?.exitCode !== undefined && n.summary.exitCode !== 0;
                   return (
-                    <div key={key} className="px-4 py-3">
+                    <div key={key} className="px-4 py-2.5">
                       <button
                         onClick={() => void loadNode(key, n)}
-                        className="flex w-full items-baseline gap-2 text-left"
+                        className="flex w-full items-center gap-2.5 text-left"
                       >
+                        <span
+                          className={`flex size-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-semibold uppercase ${opTileClass(n.op)}`}
+                        >
+                          {(n.op ?? "?").slice(0, 2)}
+                        </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate font-mono text-xs text-ink">
-                            {n.op ?? key}
+                          <span className="flex items-baseline gap-2">
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">
+                              {n.op ?? key}
+                            </span>
+                            {dur && (
+                              <span className="shrink-0 text-[10px] tabular-nums text-faint">
+                                +{dur}
+                              </span>
+                            )}
                           </span>
                           {n.summary && (
-                            <span className="block truncate text-[11px] text-faint">
+                            <span
+                              className={`block truncate text-[11px] ${
+                                exitBad ? "text-red-300/90" : "text-faint"
+                              }`}
+                            >
                               {nodeSummaryText(n.summary)}
                             </span>
                           )}
@@ -683,11 +761,206 @@ function AmendSheet({
   );
 }
 
+/** One phase's slice of the journal, bounded by phase-entered events. */
+interface PhaseSlice {
+  /** null = the leading slice before the first phase-entered. */
+  phase: string | null;
+  events: WorkflowRunEvent[];
+}
+
+/** A node's folded lifecycle: the latest of its queued→…→settled events. */
+interface NodeAgg {
+  site: string;
+  ordinal?: number;
+  state: "active" | "ok" | "failed" | "cancelled";
+  head?: string;
+}
+
+/** The journal may carry the node's task head under any of these keys. */
+function instructionHead(p: Record<string, unknown>): string | undefined {
+  for (const k of ["instructions", "instruction", "prompt", "task", "description"]) {
+    const v = p[k];
+    if (typeof v === "string" && v.trim()) return v.trim().slice(0, 80);
+  }
+  return undefined;
+}
+
+/**
+ * Fold one slice's events: node-* lifecycles collapse per (siteId, ordinal)
+ * into a single line each (settled is final — later replayed lifecycle noise
+ * must not reopen it), actor-created becomes a hiring line, run-settled a
+ * closing line, and everything chatty stays an expandable EventRow.
+ */
+function reduceSlice(events: WorkflowRunEvent[]) {
+  const nodes = new Map<string, NodeAgg>();
+  const actors: Array<{ label: string }> = [];
+  const others: WorkflowRunEvent[] = [];
+  let settled: string | null = null;
+  for (const ev of events) {
+    const p = ev.payload ?? {};
+    if (ev.type === "actor-created") {
+      const name = [p.name, p.actorName, p.siteId, p.actorSiteId].find(
+        (v): v is string => typeof v === "string" && v.length > 0,
+      );
+      actors.push({ label: name ?? "?" });
+      continue;
+    }
+    if (ev.type === "run-settled") {
+      settled = typeof p.status === "string" ? p.status : "unknown";
+      continue;
+    }
+    if (ev.type.startsWith("node-")) {
+      const site = typeof p.siteId === "string" ? p.siteId : "";
+      const ordinal = typeof p.ordinal === "number" ? p.ordinal : undefined;
+      const key = `${site}:${ordinal ?? "?"}`;
+      const prev = nodes.get(key);
+      if (prev && prev.state !== "active") continue;
+      const outcome = p.outcome;
+      nodes.set(key, {
+        site,
+        ordinal,
+        state:
+          outcome === "ok" || outcome === "failed" || outcome === "cancelled"
+            ? outcome
+            : "active",
+        head: prev?.head ?? instructionHead(p),
+      });
+      continue;
+    }
+    others.push(ev);
+  }
+  return { actors, nodes: [...nodes.values()], others, settled };
+}
+
+/**
+ * Desktop-parity mini timeline (upstream WorkflowTimeline, mobile-sized): one
+ * station per entered phase with a connecting line; entering phase N means
+ * N-1 finished, so every line is a passed segment. The newest station is the
+ * head — pulsing while the run flies, plain once it settles.
+ */
+function PhaseTimeline({ phases, running }: { phases: string[]; running: boolean }) {
+  return (
+    <div className="mx-4 mb-3 overflow-x-auto pb-1">
+      <ol className="flex min-w-max items-center">
+        {phases.map((p, i) => {
+          const head = i === phases.length - 1;
+          return (
+            <li key={`${i}-${p}`} className="flex items-center">
+              {i > 0 && <span className="h-px w-6 bg-emerald-400/40" />}
+              <span className="flex items-center gap-1.5 px-1.5 py-1.5">
+                <span
+                  className={`size-2.5 shrink-0 rounded-full ${
+                    head
+                      ? running
+                        ? "animate-pulse bg-sky-400"
+                        : "bg-sky-400"
+                      : "bg-emerald-400/80"
+                  }`}
+                />
+                <span
+                  className={`whitespace-nowrap font-mono text-[11px] ${
+                    head ? "font-medium text-ink" : "text-faint"
+                  }`}
+                >
+                  {p}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+/** One node's folded line: status dot + site#ordinal + task head. */
+function NodeLine({ n }: { n: NodeAgg }) {
+  const dot =
+    n.state === "ok"
+      ? "bg-emerald-400"
+      : n.state === "failed"
+        ? "bg-red-400"
+        : n.state === "cancelled"
+          ? "bg-white/35"
+          : "animate-pulse bg-sky-400";
+  const label = `${n.site || "?"}${n.ordinal !== undefined ? ` #${n.ordinal}` : ""}`;
+  return (
+    <div className="flex items-baseline gap-2 py-1">
+      <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
+      <span className="max-w-24 shrink-0 truncate font-mono text-[11px] text-dim">
+        {label}
+      </span>
+      {n.head ? (
+        <span className="min-w-0 flex-1 truncate text-[11px] text-faint">{n.head}</span>
+      ) : null}
+      {n.state !== "active" && (
+        <span
+          className={`shrink-0 text-[10px] ${
+            n.state === "failed"
+              ? "text-red-300"
+              : n.state === "ok"
+                ? "text-emerald-300/80"
+                : "text-faint"
+          }`}
+        >
+          {n.state}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** One phase section: header, hired actors, folded nodes, raw leftovers. */
+function PhaseSection({ slice }: { slice: PhaseSlice }) {
+  const { t } = useTranslation();
+  const { actors, nodes, others, settled } = useMemo(
+    () => reduceSlice(slice.events),
+    [slice],
+  );
+  if (
+    actors.length === 0 &&
+    nodes.length === 0 &&
+    others.length === 0 &&
+    settled === null
+  )
+    return null;
+  return (
+    <section className="mb-3">
+      {slice.phase !== null && (
+        <header className="mb-1 flex items-baseline gap-2 border-b border-hairline pb-1">
+          <span className="font-mono text-xs font-medium text-ink">{slice.phase}</span>
+          {nodes.length > 0 && (
+            <span className="text-[10px] text-faint">
+              {t("zconfig.workflowPhaseNodes", { n: nodes.length })}
+            </span>
+          )}
+        </header>
+      )}
+      {actors.map((a, i) => (
+        <p key={i} className="truncate py-1 font-mono text-[11px] text-faint">
+          + {a.label}
+        </p>
+      ))}
+      {nodes.map((n) => (
+        <NodeLine key={`${n.site}:${n.ordinal ?? "?"}`} n={n} />
+      ))}
+      {others.map((ev) => (
+        <EventRow key={ev.sequence} ev={ev} />
+      ))}
+      {settled !== null && (
+        <p className="py-1 font-mono text-[11px] text-dim">
+          = run settled · {settled}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** One journal row: sequence + type, payload expandable in place. */
 function EventRow({ ev }: { ev: WorkflowRunEvent }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="border-b border-hairline py-2 last:border-0">
+    <div className="border-b border-hairline py-2.5 last:border-0">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-baseline gap-2 text-left"
