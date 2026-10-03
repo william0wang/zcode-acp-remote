@@ -74,6 +74,43 @@ export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 const REPLAY_TAIL_LIMIT = 30;
 const EARLIER_PAGE_LIMIT = 50;
 
+// Per-session replay cache: a wake-reconnect or a switch back paints the
+// snapshot instantly and reconciles with a metadata-only attach (limit 0)
+// instead of a full tail replay. Module-level on purpose — it never drives a
+// render, so it stays out of React state.
+interface SessionSnapshot {
+  messages: ChatMessage[];
+  planEntries: PlanEntry[] | null;
+  replayCursor: string | null;
+  hasMore: boolean;
+  totalMessages: number | null;
+  configOptions: ConfigOption[];
+  currentModeId: string | null;
+  usage: ContextUsage | null;
+}
+
+const SESSION_CACHE_LIMIT = 6;
+const sessionCache = new Map<string, SessionSnapshot>();
+
+function readSessionCache(sessionId: string): SessionSnapshot | null {
+  const hit = sessionCache.get(sessionId);
+  if (!hit) return null;
+  // LRU refresh: re-insert so eviction order reflects recency.
+  sessionCache.delete(sessionId);
+  sessionCache.set(sessionId, hit);
+  return hit;
+}
+
+function writeSessionCache(sessionId: string, snap: SessionSnapshot): void {
+  sessionCache.delete(sessionId);
+  sessionCache.set(sessionId, snap);
+  while (sessionCache.size > SESSION_CACHE_LIMIT) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest === undefined) break;
+    sessionCache.delete(oldest);
+  }
+}
+
 interface ReplayMeta {
   cursor?: string;
   hasMore?: boolean;
@@ -1475,6 +1512,28 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   }
 
+  // Snapshots the active session into the replay cache. Skipped while a turn
+  // is in flight (ours or foreign): mid-turn messages are partial, and the
+  // optimistic prompt bubble may never reach the bridge. Also skipped while
+  // loadingSession — a replay/reconcile is mid-flight and the store holds a
+  // half-applied history. Both writers that settle a turn (onTurnState end,
+  // runPrompt's finally) re-snapshot through their own flush paths.
+  function cacheActiveSnapshot(): void {
+    const s = get();
+    if (!s.activeSessionId || s.loadingSession) return;
+    if (s.isRunning || localPromptActive) return;
+    writeSessionCache(s.activeSessionId, {
+      messages: s.messages,
+      planEntries: s.planEntries,
+      replayCursor: s.replayCursor,
+      hasMore: s.hasMore,
+      totalMessages: s.totalMessages,
+      configOptions: s.configOptions,
+      currentModeId: s.currentModeId,
+      usage: s.usage,
+    });
+  }
+
   // Applies (or re-applies) whatever arrived since the last batch. Called by
   // the 120ms coalescing timer and synchronously by flushPending, which must
   // not let the optimistic bubble overtake already-received turn content.
@@ -1513,6 +1572,7 @@ export const useAppStore = create<AppState>((set, get) => {
         availableCommands,
       };
     });
+    cacheActiveSnapshot();
   }
 
   function applyUpdate(
@@ -1952,6 +2012,7 @@ export const useAppStore = create<AppState>((set, get) => {
         // turns have no local prompt in flight: settle here and flush.
         if (localPromptActive) return;
         set({ isRunning: false });
+        cacheActiveSnapshot();
         flushPending();
       },
       onWorkflowListChanged: () => {
@@ -2593,6 +2654,7 @@ export const useAppStore = create<AppState>((set, get) => {
         get().closeSession();
       }
       set({ notice: "notice.sessionClosed" });
+      sessionCache.delete(sessionId);
     },
 
     shutdownInstance: async (instanceId) => {
@@ -2671,6 +2733,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return false;
       }
       set({ notice: "notice.sessionDeleted" });
+      sessionCache.delete(sessionId);
       return true;
     },
 
@@ -2771,6 +2834,10 @@ export const useAppStore = create<AppState>((set, get) => {
       // re-sent by the bridge after the load and lands as a fresh entry);
       // other sessions' dialogs are untouched.
       dropQueuedUpdates();
+      // Cache hit: paint the snapshot right away (the composer stays locked
+      // via loadingSession) and reconcile with a metadata-only attach below
+      // instead of replaying the tail from scratch.
+      const cached = readSessionCache(sessionId);
       set((s) => {
         const permissions = { ...s.permissions };
         const elicitations = { ...s.elicitations };
@@ -2782,37 +2849,110 @@ export const useAppStore = create<AppState>((set, get) => {
         delete elicitations[sessionId];
         return {
           activeSessionId: sessionId,
-          messages: [],
-          planEntries: null,
+          ...(cached ?? {
+            messages: [],
+            planEntries: null,
+            replayCursor: null,
+            hasMore: false,
+            totalMessages: null,
+            configOptions: [],
+            currentModeId: null,
+            usage: null,
+          }),
           permissions,
           elicitations,
-          replayCursor: null,
-          hasMore: false,
-          totalMessages: null,
-          loadingEarlier: false,
-          configOptions: [],
-          currentModeId: null,
-          usage: null,
           cacheHit: null,
           availableCommands: [],
+          loadingEarlier: false,
           loadingSession: true,
+          isRunning: false,
         };
       });
+      // True once the tail replay request is sent: the wire may have applied
+      // part of its notification stream when a failure lands.
+      let replaying = false;
       try {
         const ws = instanceWorkspace();
-        const result = await acp.request("session/load", {
-          sessionId,
-          // cwd is REQUIRED by the SDK's session/load schema (no default) —
-          // omitting it fails with -32602 Invalid params, e.g. when the hub
-          // list is still stale right after a wake reconnect. The bridge
-          // ignores the value on load (roots are backend-authoritative), so
-          // an unknown workspace sends a "/" placeholder.
-          cwd: ws ?? "/",
-          mcpServers: [],
-          // Tail replay: the limit rides in _meta (top-level unknown keys are
-          // stripped by the SDK schema). Counts messages, turn-aligned.
-          _meta: { zcode: { limit: REPLAY_TAIL_LIMIT } },
-        });
+        const conn = acp;
+        const load = (limit: number) =>
+          conn.request("session/load", {
+            sessionId,
+            // cwd is REQUIRED by the SDK's session/load schema (no default) —
+            // omitting it fails with -32602 Invalid params, e.g. when the hub
+            // list is still stale right after a wake reconnect. The bridge
+            // ignores the value on load (roots are backend-authoritative), so
+            // an unknown workspace sends a "/" placeholder.
+            cwd: ws ?? "/",
+            mcpServers: [],
+            // Tail replay: the limit rides in _meta (top-level unknown keys
+            // are stripped by the SDK schema). Counts messages, turn-aligned.
+            // limit 0 is the bridge's metadata-only attach: response metadata
+            // only, no replay notifications.
+            _meta: { zcode: { limit } },
+          });
+
+        if (cached) {
+          // Reconcile the painted snapshot: totalMessages is the cheap "did
+          // anything happen while we were gone" check. Snapshots are only
+          // written between turns, so an equal count with an idle bridge turn
+          // means the history is exactly what we already show.
+          const result = await load(0);
+          const meta = readReplayMeta(result);
+          if (
+            typeof meta?.totalMessages === "number" &&
+            meta.totalMessages === cached.totalMessages
+          ) {
+            const res = result as {
+              modes?: { currentModeId?: string };
+              configOptions?: ConfigOption[];
+            } | null;
+            const configOptions = Array.isArray(res?.configOptions)
+              ? res!.configOptions!
+              : [];
+            const currentModeId = res?.modes?.currentModeId ?? null;
+            // Unchanged: keep the painted messages/cursor/hasMore — they
+            // stay valid for load_earlier. The metadata-only cursor anchors
+            // at history's END (a different convention than the tail slice's
+            // START), so it must not be stored.
+            set((s) =>
+              s.activeSessionId === sessionId
+                ? {
+                    configOptions,
+                    currentModeId,
+                    loadingSession: false,
+                    // A turn that survived the reconnect is still running on
+                    // the bridge — restore the running UI, not the composer.
+                    isRunning: meta.turnActive === true,
+                  }
+                : {},
+            );
+            setActivity(sessionId, { running: meta.turnActive === true });
+            writeSessionCache(sessionId, {
+              ...cached,
+              configOptions,
+              currentModeId,
+            });
+            flushPending();
+            return;
+          }
+          // History moved while away: drop the painted snapshot and replay
+          // the tail wholesale — merging the replay stream into the cached
+          // messages would double the chunk parts of every shared message.
+          set((s) =>
+            s.activeSessionId === sessionId
+              ? {
+                  messages: [],
+                  planEntries: null,
+                  replayCursor: null,
+                  hasMore: false,
+                  totalMessages: null,
+                }
+              : {},
+          );
+        }
+
+        replaying = true;
+        const result = await load(REPLAY_TAIL_LIMIT);
         const meta = readReplayMeta(result);
         const res = result as {
           modes?: { currentModeId?: string };
@@ -2834,6 +2974,7 @@ export const useAppStore = create<AppState>((set, get) => {
           isRunning: meta?.turnActive === true,
         });
         setActivity(sessionId, { running: meta?.turnActive === true });
+        cacheActiveSnapshot();
         // History is live: send whatever queued while the replay streamed
         // (flushPending no-ops while a restored turn is running — its
         // turnState end event does the flushing then).
@@ -2844,7 +2985,9 @@ export const useAppStore = create<AppState>((set, get) => {
         // failure, and flushing (or keeping) them paints a mid-conversation
         // stub that reads as reordered history until the next reload. The
         // reconnect replay is the only catch-up — until it lands, show
-        // nothing rather than a half.
+        // nothing rather than a half. A failed metadata-only reconcile
+        // (replaying=false) keeps the painted snapshot: it is a complete,
+        // self-consistent view, and the next reconnect retries the load.
         dropQueuedUpdates();
         set((s) => ({
           // Transient connection failures stay quiet: the reconnect banner
@@ -2853,7 +2996,9 @@ export const useAppStore = create<AppState>((set, get) => {
             ? null
             : { notice: `session/load failed: ${(e as Error).message}` }),
           loadingSession: false,
-          ...(s.activeSessionId === sessionId ? { messages: [] } : {}),
+          ...(s.activeSessionId === sessionId && replaying
+            ? { messages: [] }
+            : {}),
         }));
       }
     },
@@ -2867,6 +3012,9 @@ export const useAppStore = create<AppState>((set, get) => {
         !s.activeSessionId ||
         !s.replayCursor ||
         !s.hasMore ||
+        // Mid-reconcile/replay: the cursor belongs to the about-to-be
+        // replaced view; the page would land on the wrong history.
+        s.loadingSession ||
         s.loadingEarlier
       )
         return false;
@@ -2917,15 +3065,16 @@ export const useAppStore = create<AppState>((set, get) => {
               ...rest.slice(1),
             ];
           }
-          const meta = readReplayMeta(result);
-          return {
-            messages: [...segment, ...rest],
-            replayCursor: meta?.cursor ?? null,
-            hasMore: meta?.hasMore ?? false,
-            loadingEarlier: false,
-          };
-        });
-        return true;
+        const meta = readReplayMeta(result);
+        return {
+          messages: [...segment, ...rest],
+          replayCursor: meta?.cursor ?? null,
+          hasMore: meta?.hasMore ?? false,
+          loadingEarlier: false,
+        };
+      });
+      cacheActiveSnapshot();
+      return true;
       } catch (e) {
         collectingEarlier = false;
         earlierBuffer = [];
@@ -3110,6 +3259,7 @@ export const useAppStore = create<AppState>((set, get) => {
       } finally {
         localPromptActive = false;
         set({ isRunning: false });
+        cacheActiveSnapshot();
         // Auto-flush: the queue is FIFO, and each settled turn sends the next.
         // A concurrent re-attach defers to loadSession's own flush instead.
         flushPending();
