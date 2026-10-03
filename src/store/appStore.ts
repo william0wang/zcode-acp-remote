@@ -14,14 +14,31 @@ import {
   saveLang,
   savePending,
   saveServerBook,
-  saveUpdateChannel,
   type FontSize,
   type Lang,
-  type UpdateChannel,
 } from "../lib/storage";
 import {
-  contentDiffBlocks,
-  contentText,
+  configSliceState,
+  createConfigSlice,
+  seedUpdateChannel,
+  type ConfigSlice,
+} from "./configSlice";
+import {
+  applyOne,
+  appendTextPart,
+  bridgeSupportsPageMarker,
+  EARLIER_PAGE_LIMIT,
+  ensureMessage,
+  findToolCallPart,
+  isEarlierPageMeta,
+  readReplayMeta,
+  readSessionCache,
+  removeSessionCache,
+  REPLAY_TAIL_LIMIT,
+  writeSessionCache,
+  type PlanEntry,
+} from "./replay";
+import {
   type AccountUsageStats,
   type AttachmentDraft,
   type ChatMessage,
@@ -44,22 +61,8 @@ import {
   type SavedServer,
   type SessionUpdate,
   type SlashCommand,
-  type ToolCallPart,
-  type AppUpdateState,
-  type AgentUpsert,
-  type Effect,
-  type HookEntryPatch,
-  type McpServerUpsert,
-  type ModelUpsert,
-  type ResetCardStatus,
-  type SettingsAll,
-  type SettingsPlatformUsage,
-  type SettingsUsage,
   type ConversationRunSummary,
-  type WorkflowGateBlock,
-  type WorkflowGateModeSetting,
   type WorkflowHubGroup,
-  type WorkflowListResponse,
   type WorkflowRunRow,
   type WorkflowScope,
   type AmendRunSettingsResponse,
@@ -68,87 +71,8 @@ import {
 
 export type ConnState = "idle" | "connecting" | "open" | "reconnecting";
 
-// Server-side tail replay (REMOTE-CLIENTS.md "Tail replay and history
-// pagination"): attach ships only the last REPLAY_TAIL_LIMIT messages;
-// older pages arrive via session/load_earlier.
-const REPLAY_TAIL_LIMIT = 30;
-const EARLIER_PAGE_LIMIT = 50;
-
-// Per-session replay cache: a wake-reconnect or a switch back paints the
-// snapshot instantly and reconciles with a metadata-only attach (limit 0)
-// instead of a full tail replay. Module-level on purpose — it never drives a
-// render, so it stays out of React state.
-interface SessionSnapshot {
-  messages: ChatMessage[];
-  planEntries: PlanEntry[] | null;
-  replayCursor: string | null;
-  hasMore: boolean;
-  totalMessages: number | null;
-  configOptions: ConfigOption[];
-  currentModeId: string | null;
-  usage: ContextUsage | null;
-}
-
-const SESSION_CACHE_LIMIT = 6;
-const sessionCache = new Map<string, SessionSnapshot>();
-
-function readSessionCache(sessionId: string): SessionSnapshot | null {
-  const hit = sessionCache.get(sessionId);
-  if (!hit) return null;
-  // LRU refresh: re-insert so eviction order reflects recency.
-  sessionCache.delete(sessionId);
-  sessionCache.set(sessionId, hit);
-  return hit;
-}
-
-function writeSessionCache(sessionId: string, snap: SessionSnapshot): void {
-  sessionCache.delete(sessionId);
-  sessionCache.set(sessionId, snap);
-  while (sessionCache.size > SESSION_CACHE_LIMIT) {
-    const oldest = sessionCache.keys().next().value;
-    if (oldest === undefined) break;
-    sessionCache.delete(oldest);
-  }
-}
-
-interface ReplayMeta {
-  cursor?: string;
-  hasMore?: boolean;
-  totalMessages?: number;
-  // Bridge flag: a turn is still in flight for this session (someone else's
-  // prompt, or one that survived our reconnect) — restore the running UI.
-  turnActive?: boolean;
-}
-
-function readReplayMeta(result: unknown): ReplayMeta | null {
-  if (typeof result !== "object" || result === null) return null;
-  const meta = (result as { replayMeta?: unknown }).replayMeta;
-  return typeof meta === "object" && meta !== null
-    ? (meta as ReplayMeta)
-    : null;
-}
-
-// zcode-acp-server version that started marking load_earlier page updates
-// `_meta.zcode.earlierPage` — the floor for the marker-based page routing.
-const PAGE_MARKER_BRIDGE_VERSION = "0.44.1";
-
-// Semver-ish floor check on the bridge's advertised agentInfo.version.
-// Unparseable versions read as NOT capable: the fallback (pre-marker
-// buffer-everything collection) is the safe behavior on any bridge.
-function bridgeSupportsPageMarker(version: unknown): boolean {
-  if (typeof version !== "string") return false;
-  const parts = version.split(".");
-  if (parts.length < 3) return false;
-  const nums = parts.slice(0, 3).map((p) => Number.parseInt(p, 10));
-  if (nums.some((n) => Number.isNaN(n))) return false;
-  const [major, minor, patch] = nums;
-  const floor = PAGE_MARKER_BRIDGE_VERSION.split(".").map((p) =>
-    Number.parseInt(p, 10),
-  ) as [number, number, number];
-  if (major !== floor[0]) return major > floor[0];
-  if (minor !== floor[1]) return minor > floor[1];
-  return patch >= floor[2];
-}
+export type { PlanEntry } from "./replay";
+export type { ConfigSection } from "./configSlice";
 
 // Last-turn prompt-cache hit rate (percent) from a session/prompt response
 // usage: cachedRead / (input + cachedRead + cachedWrite), the ACP de-facto
@@ -301,13 +225,7 @@ export interface SessionActivity {
   finishedAt?: number;
 }
 
-// One todo/plan entry; `status` is "pending" | "active" | "completed".
-export interface PlanEntry {
-  content: string;
-  status?: string;
-}
-
-interface AppState {
+export interface AppState extends ConfigSlice {
   profile: ConnectionProfile | null;
   // Multi-server book: every saved Hub URL + token pair and the active one.
   // `profile` mirrors the active entry (null when nothing is active).
@@ -385,85 +303,6 @@ interface AppState {
   pageMarkerCapable: boolean;
   loadingSession: boolean;
 
-  // ---- ZCode configuration (ADR-0009) ----
-  //
-  // Machine-level state (one hub, one configuration), independent of any
-  // session. `configSupported` is false once a settings route has answered
-  // 404 — an older hub — so the screens say so instead of erroring.
-  configOpen: boolean;
-  // Which configuration section is open; null = the entry list.
-  configSection: ConfigSection | null;
-  // True when the screen OPENED straight at a section (session panel's
-  // workflow manage, a run deep link) — the entry list was never shown, so a
-  // section page's back must CLOSE the screen (return to the caller) instead
-  // of revealing a list the user never navigated through.
-  configDeepEntry: boolean;
-  configSupported: boolean | null;
-  configLoading: boolean;
-  configError: string | null;
-  // The /settings/all snapshot: one request for a screen's first paint.
-  configAll: SettingsAll | null;
-  // Section payloads fetched on their own (models/skills/mcp/hooks/agents
-  // carry shapes the snapshot compresses; usage and backups likewise).
-  configModels: unknown;
-  configSkills: unknown;
-  configMcp: unknown;
-  configHooks: unknown;
-  configAgents: unknown;
-  configUsage: SettingsUsage | null;
-  // The range the LAST usage read asked for. Stored so a response that arrives
-  // out of order (two taps, two in-flight reads) can be recognised as stale
-  // and dropped rather than shown under the wrong range button.
-  configUsageRange: string;
-  // Platform usage (the account-level monitor data). Same read-on-open pattern
-  // and same stale-range guard as configUsage above; `false` in
-  // configPlatformUsageSupported means THIS hub predates the route (404), which
-  // degrades the platform tab alone instead of the whole settings API.
-  configPlatformUsage: SettingsPlatformUsage | null;
-  configPlatformUsageRange: string;
-  configPlatformUsageSupported: boolean;
-  configBackups: unknown;
-  configAppUpdate: unknown;
-  // Install progress for the app update, polled by the update screen.
-  appUpdateInstall: AppUpdateState | null;
-  // Reset cards (ADR-0009): the inventory plus which provider it belongs to.
-  // `resetNonce` is what a spend must send back — it is tied to this read, and
-  // so is `resetIdempotencyKey`: one key per GESTURE, minted alongside the
-  // nonce, so every retry of that spend sends the same value.
-  resetCards: ResetCardStatus["resetCards"] | null;
-  resetProviderId: string | null;
-  resetNonce: string | null;
-  resetIdempotencyKey: string | null;
-  // The provider ids the hub says could own cards, and whether the credential
-  // store could be decrypted at all. Kept apart from `resetProviderId` (the
-  // user's choice) because the list is a fact and the choice is not.
-  resetEligible: string[];
-  resetCredentials: boolean;
-  resetBusy: boolean;
-  // When a denied reset opportunity said to try again (epoch ms). Drives the
-  // countdown on the plan-quota screen; null when there is nothing to count.
-  resetNextTryAt: number | null;
-  // True once this bridge has recorded a needs-restart write since its last
-  // backend restart. Drives the restart affordance on the config screens.
-  pendingRestart: boolean;
-  // Which ZCode desktop release stream the update screen follows. Persisted:
-  // a preview user who is silently checked against stable sees a version the
-  // install then refuses.
-  updateChannel: UpdateChannel;
-  setUpdateChannel: (channel: UpdateChannel) => void;
-  // ---- dynamic workflows (bridge 0.48.0, server ADR-0029) ----
-  //
-  // The saved-workflow list for the scope on screen. Every workflow route is
-  // per-instance, so the reads/writes all name the connected bridge.
-  configWorkflows: WorkflowListResponse | null;
-  // The scope the LAST workflows read asked for — the stale-response guard's
-  // comparison key (two scope taps race exactly like the usage ranges).
-  configWorkflowScope: WorkflowScope;
-  // The workflow gate verdict, read from the PER-INSTANCE settings snapshot:
-  // the machine-level `/settings/all` the entry list loads has no backend and
-  // reports no `enabled` field at all, so this is the only honest source for
-  // "show the workflows entry". Null = not probed (reads as hidden).
-  configWorkflowGate: SettingsAll["workflow"] | null;
   // Machine-level saved-workflow groups for the management page, served
   // pre-aggregated by the hub (/api/workflow-overview, bridge 0.60.0): one
   // global group + one per WORKSPACE (a project with two bridges renders
@@ -629,101 +468,6 @@ interface AppState {
   notify: (text: string) => void;
   dismissToast: () => void;
 
-  // ---- ZCode configuration (ADR-0009) ----
-  // Opens/closes the configuration screen. `section` null = the entry list.
-  openConfig: (section?: ConfigSection | null) => void;
-  closeConfig: () => void;
-  // A section page's back: to the entry list, or straight out when the screen
-  // was deep-opened at the section (configDeepEntry).
-  backFromConfigSection: () => void;
-  // Loads the /settings/all snapshot; a 404 marks the hub as too old.
-  loadConfigAll: () => Promise<void>;
-  // Loads one section's own endpoint. Called when its screen mounts; `arg`
-  // carries a section-specific option (the usage range — "7d" | "30d" | "all"
-  // for the local read, "today" | "7d" | "30d" for platform usage) so a screen
-  // can refetch without the store having to know its controls.
-  loadConfigSection: (
-    section: ConfigSection,
-    arg?: { range?: "7d" | "30d" | "all" | "today" },
-  ) => Promise<void>;
-  // Applies a write and reports its effect class. Destructive operations
-  // (delete skill / mcp / agent, restore backup) confirm at the call site.
-  applyConfigWrite: (
-    label: string,
-    write: () => Promise<Effect | undefined>,
-    reload?: ConfigSection[],
-  ) => Promise<boolean>;
-  // ---- configuration writes ----
-  //
-  // Thin wrappers over the hub routes so a screen never builds a HubClient or
-  // a URL itself. Each returns the write's effect class; failures throw, and
-  // `applyConfigWrite` turns them into a toast.
-  setProviderEnabled: (
-    providerId: string,
-    enabled: boolean,
-  ) => Promise<Effect | undefined>;
-  setSkillEnabled: (
-    path: string,
-    enable: boolean,
-  ) => Promise<Effect | undefined>;
-  copySkillToUser: (path: string) => Promise<Effect | undefined>;
-  // POST /settings/models is an upsert: one route adds a model and edits its
-  // rule (context window, reasoning levels), so one wrapper serves both forms.
-  upsertModel: (body: ModelUpsert) => Promise<Effect | undefined>;
-  setMcpEnabled: (name: string, enable: boolean) => Promise<Effect | undefined>;
-  upsertMcp: (
-    name: string,
-    body: McpServerUpsert,
-  ) => Promise<Effect | undefined>;
-  setHooksEnabled: (enabled: boolean) => Promise<Effect | undefined>;
-  // Edits ONE existing hook entry in place; there is deliberately no add or
-  // remove through here (an insert shifts every later index and races a
-  // concurrent edit of the same event).
-  updateHookEntry: (
-    eventName: string,
-    matcherIndex: number,
-    hookIndex: number,
-    body: HookEntryPatch,
-  ) => Promise<Effect | undefined>;
-  setAgentEnabled: (
-    name: string,
-    enable: boolean,
-  ) => Promise<Effect | undefined>;
-  // A PUT on a missing personal agent creates it, so this one route serves
-  // editing, creating, and the built-ins' model override.
-  upsertAgent: (name: string, body: AgentUpsert) => Promise<Effect | undefined>;
-  restoreBackup: (file: string, path: string) => Promise<Effect | undefined>;
-  // Reset cards: read the inventory, spend a card. Both actions take the
-  // provider (and the spend its nonce) explicitly: reading the store at action
-  // entry would let a provider switch mid-gesture spend the wrong card.
-  loadResetCards: (providerId: string) => Promise<void>;
-  spendResetCard: (input: {
-    providerId: string;
-    nonce: string;
-    resetType: "FIVE_HOUR" | "WEEK";
-  }) => Promise<boolean>;
-  markResetHistoryRead: () => Promise<void>;
-  // App update: start an install and poll its progress.
-  installAppUpdate: (input: {
-    version: string;
-    url: string;
-    channel?: string;
-  }) => Promise<void>;
-  pollAppUpdate: () => Promise<void>;
-  // ---- dynamic workflows ----
-  // Reads the saved-workflow list for one scope (per-instance routes).
-  loadWorkflows: (scope: WorkflowScope) => Promise<void>;
-  // Probes the per-instance settings snapshot for the workflow gate verdict
-  // (the entry list's visibility source). A 404 marks the hub too old; any
-  // other failure just leaves the gate unread — the entry stays hidden.
-  loadWorkflowGate: () => Promise<void>;
-  // Writes the machine-level gate override (bridge ≥0.53 PUT
-  // /settings/workflow-gate) and stores the returned verdict, so every
-  // gate-driven surface (config entry, session-panel launcher) flips live.
-  // Resolves null when the write was refused (workflowAction posture).
-  setWorkflowGate: (
-    mode: WorkflowGateModeSetting,
-  ) => Promise<WorkflowGateBlock | null>;
   // Runs one hub call with the connected client and the connected instance
   // bound in; notifies on failure and resolves null (no client, no instance,
   // or the call refused). Every workflow read/write the screens make goes
@@ -782,24 +526,7 @@ interface AppState {
     /** Owning instance for a detail page opened from another group. */
     instanceId?: string,
   ) => Promise<Record<string, ConversationRunSummary[]>>;
-  // Restarts the backend of the instance that owns the configuration, so
-  // needs-restart writes take effect. Returns the interrupted-turn count.
-  restartConfigBackend: () => Promise<number>;
 }
-
-/** The configuration sections the app can open. */
-export type ConfigSection =
-  | "models"
-  | "skills"
-  | "mcp"
-  | "hooks"
-  | "agents"
-  | "quota"
-  | "usage"
-  | "usagePlatform"
-  | "backups"
-  | "appUpdate"
-  | "workflows";
 
 // Module singletons: connection + timers live outside React state.
 let acp: AcpConnection | null = null;
@@ -818,7 +545,6 @@ let reconnectAttempt = 0;
 // When the in-flight openConnection() attempt started (0 = none). wakeProbe
 // uses it to recognize a connect attempt wedged past its 15s deadline.
 let connectingSince = 0;
-let msgCounter = 0;
 // Consecutive network-level discovery failures. A phone's network stack
 // takes a moment after launch — the first failed poll means "not yet",
 // not "hub down"; only DISCOVERY_FAIL_THRESHOLD in a row earn the banner.
@@ -834,32 +560,6 @@ function isTransientConnError(e: unknown): boolean {
   return (
     msg.includes("connection closed") || msg.includes("connection not open")
   );
-}
-
-/**
- * Idempotency key for one reset-card GESTURE.
- *
- * A spent card is gone, so the backend keys a spend on this value: a retry
- * (dropped response, double tap) answers the same outcome instead of burning a
- * second card. Generate it ONCE per user gesture and reuse it on every retry —
- * a fresh key per attempt is exactly what defeats the protection.
- */
-function newIdempotencyKey(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-/**
- * The release channel an app-update read must use.
- *
- * Kept in a module-local mirror rather than read from localStorage on every
- * call: `loadUpdateChannel` touches storage, and the check runs from a React
- * effect on a screen that also polls. `init()` seeds it from storage and
- * `setUpdateChannel` is the only other writer.
- */
-let updateChannel: UpdateChannel = "stable";
-
-function readAppUpdateChannel(): UpdateChannel {
-  return updateChannel;
 }
 
 function stopReconnect(): void {
@@ -1081,328 +781,6 @@ export const useAppStore = create<AppState>((set, get) => {
     dropQueuedUpdates();
   }
 
-  // ---- session/update -> chat model ----
-
-  function ensureMessage(
-    msgs: ChatMessage[],
-    role: "user" | "assistant",
-  ): { messages: ChatMessage[]; message: ChatMessage } {
-    const last = msgs[msgs.length - 1];
-    if (last && last.role === role) return { messages: msgs, message: last };
-    const message: ChatMessage = {
-      id: `m${++msgCounter}`,
-      role,
-      parts: [],
-      createdAt: Date.now(),
-    };
-    return { messages: [...msgs, message], message };
-  }
-
-  function appendTextPart(
-    message: ChatMessage,
-    text: string,
-    partType: "text" | "thought",
-  ): ChatMessage {
-    const lastPart = message.parts[message.parts.length - 1];
-    if (lastPart && lastPart.type === partType) {
-      const parts = [
-        ...message.parts.slice(0, -1),
-        { type: partType, text: lastPart.text + text } as ChatPart,
-      ];
-      return { ...message, parts };
-    }
-    return {
-      ...message,
-      parts: [...message.parts, { type: partType, text } as ChatPart],
-    };
-  }
-
-  // With a messageId, chunks group into that exact message (backend ids are
-  // stable and dedupe across replay pages; thought ids carry a `thought_`
-  // prefix and form their own stream). Without one, fall back to merging
-  // into the trailing same-role message.
-  function appendChunkMessage(
-    msgs: ChatMessage[],
-    u: SessionUpdate,
-    role: "user" | "assistant",
-    text: string,
-    partType: "text" | "thought",
-  ): ChatMessage[] {
-    const mid =
-      typeof u.messageId === "string" && u.messageId ? u.messageId : null;
-    if (mid) {
-      const i = msgs.findIndex((m) => m.id === mid);
-      if (i >= 0)
-        return patchMessage(msgs, i, appendTextPart(msgs[i], text, partType));
-      return [
-        ...msgs,
-        {
-          id: mid,
-          role,
-          parts: [{ type: partType, text } as ChatPart],
-          createdAt: Date.now(),
-        },
-      ];
-    }
-    const ensured = ensureMessage(msgs, role);
-    return ensured.messages.map((m) =>
-      m.id === ensured.message.id ? appendTextPart(m, text, partType) : m,
-    );
-  }
-
-  function patchMessage(
-    msgs: ChatMessage[],
-    i: number,
-    m: ChatMessage,
-  ): ChatMessage[] {
-    return msgs.slice(0, i).concat(m, msgs.slice(i + 1));
-  }
-
-  // `_meta.zcode.collapsed` on a replayed user chunk (context handoff and
-  // similar harness blocks) — the UI renders those behind an expand control.
-  function isCollapsedMeta(meta: unknown): boolean {
-    if (typeof meta !== "object" || meta === null) return false;
-    const zcode = (meta as { zcode?: { collapsed?: unknown } }).zcode;
-    return (
-      typeof zcode === "object" && zcode !== null && zcode.collapsed === true
-    );
-  }
-
-  // `_meta.zcode.earlierPage` on session/load_earlier paged updates — the
-  // bridge marks page replays so live-turn updates streaming while the page
-  // request is in flight can be told apart (they must append, not ride the
-  // prepend). Only consulted while pageMarkerCapable is true; older bridges
-  // fall back to buffering everything during the collection window.
-  function isEarlierPageMeta(meta: unknown): boolean {
-    if (typeof meta !== "object" || meta === null) return false;
-    const zcode = (meta as { zcode?: { earlierPage?: unknown } }).zcode;
-    return (
-      typeof zcode === "object" && zcode !== null && zcode.earlierPage === true
-    );
-  }
-
-  // Applies one update; returns a partial state patch, or null when nothing
-  // changed. Message kinds operate on the given array; session-level kinds
-  // (config/usage) carry their own values.
-  function applyOne(
-    msgs: ChatMessage[],
-    u: SessionUpdate,
-    meta?: unknown,
-  ): {
-    messages?: ChatMessage[];
-    planEntries?: PlanEntry[] | null;
-    configOptions?: ConfigOption[];
-    currentModeId?: string;
-    usage?: ContextUsage;
-    availableCommands?: SlashCommand[];
-  } | null {
-    const kind = u.sessionUpdate;
-
-    if (kind === "user_message_chunk" || kind === "agent_message_chunk") {
-      const role = kind === "user_message_chunk" ? "user" : "assistant";
-      const text = contentText(u.content);
-      if (!text) return null;
-      let next = appendChunkMessage(msgs, u, role, text, "text");
-      if (role === "user" && isCollapsedMeta(meta)) {
-        const mid = typeof u.messageId === "string" ? u.messageId : "";
-        const i = next.findIndex((m) => m.id === mid && !m.collapsed);
-        if (i >= 0)
-          next = patchMessage(next, i, { ...next[i], collapsed: true });
-      }
-      return { messages: next };
-    }
-    if (kind === "agent_thought_chunk") {
-      const text = contentText(u.content);
-      if (!text) return null;
-      return {
-        messages: appendChunkMessage(msgs, u, "assistant", text, "thought"),
-      };
-    }
-    if (kind === "tool_call") {
-      const updateMeta = u._meta as
-        | {
-            claudeCode?: { toolName?: unknown };
-            zcode?: { collapsed?: unknown; kind?: unknown };
-          }
-        | undefined;
-      const meta = updateMeta?.claudeCode;
-      // Replay harness folds (server 0.6.0): handoff summaries and rewritten
-      // tool transcripts arrive as completed tool_calls flagged in _meta.zcode.
-      const fold =
-        updateMeta?.zcode?.collapsed === true &&
-        typeof updateMeta.zcode.kind === "string"
-          ? updateMeta.zcode.kind
-          : null;
-      // The bridge ships the plan/question text as the tool_call's initial
-      // content — keep it in detail so approval cards can show it.
-      const part = {
-        type: "tool-call" as const,
-        toolCallId: String(u.toolCallId ?? ""),
-        toolName: String(u.title ?? "tool"),
-        detail: contentText(u.content),
-        status: String(u.status ?? "pending"),
-        ...(typeof u.kind === "string" ? { kind: u.kind } : {}),
-        ...(fold ? { foldKind: fold } : {}),
-        ...(typeof meta?.toolName === "string"
-          ? { rawName: meta.toolName }
-          : {}),
-        ...(() => {
-          const diffs = contentDiffBlocks(u.content);
-          return diffs.length ? { diffs } : {};
-        })(),
-      };
-      const mid =
-        typeof u.messageId === "string" && u.messageId ? u.messageId : null;
-      // Dedupe on every insert (REPLAY-GUIDE contract): a reannounced
-      // interaction (e.g. a still-pending plan approval) reuses its
-      // toolCallId, and replay can deliver the same historical call again —
-      // assistant-ui keys parts by toolCallId and throws on duplicates.
-      // Replace the existing part in place instead of appending a second.
-      const dupAt = findToolCallPartIndex(msgs, part.toolCallId);
-      if (dupAt) {
-        const { mi, pi } = dupAt;
-        return {
-          messages: patchMessage(msgs, mi, {
-            ...msgs[mi],
-            parts: msgs[mi].parts.map((p, j) => (j === pi ? part : p)),
-          }),
-        };
-      }
-      if (mid) {
-        const i = msgs.findIndex((m) => m.id === mid);
-        if (i >= 0) {
-          return {
-            messages: patchMessage(msgs, i, {
-              ...msgs[i],
-              parts: [...msgs[i].parts, part],
-            }),
-          };
-        }
-        return {
-          messages: [
-            ...msgs,
-            {
-              id: mid,
-              role: "assistant",
-              parts: [part],
-              createdAt: Date.now(),
-            },
-          ],
-        };
-      }
-      const ensured = ensureMessage(msgs, "assistant");
-      return {
-        messages: ensured.messages.map((m) =>
-          m.id === ensured.message.id ? { ...m, parts: [...m.parts, part] } : m,
-        ),
-      };
-    }
-    if (kind === "tool_call_update") {
-      const toolCallId = String(u.toolCallId ?? "");
-      const chunk = contentText(u.content);
-      const diffBlocks = contentDiffBlocks(u.content);
-      // Terminal-channel Bash (enabled while an editor client is attached):
-      // output streams as _meta.terminal_output.data deltas — append them so
-      // the card keeps its output; the terminal_exit update then only closes.
-      const termData = (
-        u._meta as { terminal_output?: { data?: unknown } } | undefined
-      )?.terminal_output?.data;
-      const termText = typeof termData === "string" ? termData : null;
-      // Non-terminal tools may carry a rawOutput string without content blocks.
-      const rawOut = typeof u.rawOutput === "string" ? u.rawOutput : null;
-      // An update carrying content blocks REPLACES the whole collection
-      // (text and diffs); a status-only update leaves them untouched.
-      const hasContent =
-        u.content != null &&
-        (!Array.isArray(u.content) || u.content.length > 0);
-      const status = typeof u.status === "string" ? u.status : null;
-      // Search backwards: the tool call may live in an earlier assistant
-      // message when other clients' turns interleaved.
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i];
-        if (m.role !== "assistant") continue;
-        if (
-          !m.parts.some(
-            (p) => p.type === "tool-call" && p.toolCallId === toolCallId,
-          )
-        ) {
-          continue;
-        }
-        const patched = {
-          ...m,
-          parts: m.parts.map((p) =>
-            p.type === "tool-call" && p.toolCallId === toolCallId
-              ? {
-                  ...p,
-                  detail: termText
-                    ? p.detail + termText
-                    : chunk || rawOut || p.detail,
-                  status: status ?? p.status,
-                  ...(hasContent
-                    ? { diffs: diffBlocks.length ? diffBlocks : undefined }
-                    : {}),
-                }
-              : p,
-          ),
-        };
-        return {
-          messages: msgs.slice(0, i).concat(patched, msgs.slice(i + 1)),
-        };
-      }
-      return null;
-    }
-    if (kind === "plan") {
-      // Plan updates are full snapshots; render the latest one as a live
-      // status area outside the message stream.
-      const raw = Array.isArray(u.entries) ? u.entries : [];
-      const entries = raw
-        .map((e) => {
-          const entry = e as { content?: string; status?: string };
-          return {
-            content: entry.content ?? "",
-            ...(typeof entry.status === "string"
-              ? { status: entry.status }
-              : {}),
-          } satisfies PlanEntry;
-        })
-        .filter((e) => e.content);
-      return { planEntries: entries.length ? entries : null };
-    }
-    if (kind === "config_option_update") {
-      const opts = Array.isArray(u.configOptions)
-        ? (u.configOptions as ConfigOption[])
-        : null;
-      return opts ? { configOptions: opts } : null;
-    }
-    if (kind === "current_mode_update") {
-      return typeof u.currentModeId === "string"
-        ? { currentModeId: u.currentModeId }
-        : null;
-    }
-    if (kind === "usage_update") {
-      const used = typeof u.used === "number" ? u.used : null;
-      const size = typeof u.size === "number" ? u.size : null;
-      return used != null && size != null ? { usage: { used, size } } : null;
-    }
-    if (kind === "available_commands_update") {
-      // Full snapshot, overwrite semantics — the bridge re-sends it after
-      // each session/load, so keep the latest list.
-      const list = Array.isArray(u.availableCommands)
-        ? u.availableCommands
-        : null;
-      if (!list) return null;
-      const commands = list.filter(
-        (c): c is SlashCommand =>
-          typeof c === "object" &&
-          c !== null &&
-          typeof (c as SlashCommand).name === "string",
-      );
-      return { availableCommands: commands };
-    }
-    // Unknown kinds (additive-only contract): ignore.
-    return null;
-  }
-
   // Replay bursts hundreds of updates in one go; batching them into a single
   // store write keeps render cost O(bursts) instead of O(chunks).
   let updateQueue: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
@@ -1616,42 +994,6 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       return { sessionStates: { ...state.sessionStates, [sessionId]: next } };
     });
-  }
-
-  // Locates the tool_call part the bridge emits right before an interaction
-  // request; its content holds the plan/question text (ADR 0003).
-  function findToolCallPart(
-    msgs: ChatMessage[],
-    toolCallId: string,
-  ): ToolCallPart | null {
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.role !== "assistant") continue;
-      for (let j = m.parts.length - 1; j >= 0; j--) {
-        const p = m.parts[j];
-        if (p.type === "tool-call" && p.toolCallId === toolCallId) return p;
-      }
-    }
-    return null;
-  }
-
-  // Same lookup, but returns message/part indices so the caller can replace
-  // the part in place (tool_call dedup on insert).
-  function findToolCallPartIndex(
-    msgs: ChatMessage[],
-    toolCallId: string,
-  ): { mi: number; pi: number } | null {
-    if (!toolCallId) return null;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.role !== "assistant") continue;
-      for (let j = m.parts.length - 1; j >= 0; j--) {
-        const p = m.parts[j];
-        if (p.type === "tool-call" && p.toolCallId === toolCallId)
-          return { mi: i, pi: j };
-      }
-    }
-    return null;
   }
 
   function buildApprovalContext(
@@ -2180,48 +1522,13 @@ export const useAppStore = create<AppState>((set, get) => {
     fsCapable: false,
     pageMarkerCapable: false,
     loadingSession: false,
-    configOpen: false,
-    configSection: null,
-    configDeepEntry: false,
-    configSupported: null,
-    configLoading: false,
-    configError: null,
-    configAll: null,
-    configModels: null,
-    configSkills: null,
-    configMcp: null,
-    configHooks: null,
-    configAgents: null,
-    configUsage: null,
-    configUsageRange: "7d",
-    configPlatformUsage: null,
-    configPlatformUsageRange: "7d",
-    configPlatformUsageSupported: true,
-    configBackups: null,
-    configAppUpdate: null,
-    configWorkflows: null,
-    configWorkflowScope: "project",
-    configWorkflowGate: null,
     workflowHub: null,
     workflowActiveRuns: null,
     workflowHubError: null,
     workflowHubLoading: false,
     workflowRunTarget: null,
     composerPrefill: null,
-    appUpdateInstall: null,
-    resetCards: null,
-    resetProviderId: null,
-    resetNonce: null,
-    resetIdempotencyKey: null,
-    resetEligible: [],
-    resetCredentials: true,
-    resetBusy: false,
-    resetNextTryAt: null,
-    pendingRestart: false,
-    // Seeded from storage by init(), like every other persisted preference —
-    // the initial state must stay free of storage calls so the node-environment
-    // tests (which have no localStorage) can import the store.
-    updateChannel: "stable",
+    ...configSliceState,
 
     init: () => {
       const book = loadServerBook();
@@ -2229,14 +1536,15 @@ export const useAppStore = create<AppState>((set, get) => {
       applyFontSize(fontSize);
       // Seed the channel mirror and the state together, so a stored "preview"
       // is in effect before the first app-update read.
-      updateChannel = loadUpdateChannel();
+      const channel = loadUpdateChannel();
+      seedUpdateChannel(channel);
       set({
         savedServers: book?.servers ?? [],
         activeServerId: book?.activeId ?? null,
         profile: book ? activeProfile(book.servers, book.activeId) : null,
         lang: loadLang(),
         fontSize,
-        updateChannel,
+        updateChannel: channel,
       });
       if (book) {
         startPolling();
@@ -2654,7 +1962,7 @@ export const useAppStore = create<AppState>((set, get) => {
         get().closeSession();
       }
       set({ notice: "notice.sessionClosed" });
-      sessionCache.delete(sessionId);
+      removeSessionCache(sessionId);
     },
 
     shutdownInstance: async (instanceId) => {
@@ -2733,7 +2041,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return false;
       }
       set({ notice: "notice.sessionDeleted" });
-      sessionCache.delete(sessionId);
+      removeSessionCache(sessionId);
       return true;
     },
 
@@ -3366,448 +2674,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     // ---- ZCode configuration (ADR-0009) ----
-
-    setUpdateChannel: (channel) => {
-      updateChannel = channel;
-      saveUpdateChannel(channel);
-      set({ updateChannel: channel });
-      // The stored check is for the channel it was read with; switching without
-      // a refetch would leave the screen showing the other stream's verdict.
-      const section = get().configSection;
-      if (section === "appUpdate") void get().loadConfigSection("appUpdate");
-    },
-
-    openConfig: (section = null) =>
-      set((s) => ({
-        configOpen: true,
-        configSection: section,
-        // Deep entry only when the screen was CLOSED before this call —
-        // navigating list → section keeps the list as the back target.
-        configDeepEntry: section !== null && !s.configOpen,
-      })),
-
-    closeConfig: () =>
-      set({ configOpen: false, configSection: null, configDeepEntry: false }),
-
-    backFromConfigSection: () => {
-      if (get().configDeepEntry) get().closeConfig();
-      else get().openConfig(null);
-    },
-
-    loadConfigAll: async () => {
-      const client = hub();
-      if (!client) return;
-      set({ configLoading: true, configError: null });
-      try {
-        const all = await client.settingsAll();
-        set({ configAll: all, configLoading: false, configSupported: true });
-        // The snapshot carries usage and reset-card eligibility, so a section
-        // screen that opens straight after the entry list needs no second
-        // request for those two.
-        if (all.usage) {
-          set({ configUsage: all.usage, configUsageRange: all.usage.range });
-        }
-        if (all.resetCards) {
-          const providers = all.resetCards.providers ?? [];
-          // The hub reports the coding-plan provider ids that COULD own cards,
-          // not the ones this account actually has — so there is usually more
-          // than one and a picker is the norm. Remember the eligibility
-          // verdict alongside: `credentials: false` means the store could not
-          // be decrypted, which is a different (and non-fatal) state from
-          // having no plan at all.
-          set({
-            resetCards: null,
-            resetProviderId: null,
-            resetEligible: providers,
-            resetCredentials: all.resetCards.credentials !== false,
-          });
-        }
-      } catch (e) {
-        // 404 means this hub predates the settings API (bridge < 0.47.0). That
-        // is a capability gap, not a failure — the screens explain it.
-        if (e instanceof HubApiError && e.status === 404) {
-          set({ configSupported: false, configLoading: false });
-          return;
-        }
-        set({
-          configError: e instanceof Error ? e.message : String(e),
-          configLoading: false,
-        });
-      }
-    },
-
-    loadConfigSection: async (section, arg) => {
-      const client = hub();
-      if (!client) return;
-      set({ configLoading: true, configError: null });
-      try {
-        switch (section) {
-          case "models":
-            set({ configModels: await client.settingsModels() });
-            break;
-          case "skills":
-            set({ configSkills: await client.settingsSkills() });
-            break;
-          case "mcp":
-            set({ configMcp: await client.settingsMcp() });
-            break;
-          case "hooks":
-            set({ configHooks: await client.settingsHooks() });
-            break;
-          case "agents":
-            set({ configAgents: await client.settingsAgents() });
-            break;
-          case "usage": {
-            // The route wraps the payload: `{ok, usage}`. Storing the whole
-            // response would make every `usage.available` read undefined and
-            // the screen would show its "no data" empty state forever.
-            const requestedRange = arg?.range ?? "7d";
-            // Record the ask BEFORE awaiting: the guard below compares against
-            // the newest request, and a read that lands first must not be able
-            // to overwrite the record of one still in flight.
-            set({ configUsageRange: requestedRange });
-            const payload = (await client.settingsUsage(requestedRange)) as {
-              usage?: SettingsUsage;
-            };
-            // Stale-response guard. The range buttons fire a fresh read each
-            // tap, and nothing serializes them: tap "All" then "7d" on a slow
-            // link and the All response can land AFTER the 7d one, leaving the
-            // 7d button highlighting numbers computed for the whole history.
-            // The snapshot carries the range it was computed for, so drop any
-            // answer that no longer matches what the user asked for last.
-            const answeredRange = payload.usage?.range ?? requestedRange;
-            if (answeredRange !== get().configUsageRange) return;
-            set({ configUsage: payload.usage ?? null });
-            break;
-          }
-          case "usagePlatform": {
-            // Same envelope pattern (`{ok, platformUsage}`) and the same
-            // stale-range guard as the local usage read above.
-            const requestedRange = arg?.range ?? "7d";
-            set({ configPlatformUsageRange: requestedRange });
-            try {
-              const payload = (await client.settingsUsagePlatform(
-                requestedRange,
-              )) as {
-                platformUsage?: SettingsPlatformUsage;
-              };
-              const answeredRange =
-                payload.platformUsage?.range ?? requestedRange;
-              if (answeredRange !== get().configPlatformUsageRange) return;
-              set({ configPlatformUsage: payload.platformUsage ?? null });
-            } catch (e) {
-              // A 404 here means the bridge predates the route — unlike the
-              // shared catch below, it must NOT flip configSupported (that
-              // verdict belongs to /settings/all and gates every section); the
-              // platform tab shows its own upgrade note instead.
-              if (e instanceof HubApiError && e.status === 404) {
-                set({ configPlatformUsageSupported: false });
-                break;
-              }
-              throw e;
-            }
-            break;
-          }
-          case "backups":
-            set({ configBackups: await client.settingsBackups() });
-            break;
-          case "appUpdate":
-            set({
-              configAppUpdate: await client.settingsAppUpdate(updateChannel),
-            });
-            break;
-          case "workflows":
-            // The grouped cross-instance list is driven by the workflows
-            // screen itself (mount + running poll); this mount-effect path
-            // just seeds its first paint.
-            await get().loadWorkflowHub();
-            break;
-          case "quota":
-            // The plan-quota screen reuses the hub-level quota the side panels
-            // already show — one source of truth, so the numbers outside and
-            // inside can never disagree.
-            await get().refreshUsageStats();
-            break;
-        }
-        set({ configLoading: false });
-      } catch (e) {
-        if (e instanceof HubApiError && e.status === 404) {
-          set({ configSupported: false, configLoading: false });
-          return;
-        }
-        set({
-          configError: e instanceof Error ? e.message : String(e),
-          configLoading: false,
-        });
-      }
-    },
-
-    applyConfigWrite: async (label, write, reload) => {
-      try {
-        const effect = await write();
-        // The effect class is the whole point: an immediate write is done, a
-        // needs-restart one has not landed yet and the user must know which.
-        // `notice` (an i18n key the banner translates) for the outcome, `notify`
-        // (plain English, like every other failure message here) for errors.
-        //
-        // An undefined effect means the write wrapper found no client — the
-        // connection dropped while the screen was open, and NOTHING was sent.
-        // Reporting that as success would show a toggle that moved on a machine
-        // that never heard about it.
-        if (effect === undefined) {
-          get().notify(`${label} failed: not connected`);
-          return false;
-        }
-        if (effect === "needs-restart") {
-          set({ pendingRestart: true, notice: "notice.configNeedsRestart" });
-        }
-        for (const section of reload ?? []) {
-          await get().loadConfigSection(section);
-        }
-        return true;
-      } catch (e) {
-        get().notify(
-          `${label} failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        return false;
-      }
-    },
-
-    setProviderEnabled: async (providerId, enabled) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.updateProvider(providerId, { enabled });
-      return res.effect;
-    },
-
-    setSkillEnabled: async (path, enable) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.setSkillEnabled({ path, enable });
-      return res.effect;
-    },
-
-    copySkillToUser: async (path) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.copySkillToUser({ path });
-      return res.effect;
-    },
-
-    upsertModel: async (body) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.addModel(body);
-      return res.effect;
-    },
-
-    setMcpEnabled: async (name, enable) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.setMcpEnabled(name, enable);
-      return res.effect;
-    },
-
-    upsertMcp: async (name, body) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.upsertMcpServer(name, body);
-      return res.effect;
-    },
-
-    setHooksEnabled: async (enabled) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.setHooksEnabled(enabled);
-      return res.effect;
-    },
-
-    updateHookEntry: async (eventName, matcherIndex, hookIndex, body) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.updateHook(
-        eventName,
-        matcherIndex,
-        hookIndex,
-        body,
-      );
-      return res.effect;
-    },
-
-    setAgentEnabled: async (name, enable) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.setAgentEnabled(name, enable);
-      return res.effect;
-    },
-
-    upsertAgent: async (name, body) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.upsertAgent(name, body);
-      return res.effect;
-    },
-
-    restoreBackup: async (file, path) => {
-      const client = hub();
-      if (!client) return undefined;
-      const res = await client.restoreBackup({ file, path });
-      // The effect follows the file: restoring cliConfig needs a restart,
-      // restoring providerConfig is immediate. Report what the bridge said
-      // rather than assuming one or the other.
-      return res.effect;
-    },
-
-    loadResetCards: async (providerId) => {
-      const client = hub();
-      if (!client) return;
-      // Drop the previous provider's inventory NOW, not when the new read
-      // lands: while it is in flight the screen would still show provider A's
-      // cards, and if this read FAILS it would keep showing them — with a
-      // nonce the next spend then sends for a provider it is not looking at.
-      set({
-        resetBusy: true,
-        resetProviderId: providerId,
-        resetCards: null,
-        resetNonce: null,
-        resetIdempotencyKey: null,
-      });
-      try {
-        const status = await client.resetCardStatus(providerId);
-        // The provider picker can fire two reads in quick succession. Without
-        // this guard the SLOWER one lands last and its nonce is stored
-        // alongside the FASTER one's providerId — a spend then pairs a nonce
-        // minted for a different provider, which the route always rejects with
-        // 409, and the user sees a broken button with no cause to guess.
-        if (get().resetProviderId !== providerId) return;
-        set({
-          resetCards: status.resetCards,
-          resetNonce: status.resetCards.nonce,
-          // Minted HERE, with the nonce it belongs to, so a spend's every retry
-          // sends the same key. Generating it inside the spend instead gave a
-          // fresh key per attempt — which is precisely what defeats the
-          // backend's dedupe and can burn a second card after a timeout.
-          resetIdempotencyKey: newIdempotencyKey(),
-          resetBusy: false,
-        });
-      } catch (e) {
-        // Same guard: an error from a read the user has already moved on from
-        // must not surface as a toast about a provider they are not looking at.
-        if (get().resetProviderId !== providerId) return;
-        set({ resetBusy: false });
-        get().notify(
-          `reset card status failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    },
-
-    spendResetCard: async ({ providerId, nonce, resetType }) => {
-      const client = hub();
-      if (!client || !providerId || !nonce) return false;
-      // Same guard as the opportunity: if the user has switched provider since
-      // the gesture began, this nonce belongs to another provider's inventory
-      // and spending it now would burn the wrong card.
-      if (get().resetProviderId && get().resetProviderId !== providerId)
-        return false;
-      set({ resetBusy: true });
-      // The key minted with this nonce, NOT a fresh one. The backend keys the
-      // spend on it, so a retry (the 502/504 the bridge answers when a spend
-      // may already have been carried out) sends the same value and gets the
-      // same outcome. Generating it here instead gave a new key per attempt,
-      // which defeats the dedupe and can burn a second card.
-      const idempotencyKey = get().resetIdempotencyKey ?? newIdempotencyKey();
-      try {
-        const res = await client.spendResetCard({
-          providerId,
-          resetType,
-          nonce,
-          idempotencyKey,
-        });
-        set({ resetBusy: false });
-        const used = (res as { ok: boolean; used?: boolean }).used !== false;
-        set({
-          notice: used
-            ? "notice.configResetSpent"
-            : "notice.configResetSpendFailed",
-        });
-        // Refresh both surfaces: the card list (one fewer card) and the quota
-        // (the window it cleared). A spend that shows no result reads as a
-        // failure even when it worked. The refresh also issues the next nonce.
-        await get().loadResetCards(providerId);
-        await get().refreshUsageStats();
-        return used;
-      } catch (e) {
-        set({ resetBusy: false });
-        // 409 = the nonce is no longer the one the server issued (a newer status
-        // read replaced it, or the user switched provider). Re-read the status to
-        // mint a fresh one and say so: without this the button looks broken and
-        // the only escape is finding the refresh control by trial and error.
-        //
-        // The route burns the nonce only AFTER the spend settles, so a request
-        // that reached the server and failed on the way back is NOT a 409 — the
-        // same nonce and key still work, which is the retry path this protects.
-        if (e instanceof HubApiError && e.status === 409) {
-          await get().loadResetCards(providerId);
-          set({ notice: "notice.configResetStale" });
-          return false;
-        }
-        get().notify(
-          `reset card spend failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        return false;
-      }
-    },
-
-    markResetHistoryRead: async () => {
-      const client = hub();
-      const providerId = get().resetProviderId;
-      if (!client || !providerId) return;
-      try {
-        await client.markResetHistoryRead(providerId);
-        await get().loadResetCards(providerId);
-      } catch {
-        // Clearing an unread badge is cosmetic; a failure is not worth a toast.
-      }
-    },
-
-    installAppUpdate: async (input) => {
-      const client = hub();
-      if (!client) return;
-      try {
-        // The channel must travel with the install: the route re-reads the
-        // release manifest and refuses any version that is not the LATEST on
-        // the channel it was told. A preview user whose install defaulted to
-        // stable would be refused with "latest stable version is X, not Y" for
-        // a version the check itself offered.
-        await client.installAppUpdate({
-          ...input,
-          channel: input.channel ?? readAppUpdateChannel(),
-        });
-        // The download runs in the background on the bridge; progress arrives
-        // by polling, which the update screen drives.
-        await get().pollAppUpdate();
-      } catch (e) {
-        get().notify(
-          `app update install failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    },
-
-    pollAppUpdate: async () => {
-      const client = hub();
-      if (!client) return;
-      try {
-        // Same channel as the check: a poll that answered for the other stream
-        // would overwrite the install state with an unrelated manifest's.
-        const res = (await client.settingsAppUpdate(updateChannel)) as {
-          appUpdate?: { install?: AppUpdateState };
-        };
-        if (res.appUpdate?.install)
-          set({ appUpdateInstall: res.appUpdate.install });
-      } catch {
-        // A poll failure is not worth a toast; the next one may succeed.
-      }
-    },
+    // Config-screen state and actions live in ./configSlice.
+    ...createConfigSlice(set, get, hub),
 
     // ---- dynamic workflows (bridge 0.48.0, server ADR-0029) ----
 
@@ -3820,62 +2688,6 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     clearComposerPrefill: () => set({ composerPrefill: null }),
-
-    loadWorkflowGate: async () => {
-      const client = hub();
-      const instanceId = get().instanceId;
-      if (!client || !instanceId) return;
-      try {
-        const all = await client.instanceSettingsAll(instanceId);
-        set({ configWorkflowGate: all.workflow ?? null });
-      } catch {
-        // Silent, and that includes 404: a per-instance 404 is usually the
-        // hub re-learning its instances after a restart (the bridge
-        // re-registers within seconds), not proof of an old hub — writing
-        // `configSupported:false` here would retire EVERY config section on
-        // one transient answer. A failed probe hides the entry, which is the
-        // same verdict the gate itself gives on any doubt (fail-closed).
-      }
-    },
-
-    setWorkflowGate: async (mode) => {
-      const res = await get().workflowAction("set workflow gate", (c, iid) =>
-        c.workflowGateSet(iid, mode),
-      );
-      if (!res) return null;
-      set({ configWorkflowGate: res.gate });
-      return res.gate;
-    },
-
-    loadWorkflows: async (scope) => {
-      const client = hub();
-      if (!client) return;
-      set({
-        configLoading: true,
-        configError: null,
-        configWorkflowScope: scope,
-      });
-      try {
-        const instanceId = get().instanceId;
-        if (!instanceId) throw new Error("no instance connected");
-        const list = await client.workflowsList(instanceId, scope);
-        // Stale-response guard: the scope buttons fire a fresh read per tap
-        // and nothing serializes them — an answer for a scope the user has
-        // already moved past must not repaint the list under the new one.
-        if (get().configWorkflowScope !== scope) return;
-        set({ configWorkflows: list, configLoading: false });
-      } catch (e) {
-        if (get().configWorkflowScope !== scope) return;
-        // No 404 special-case: the machine-level loaders own the old-hub
-        // verdict. A 404 here is per-instance (usually the hub re-learning
-        // its instances), so it lands as a retriable page error instead of
-        // the permanent "unsupported" screen.
-        set({
-          configError: e instanceof Error ? e.message : String(e),
-          configLoading: false,
-        });
-      }
-    },
 
     workflowAction: async (label, fn, silent = false, onError, iidOverride) => {
       const client = hub();
@@ -4047,33 +2859,6 @@ export const useAppStore = create<AppState>((set, get) => {
           workflowHubError: hadData ? get().workflowHubError : message,
           workflowHubLoading: false,
         });
-      }
-    },
-
-    restartConfigBackend: async () => {
-      const client = hub();
-      const s = get();
-      // The restart is per-instance: the hub's own settings mount has no
-      // backend, so the bridge to disturb must be named. With no session open
-      // there is no instance to address, and the restart is unavailable.
-      if (!client || !s.instanceId) return -1;
-      try {
-        const res = await client.restartBackend(s.instanceId);
-        // `closed: false` means the old subprocess survived — the writes this
-        // restart existed to apply did NOT take effect. Clearing the flag here
-        // would hide the affordance the user needs, so it stays armed and the
-        // notice says the restart failed rather than succeeded.
-        if (res.closed) {
-          set({ pendingRestart: false, notice: "notice.configRestarted" });
-        } else {
-          set({ notice: "notice.configRestartFailed" });
-        }
-        return res.cancelledTurns;
-      } catch (e) {
-        get().notify(
-          `backend restart failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        return -1;
       }
     },
   };
