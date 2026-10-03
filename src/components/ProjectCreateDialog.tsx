@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FolderPlus, Loader2, Search } from "lucide-react";
 import { HubApiError, HubClient } from "../lib/hub";
 import { useBackHandler } from "../lib/backNav";
+import { loadCachedProjects, saveCachedProjects } from "../lib/storage";
 import type { HubProject } from "../lib/types";
 import { fmtRelative } from "../lib/time";
 import { useAppStore } from "../store/appStore";
@@ -46,12 +47,17 @@ export function ProjectCreateDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (!profile) return;
+    // Paint the persisted list at once (null → the loading placeholder);
+    // the fetch below refreshes and re-persists it.
+    setProjects(loadCachedProjects(profile.hubUrl));
     const client = new HubClient(profile.hubUrl, profile.token);
     let alive = true;
     client
       .projects()
       .then((list) => {
-        if (alive) setProjects(list);
+        if (!alive) return;
+        setProjects(list);
+        saveCachedProjects(profile.hubUrl, list);
       })
       .catch((e) => {
         if (!alive) return;

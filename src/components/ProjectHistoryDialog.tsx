@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft, History, Loader2, Search } from "lucide-react";
 import { HubApiError, HubClient } from "../lib/hub";
 import { useBackHandler } from "../lib/backNav";
+import { loadCachedProjects, saveCachedProjects } from "../lib/storage";
 import type {
   HubHistoryCursor,
   HubHistorySession,
@@ -21,6 +22,28 @@ import { projectName } from "./ProjectCreateDialog";
 // The listing is fetched strictly on demand for the chosen project: a cold
 // project's first page incubates its serve bridge (~12s), so prefetching
 // every project would spawn bridges for all of them.
+
+// First page of an opened project, remembered in memory: re-entering a
+// project repaints instantly instead of re-paying the serve-bridge
+// incubation. Deliberately NOT persisted — sessions churn far faster than
+// the project list, and a stale in-memory page is one back-and-forth old.
+interface CachedFirstPage {
+  rows: HubHistorySession[];
+  instanceId: string;
+  cursor: HubHistoryCursor | null;
+}
+const FIRST_PAGE_CACHE_LIMIT = 16;
+const firstPageCache = new Map<string, CachedFirstPage>();
+
+function cacheFirstPage(workspacePath: string, page: CachedFirstPage): void {
+  firstPageCache.delete(workspacePath);
+  firstPageCache.set(workspacePath, page);
+  while (firstPageCache.size > FIRST_PAGE_CACHE_LIMIT) {
+    const oldest = firstPageCache.keys().next().value;
+    if (oldest === undefined) break;
+    firstPageCache.delete(oldest);
+  }
+}
 
 export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
@@ -69,12 +92,17 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     if (!profile) return;
+    // Paint the persisted list at once (null → the loading placeholder);
+    // the fetch below refreshes and re-persists it.
+    setProjects(loadCachedProjects(profile.hubUrl));
     const client = new HubClient(profile.hubUrl, profile.token);
     let alive = true;
     client
       .projects()
       .then((list) => {
-        if (alive) setProjects(list);
+        if (!alive) return;
+        setProjects(list);
+        saveCachedProjects(profile.hubUrl, list);
       })
       .catch((e) => {
         if (!alive) return;
@@ -99,9 +127,18 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     if (!profile || loadingPage) return;
     const mySeq = ++listSeq.current;
     setSelected(workspacePath);
+    setListError(null);
+    // A remembered first page paints at once — the fresh fetch only runs on
+    // a first open (its ~12s incubation is exactly what the cache skips).
+    const hit = firstPageCache.get(workspacePath);
+    if (hit) {
+      setRows(hit.rows);
+      setInstanceId(hit.instanceId);
+      setCursor(hit.cursor);
+      return;
+    }
     setRows(null);
     setCursor(null);
-    setListError(null);
     setLoadingPage(true);
     const client = new HubClient(profile.hubUrl, profile.token);
     try {
@@ -112,6 +149,11 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
       setRows(page.sessions);
       setInstanceId(page.instance.id);
       setCursor(page.nextCursor);
+      cacheFirstPage(workspacePath, {
+        rows: page.sessions,
+        instanceId: page.instance.id,
+        cursor: page.nextCursor,
+      });
     } catch (e) {
       if (listSeq.current !== mySeq) return;
       setListError(describeListError(e));
@@ -189,6 +231,16 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
       setRows((prev) =>
         prev ? prev.filter((r) => r.sessionId !== sessionId) : prev,
       );
+      // Keep the remembered first page in lockstep so a re-open does not
+      // resurrect the tombstoned row.
+      if (selected) {
+        const cached = firstPageCache.get(selected);
+        if (cached)
+          cacheFirstPage(selected, {
+            ...cached,
+            rows: cached.rows.filter((r) => r.sessionId !== sessionId),
+          });
+      }
       return;
     }
     if (!mounted.current) return;
@@ -211,9 +263,12 @@ export function ProjectHistoryDialog({ onClose }: { onClose: () => void }) {
     setProjDeleting(false);
     if (ok) {
       setProjAction(null);
-      setProjects((prev) =>
-        prev ? prev.filter((p) => p.workspacePath !== workspacePath) : prev,
-      );
+      firstPageCache.delete(workspacePath);
+      const next = projects
+        ? projects.filter((p) => p.workspacePath !== workspacePath)
+        : null;
+      setProjects(next);
+      if (next && profile) saveCachedProjects(profile.hubUrl, next);
       return;
     }
     if (!mounted.current) return;

@@ -474,23 +474,30 @@ function WorkflowDetail({
   const [starting, setStarting] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    const res = await workflowAction(
-      "load workflow",
-      (c, iid) => c.workflowGet(iid, scope, name),
-      false,
-      undefined,
-      instanceId,
-    );
+  // skipDetail serves the 5s poll: the workflow's meta (description, script
+  // path) is static between runs, so only history + summaries refresh — and
+  // the loading gate stays untouched to keep the poll invisible.
+  async function load(skipDetail = false) {
+    if (!skipDetail) setLoading(true);
+    const [res, history] = await Promise.all([
+      skipDetail
+        ? Promise.resolve(null)
+        : workflowAction(
+            "load workflow",
+            (c, iid) => c.workflowGet(iid, scope, name),
+            false,
+            undefined,
+            instanceId,
+          ),
+      workflowAction(
+        "load runs",
+        (c, iid) => c.workflowRunsHistory(iid, { scope, name }),
+        false,
+        undefined,
+        instanceId,
+      ),
+    ]);
     if (res) setDetail(res);
-    const history = await workflowAction(
-      "load runs",
-      (c, iid) => c.workflowRunsHistory(iid, { scope, name }),
-      false,
-      undefined,
-      instanceId,
-    );
     // Only a landed answer updates the list: a failed read keeps `null`, and
     // the render below shows nothing rather than dressing the error up as
     // "no runs recorded yet" (the toast already said what went wrong).
@@ -508,7 +515,7 @@ function WorkflowDetail({
     );
     if (sessionIds.length > 0)
       setSummaries(await loadRunSummaries(sessionIds, instanceId));
-    setLoading(false);
+    if (!skipDetail) setLoading(false);
   }
 
   useEffect(() => {
@@ -522,7 +529,7 @@ function WorkflowDetail({
     runs?.some((r) => RUN_ACTIVE.has(r.status)) ?? false;
   useEffect(() => {
     if (!runActive) return;
-    const timer = setInterval(() => void load(), 5000);
+    const timer = setInterval(() => void load(true), 5000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runActive]);

@@ -22,6 +22,23 @@ function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
+// Directory listings remembered across navigation: going back up or
+// re-entering a directory repaints instantly instead of re-paying the
+// fs/list round-trip. The header's refresh button bypasses the cache; a
+// fresh listing overwrites its entry. Bounded, oldest-first eviction.
+const LISTING_CACHE_LIMIT = 32;
+const listingCache = new Map<string, FsListing>();
+
+function cacheListing(path: string, listing: FsListing): void {
+  listingCache.delete(path);
+  listingCache.set(path, listing);
+  while (listingCache.size > LISTING_CACHE_LIMIT) {
+    const oldest = listingCache.keys().next().value;
+    if (oldest === undefined) break;
+    listingCache.delete(oldest);
+  }
+}
+
 function EntryIcon({ kind }: { kind: FsEntry["kind"] }) {
   if (kind === "dir")
     return <Folder className="size-4.5 shrink-0 text-blue-400" />;
@@ -49,8 +66,26 @@ export function FileBrowser({ onClose }: FileBrowserProps) {
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Distinguishes "the refresh button fired for THIS directory" (bypass the
+  // cache) from "navigated to a directory" (use it). Null path = first mount.
+  const lastLoad = useRef<{ path: string | null; attempt: number }>({
+    path: null,
+    attempt: -1,
+  });
+
   useEffect(() => {
     let alive = true;
+    const isRefresh =
+      lastLoad.current.path === path &&
+      lastLoad.current.attempt !== attempt;
+    lastLoad.current = { path, attempt };
+    const hit = isRefresh ? undefined : listingCache.get(path);
+    if (hit) {
+      setListing(hit);
+      setLoading(false);
+      setFailed(false);
+      return;
+    }
     setLoading(true);
     setFailed(false);
     // Drop the previous directory while loading: stale rows stay clickable
@@ -63,6 +98,7 @@ export function FileBrowser({ onClose }: FileBrowserProps) {
         setFailed(true);
         return;
       }
+      cacheListing(path, res);
       setListing(res);
     });
     return () => {

@@ -1,4 +1,9 @@
-import type { ConnectionProfile, PromptDraft, SavedServer } from "./types";
+import type {
+  ConnectionProfile,
+  HubProject,
+  PromptDraft,
+  SavedServer,
+} from "./types";
 
 // Thin wrapper over localStorage (ADR: app-private WebView storage is
 // acceptable for a sideloaded personal client; swap implementations here).
@@ -10,6 +15,7 @@ const LANG_KEY = "zcode-acp:lang";
 const FONT_SIZE_KEY = "zcode-acp:font-size";
 const PENDING_KEY = "zcode-acp:pending";
 const UPDATE_CHANNEL_KEY = "zcode-acp:update-channel";
+const PROJECTS_KEY = "zcode-acp:projects";
 
 export type Lang = "en" | "zh-CN";
 export type FontSize = "small" | "medium" | "large";
@@ -134,6 +140,49 @@ export function loadUpdateChannel(): UpdateChannel {
 
 export function saveUpdateChannel(channel: UpdateChannel): void {
   localStorage.setItem(UPDATE_CHANNEL_KEY, channel);
+}
+
+// Known-projects list per hub, cached for the project dialogs' first paint:
+// small, slow-changing, and shared by the history and create sheets — a cold
+// open renders instantly while the fetch refreshes in the background.
+function isValidProject(v: unknown): v is HubProject {
+  if (!v || typeof v !== "object") return false;
+  const p = v as Partial<HubProject>;
+  return (
+    typeof p.workspacePath === "string" &&
+    p.workspacePath.length > 0 &&
+    typeof p.sessions === "number" &&
+    typeof p.lastActive === "number"
+  );
+}
+
+export function loadCachedProjects(hubUrl: string): HubProject[] | null {
+  try {
+    const raw = localStorage.getItem(PROJECTS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const list = parsed[hubUrl];
+    if (!Array.isArray(list)) return null;
+    return list.filter(isValidProject);
+  } catch {
+    return null;
+  }
+}
+
+export function saveCachedProjects(
+  hubUrl: string,
+  projects: HubProject[],
+): void {
+  try {
+    const raw = localStorage.getItem(PROJECTS_KEY);
+    const parsed = raw
+      ? (JSON.parse(raw) as Record<string, unknown>)
+      : {};
+    parsed[hubUrl] = projects;
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(parsed));
+  } catch {
+    // Quota/private-mode failures just lose the cache, never the feature.
+  }
 }
 
 // Queued (pending) prompt drafts per session id — they must survive session

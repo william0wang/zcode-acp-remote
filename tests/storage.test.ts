@@ -6,9 +6,11 @@
 import { beforeEach, expect, test } from "vitest";
 import {
   defaultServerName,
+  loadCachedProjects,
   loadPending,
   loadServerBook,
   newServerId,
+  saveCachedProjects,
   savePending,
   saveServerBook,
 } from "../src/lib/storage";
@@ -16,6 +18,7 @@ import {
 const PENDING_KEY = "zcode-acp:pending";
 const PROFILE_KEY = "zcode-acp:profile";
 const SERVERS_KEY = "zcode-acp:servers";
+const PROJECTS_KEY = "zcode-acp:projects";
 
 let backing: Map<string, string>;
 
@@ -162,4 +165,41 @@ test("defaultServerName falls back to the raw URL", () => {
 test("newServerId yields unique non-empty ids", () => {
   const ids = new Set(Array.from({ length: 50 }, () => newServerId()));
   expect(ids.size).toBe(50);
+});
+
+test("cached projects round-trip per hub and drop malformed entries", () => {
+  const hubA = "http://hub-a";
+  const hubB = "http://hub-b";
+  const list = [
+    { workspacePath: "/w/one", sessions: 3, lastActive: 100 },
+    { workspacePath: "/w/two", sessions: 0, lastActive: 200 },
+  ];
+  saveCachedProjects(hubA, list);
+  saveCachedProjects(hubB, []);
+  expect(loadCachedProjects(hubA)).toEqual(list);
+  // An empty list is a valid cached state, distinct from "never cached".
+  expect(loadCachedProjects(hubB)).toEqual([]);
+  expect(loadCachedProjects("http://other")).toBeNull();
+
+  // Hand-corrupted rows are filtered out instead of failing the whole load.
+  backing.set(
+    PROJECTS_KEY,
+    JSON.stringify({
+      [hubA]: [
+        { workspacePath: "/w/one", sessions: 3, lastActive: 100 },
+        { workspacePath: "", sessions: 1, lastActive: 1 }, // no path
+        "garbage",
+      ],
+    }),
+  );
+  expect(loadCachedProjects(hubA)).toEqual([
+    { workspacePath: "/w/one", sessions: 3, lastActive: 100 },
+  ]);
+});
+
+test("loadCachedProjects tolerates garbage storage", () => {
+  backing.set(PROJECTS_KEY, "{not json");
+  expect(loadCachedProjects("http://hub")).toBeNull();
+  backing.set(PROJECTS_KEY, JSON.stringify({ hub: "not-an-array" }));
+  expect(loadCachedProjects("hub")).toBeNull();
 });
