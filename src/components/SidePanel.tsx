@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, RefreshCw, X } from "lucide-react";
+import { Activity, ChevronRight, Pencil, RefreshCw, X } from "lucide-react";
 import { useBackHandler } from "../lib/backNav";
 import { useAppStore } from "../store/appStore";
 import { QuotaSection } from "./QuotaSection";
@@ -103,6 +103,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   }
 
   const activeServer = savedServers.find((s) => s.id === activeServerId);
+  const openConfig = useAppStore((s) => s.openConfig);
 
   return (
     <PanelShell title={t("panel.title")} onClose={onClose}>
@@ -142,6 +143,19 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               {upgradeNote}
             </p>
           )}
+          {/* Machine health of the hub's host — a read-only dashboard, not
+              ZCode configuration, so its entry lives here (deep entry into
+              the page; Back returns to this panel, never the config list). */}
+          <button
+            onClick={() => openConfig("system")}
+            className="mt-2 flex w-full items-center justify-between gap-2 rounded-xl bg-raised px-3 py-2.5 text-left active:bg-white/[0.05]"
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm text-dim">
+              <Activity className="size-4 shrink-0 text-faint" />
+              {t("system.title")}
+            </span>
+            <ChevronRight className="size-4 shrink-0 text-faint" />
+          </button>
         </div>
       </div>
 

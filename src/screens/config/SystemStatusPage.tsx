@@ -69,10 +69,14 @@ function BarRow({
   label,
   value,
   percent,
+  lowIsGood = true,
 }: {
   label: string;
   value: string;
   percent: number | null;
+  /** Usage bars heat up as they fill; the battery is the one bar where a
+   * full bar is healthy, so it flips the color scale, not the fill. */
+  lowIsGood?: boolean;
 }) {
   const clamped = percent == null ? 0 : Math.min(100, Math.max(0, percent));
   return (
@@ -89,7 +93,12 @@ function BarRow({
           style={
             percent == null
               ? undefined
-              : { width: `${clamped}%`, backgroundColor: heatColor(clamped) }
+              : {
+                  width: `${clamped}%`,
+                  backgroundColor: heatColor(
+                    lowIsGood ? clamped : 100 - clamped,
+                  ),
+                }
           }
         />
       </div>
@@ -127,22 +136,22 @@ export function SystemStatusPage() {
     battery?.powerSource == null
       ? PLACEHOLDER
       : battery.powerSource === "ac"
-        ? t("zconfig.systemPowerAc")
-        : t("zconfig.systemPowerBattery");
+        ? t("system.powerAc")
+        : t("system.powerBattery");
   const battStatus =
     battery?.status == null
       ? null
       : ({
-          charging: t("zconfig.systemBattCharging"),
-          discharging: t("zconfig.systemBattDischarging"),
-          charged: t("zconfig.systemBattCharged"),
+          charging: t("system.battCharging"),
+          discharging: t("system.battDischarging"),
+          charged: t("system.battCharged"),
         } as Record<string, string>)[battery.status] ?? battery.status;
   const usedPct = (v: SystemStatsVolume): number =>
     v.totalBytes > 0 ? (v.usedBytes / v.totalBytes) * 100 : 0;
 
   return (
     <ConfigPageFrame
-      title={t("zconfig.system")}
+      title={t("system.title")}
       onBack={backFromConfigSection}
       onRefresh={() => void loadSystemStats()}
       refreshing={loading}
@@ -153,19 +162,20 @@ export function SystemStatusPage() {
     >
       {stats && (
         <>
-          <ConfigBlock title={t("zconfig.systemHost")}>
-            <ConfigRow label={t("zconfig.systemHostname")} value={stats.host.hostname} />
-            <ConfigRow label={t("zconfig.systemOs")} value={stats.host.osVersion ?? PLACEHOLDER} />
-            <ConfigRow label={t("zconfig.systemModel")} value={stats.host.model ?? PLACEHOLDER} />
-            <ConfigRow label={t("zconfig.systemChip")} value={stats.host.chip ?? PLACEHOLDER} />
-            <ConfigRow label={t("zconfig.systemUptime")} value={fmtUptime(stats.uptimeS)} />
+          <ConfigBlock title={t("system.host")}>
+            <ConfigRow label={t("system.hostname")} value={stats.host.hostname} />
+            <ConfigRow label={t("system.os")} value={stats.host.osVersion ?? PLACEHOLDER} />
+            <ConfigRow label={t("system.model")} value={stats.host.model ?? PLACEHOLDER} />
+            <ConfigRow label={t("system.chip")} value={stats.host.chip ?? PLACEHOLDER} />
+            <ConfigRow label={t("system.uptime")} value={fmtUptime(stats.uptimeS)} />
           </ConfigBlock>
 
-          <ConfigBlock title={t("zconfig.systemBattery")} divided>
+          <ConfigBlock title={t("system.battery")} divided>
             {battery?.present ? (
               <>
                 <BarRow
-                  label={t("zconfig.systemBattery")}
+                  label={t("system.battery")}
+                  lowIsGood={false}
                   value={
                     battery.percent == null
                       ? PLACEHOLDER
@@ -174,52 +184,52 @@ export function SystemStatusPage() {
                   percent={battery.percent}
                 />
                 <ConfigRow
-                  label={t("zconfig.systemPowerSource")}
+                  label={t("system.powerSource")}
                   value={`${powerSource}${battStatus ? ` · ${battStatus}` : ""}`}
                 />
                 <ConfigRow
-                  label={t("zconfig.systemRemaining")}
+                  label={t("system.remaining")}
                   value={fmtMinutes(battery.remainingMin)}
                 />
               </>
             ) : (
               <ConfigRow
-                label={t("zconfig.systemBattery")}
-                value={t("zconfig.systemBatteryNone")}
+                label={t("system.battery")}
+                value={t("system.batteryNone")}
               />
             )}
             <ConfigRow
-              label={t("zconfig.systemSleep")}
+              label={t("system.sleep")}
               value={
                 power?.preventSleep == null
                   ? PLACEHOLDER
                   : power.preventSleep
-                    ? t("zconfig.systemSleepHeld")
-                    : t("zconfig.systemSleepOk")
+                    ? t("system.sleepHeld")
+                    : t("system.sleepOk")
               }
               hint={
                 power?.preventSleep && power.sleepHolders.length > 0
-                  ? t("zconfig.systemSleepHolders", {
+                  ? t("system.sleepHolders", {
                       names: power.sleepHolders.join(", "),
                     })
                   : undefined
               }
             />
             <ConfigRow
-              label={t("zconfig.systemThermal")}
+              label={t("system.thermal")}
               value={
                 power?.cpuSpeedLimitPct == null
                   ? PLACEHOLDER
                   : power.cpuSpeedLimitPct >= 100
-                    ? t("zconfig.systemThermalOk")
-                    : t("zconfig.systemThermalLimited", {
+                    ? t("system.thermalOk")
+                    : t("system.thermalLimited", {
                         pct: power.cpuSpeedLimitPct,
                       })
               }
             />
           </ConfigBlock>
 
-          <ConfigBlock title={t("zconfig.systemPerformance")} divided>
+          <ConfigBlock title={t("system.performance")} divided>
             <BarRow
               label={`CPU · ${stats.cpu.cores}C`}
               value={
@@ -230,12 +240,12 @@ export function SystemStatusPage() {
               percent={stats.cpu.usagePct}
             />
             <ConfigRow
-              label={t("zconfig.systemLoad")}
+              label={t("system.load")}
               value={stats.cpu.loadAvg.map((v) => v.toFixed(1)).join(" / ")}
             />
             {m && (
               <BarRow
-                label={t("zconfig.systemMemory")}
+                label={t("system.memory")}
                 value={
                   m.usedBytes == null
                     ? PLACEHOLDER
@@ -248,35 +258,35 @@ export function SystemStatusPage() {
             )}
             {m && m.swapTotalBytes != null && m.swapUsedBytes != null && (
               <BarRow
-                label={t("zconfig.systemSwap")}
+                label={t("system.swap")}
                 value={`${fmtBytes(m.swapUsedBytes)} / ${fmtBytes(m.swapTotalBytes)}`}
                 percent={(m.swapUsedBytes / m.swapTotalBytes) * 100}
               />
             )}
             {root && (
               <BarRow
-                label={t("zconfig.systemStorage")}
+                label={t("system.storage")}
                 value={`${fmtBytes(root.usedBytes)} / ${fmtBytes(root.totalBytes)}`}
                 percent={usedPct(root)}
               />
             )}
             {home && (
               <BarRow
-                label={t("zconfig.systemStorageHome")}
+                label={t("system.storageHome")}
                 value={`${fmtBytes(home.usedBytes)} / ${fmtBytes(home.totalBytes)}`}
                 percent={usedPct(home)}
               />
             )}
           </ConfigBlock>
 
-          <ConfigBlock title={t("zconfig.systemNetwork")} divided>
-            <ConfigRow label={t("zconfig.systemSsid")} value={net?.ssid ?? PLACEHOLDER} />
+          <ConfigBlock title={t("system.network")} divided>
+            <ConfigRow label={t("system.ssid")} value={net?.ssid ?? PLACEHOLDER} />
             <ConfigRow
-              label={t("zconfig.systemAddresses")}
+              label={t("system.addresses")}
               value={net?.addresses.length ? net.addresses.join(", ") : PLACEHOLDER}
             />
             <ConfigRow
-              label={t("zconfig.systemSpeed")}
+              label={t("system.speed")}
               value={
                 net == null
                   ? PLACEHOLDER
@@ -285,9 +295,9 @@ export function SystemStatusPage() {
             />
           </ConfigBlock>
 
-          <ConfigBlock title={t("zconfig.systemProcesses")} divided>
+          <ConfigBlock title={t("system.processes")} divided>
             <ConfigRow
-              label={t("zconfig.systemHubProc")}
+              label={t("system.hubProc")}
               value={`v${stats.hub.version} · ${fmtUptime(stats.hub.uptimeS)}`}
               hint={`${fmtBytes(stats.processes.hub.rssBytes)}${
                 stats.processes.hub.cpuPct != null
@@ -297,8 +307,8 @@ export function SystemStatusPage() {
             />
             {stats.processes.bridges.length === 0 ? (
               <ConfigRow
-                label={t("zconfig.systemBridges")}
-                value={t("zconfig.systemBridgesEmpty")}
+                label={t("system.bridges")}
+                value={t("system.bridgesEmpty")}
               />
             ) : (
               stats.processes.bridges.map((b) => (
@@ -321,7 +331,7 @@ export function SystemStatusPage() {
           </ConfigBlock>
 
           <p className="px-4 pb-2 pt-3 text-[11px] text-faint">
-            {t("zconfig.systemCollected", { time: fmtStamp(stats.collectedAt) })}
+            {t("system.collected", { time: fmtStamp(stats.collectedAt) })}
           </p>
         </>
       )}

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  Activity,
   Archive,
   Bot,
   Box,
@@ -80,6 +79,8 @@ export function ZCodeConfigScreen() {
   if (section === "backups") return <BackupsPage />;
   if (section === "appUpdate") return <AppUpdatePage />;
   if (section === "workflows") return <WorkflowsPage />;
+  // No list entry above: machine health is not ZCode configuration — the
+  // settings panel owns the entry (deep entry, so Back skips this list).
   if (section === "system") return <SystemStatusPage />;
 
   const entries: Array<{
@@ -129,12 +130,6 @@ export function ZCodeConfigScreen() {
       icon: ChartBar,
       title: t("zconfig.usage"),
       hint: t("zconfig.usageHint"),
-    },
-    {
-      id: "system",
-      icon: Activity,
-      title: t("zconfig.system"),
-      hint: t("zconfig.systemHint"),
     },
     {
       id: "backups",
