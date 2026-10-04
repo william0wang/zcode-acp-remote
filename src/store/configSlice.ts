@@ -16,6 +16,7 @@ import type {
   SettingsAll,
   SettingsPlatformUsage,
   SettingsUsage,
+  SystemStatsResponse,
   WorkflowGateBlock,
   WorkflowGateModeSetting,
   WorkflowListResponse,
@@ -35,7 +36,8 @@ export type ConfigSection =
   | "usagePlatform"
   | "backups"
   | "appUpdate"
-  | "workflows";
+  | "workflows"
+  | "system";
 
 export interface ConfigSliceState {
   // ---- ZCode configuration (ADR-0009) ----
@@ -116,6 +118,18 @@ export interface ConfigSliceState {
   // reports no `enabled` field at all, so this is the only honest source for
   // "show the workflows entry". Null = not probed (reads as hidden).
   configWorkflowGate: SettingsAll["workflow"] | null;
+  // ---- system status (bridge 0.62.0) ----
+  //
+  // The machine-level /api/system-stats snapshot the status page polls. Every
+  // read replaces it whole (the payload is one point-in-time collect); the
+  // page renders the latest answer as-is. `false` in
+  // configSystemStatsSupported means THIS hub predates the route (404), which
+  // degrades the page alone — configSupported belongs to /settings/all and
+  // must not retire every section over one missing endpoint.
+  configSystemStats: SystemStatsResponse | null;
+  configSystemStatsError: string | null;
+  configSystemStatsSupported: boolean;
+  configSystemStatsLoading: boolean;
 }
 
 export interface ConfigSliceActions {
@@ -218,6 +232,9 @@ export interface ConfigSliceActions {
   // Restarts the backend of the instance that owns the configuration, so
   // needs-restart writes take effect. Returns the interrupted-turn count.
   restartConfigBackend: () => Promise<number>;
+  // Reads the machine-level system-status snapshot (/api/system-stats). The
+  // status page polls this; first paint is seeded through loadConfigSection.
+  loadSystemStats: () => Promise<void>;
 }
 
 export type ConfigSlice = ConfigSliceState & ConfigSliceActions;
@@ -245,6 +262,10 @@ export const configSliceState: ConfigSliceState = {
   configWorkflows: null,
   configWorkflowScope: "project",
   configWorkflowGate: null,
+  configSystemStats: null,
+  configSystemStatsError: null,
+  configSystemStatsSupported: true,
+  configSystemStatsLoading: false,
   appUpdateInstall: null,
   resetCards: null,
   resetProviderId: null,
@@ -452,6 +473,11 @@ export function createConfigSlice(
             // screen itself (mount + running poll); this mount-effect path
             // just seeds its first paint.
             await get().loadWorkflowHub();
+            break;
+          case "system":
+            // Same pattern as workflows: the status page polls on its own;
+            // this mount-effect path seeds the first paint.
+            await get().loadSystemStats();
             break;
           case "quota":
             // The plan-quota screen reuses the hub-level quota the side panels
@@ -820,6 +846,35 @@ export function createConfigSlice(
           `backend restart failed: ${e instanceof Error ? e.message : String(e)}`,
         );
         return -1;
+      }
+    },
+
+    loadSystemStats: async () => {
+      const client = hub();
+      if (!client) return;
+      set({ configSystemStatsLoading: true });
+      try {
+        const stats = await client.systemStats();
+        set({
+          configSystemStats: stats,
+          configSystemStatsError: null,
+          configSystemStatsLoading: false,
+        });
+      } catch (e) {
+        // 404 = the hub PREDATES the route (bridge < 0.62.0): a version gap,
+        // not a transient failure — retire this page alone (configSupported
+        // belongs to /settings/all and must not flip here). Anything else is
+        // a blip: keep the last snapshot, no error paint over working
+        // content; the FIRST load of a broken connection still needs a story.
+        if (e instanceof HubApiError && e.status === 404) {
+          set({ configSystemStatsSupported: false, configSystemStatsLoading: false });
+          return;
+        }
+        const hadData = get().configSystemStats !== null;
+        set({
+          ...(hadData ? {} : { configSystemStatsError: e instanceof Error ? e.message : String(e) }),
+          configSystemStatsLoading: false,
+        });
       }
     },
   };

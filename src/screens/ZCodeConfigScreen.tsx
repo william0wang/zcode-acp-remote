@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  Activity,
   Archive,
   Bot,
   Box,
@@ -27,6 +28,7 @@ import { UsagePage } from "./config/UsagePage";
 import { BackupsPage } from "./config/BackupsPage";
 import { AppUpdatePage } from "./config/AppUpdatePage";
 import { WorkflowsPage } from "./config/WorkflowsPage";
+import { SystemStatusPage } from "./config/SystemStatusPage";
 
 // The independent configuration entry (ADR-0009): a full-screen list of the
 // machine's ZCode configuration sections, each opening its own full-screen
@@ -78,6 +80,7 @@ export function ZCodeConfigScreen() {
   if (section === "backups") return <BackupsPage />;
   if (section === "appUpdate") return <AppUpdatePage />;
   if (section === "workflows") return <WorkflowsPage />;
+  if (section === "system") return <SystemStatusPage />;
 
   const entries: Array<{
     id: ConfigSection;
@@ -126,6 +129,12 @@ export function ZCodeConfigScreen() {
       icon: ChartBar,
       title: t("zconfig.usage"),
       hint: t("zconfig.usageHint"),
+    },
+    {
+      id: "system",
+      icon: Activity,
+      title: t("zconfig.system"),
+      hint: t("zconfig.systemHint"),
     },
     {
       id: "backups",

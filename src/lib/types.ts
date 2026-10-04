@@ -635,6 +635,85 @@ export interface WorkflowOverviewResponse {
 }
 
 /**
+ * The hub's machine-level system status (`/api/system-stats`, bridge
+ * 0.62.0): host identity, CPU/memory/storage, battery + power assertions,
+ * network, and the hub's own + every registered bridge's process resources.
+ * Every field is independently best-effort — a probe the hub could not run
+ * (denied inside a sandbox, absent on this hardware) arrives as null and the
+ * page shows a placeholder, never an error. Rate fields (CPU %, network B/s,
+ * hub CPU %) are deltas the hub computes across reads: the FIRST read after
+ * a hub start reports null for them.
+ */
+export interface SystemStatsResponse {
+  collectedAt: number;
+  host: {
+    hostname: string;
+    /** e.g. "15.8 (24H23)" — null when `sw_vers` was unavailable. */
+    osVersion: string | null;
+    model: string | null;
+    chip: string | null;
+  };
+  uptimeS: number;
+  cpu: {
+    cores: number;
+    usagePct: number | null;
+    loadAvg: [number, number, number];
+  };
+  memory: {
+    totalBytes: number;
+    availableBytes: number | null;
+    usedBytes: number | null;
+    swapTotalBytes: number | null;
+    swapUsedBytes: number | null;
+  };
+  storage: {
+    /** null when statfs failed; `home` is null again when it is the same volume as root. */
+    root: SystemStatsVolume | null;
+    home: SystemStatsVolume | null;
+  };
+  battery: {
+    /** False on a desktop machine (no battery). */
+    present: boolean;
+    percent: number | null;
+    powerSource: "ac" | "battery" | null;
+    /** Raw pmset wording: charging / discharging / charged / … */
+    status: string | null;
+    remainingMin: number | null;
+  };
+  power: {
+    /** True while something holds PreventUserIdleSystemSleep — the machine will not idle-sleep. */
+    preventSleep: boolean | null;
+    sleepHolders: string[];
+    /** Thermal CPU speed limit (100 = full speed; null = no reading recorded). */
+    cpuSpeedLimitPct: number | null;
+  };
+  network: {
+    addresses: string[];
+    ssid: string | null;
+    rxBytesPerS: number | null;
+    txBytesPerS: number | null;
+  };
+  processes: {
+    hub: { pid: number; rssBytes: number; cpuPct: number | null };
+    bridges: Array<{
+      id: string;
+      workspace: string | null;
+      pid: number | null;
+      rssBytes: number | null;
+      cpuPct: number | null;
+    }>;
+  };
+  hub: { version: string; uptimeS: number; instances: number };
+}
+
+/** One filesystem volume of the system-status page. */
+export interface SystemStatsVolume {
+  totalBytes: number;
+  usedBytes: number;
+  availableBytes: number;
+}
+
+/**
  * One group of the management page's cross-instance list (desktop hub
  * parity): the GLOBAL workflows (one machine-wide group — `instanceId` is
  * whichever instance answered) or one hub instance's PROJECT workflows.

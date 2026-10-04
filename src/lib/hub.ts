@@ -13,6 +13,7 @@ import type {
   ModelUpsert,
   ResetCardStatus,
   SettingsAll,
+  SystemStatsResponse,
   AmendRunSettingsResponse,
   WorkflowArtifactItemsResponse,
   WorkflowArtifactReadResponse,
@@ -697,6 +698,17 @@ export class HubClient {
   async workflowOverview(): Promise<WorkflowOverviewResponse> {
     const res = await this.fetch("/api/workflow-overview");
     return (await res.json()) as WorkflowOverviewResponse;
+  }
+
+  /**
+   * Machine-level system status (`/api/system-stats`, bridge 0.62.0): host
+   * info, CPU/memory/storage, battery, power assertions, network, and the
+   * hub/bridge process resources. Not instance-addressed; rate fields need
+   * two reads ~1s apart (the hub deltas across reads — first read is null).
+   */
+  async systemStats(): Promise<SystemStatsResponse> {
+    const res = await this.fetch("/api/system-stats");
+    return (await res.json()) as SystemStatsResponse;
   }
 
   async workflowGet(

@@ -160,3 +160,39 @@ test("a 404 right after a bridge upgrade is retried once transparently", async (
   });
   expect(requested).toHaveLength(2);
 });
+
+test("systemStats GETs the machine-level system-stats route", async () => {
+  responses.push(
+    Response.json({
+      collectedAt: 1791106915456,
+      host: { hostname: "Mac.local", osVersion: "15.8 (24H23)", model: "Mac14,9", chip: "Apple M2 Pro" },
+      uptimeS: 528592,
+      cpu: { cores: 10, usagePct: 12.3, loadAvg: [2.5, 2.4, 2.4] },
+      memory: { totalBytes: 17_179_869_184, availableBytes: 5_428_199_424, usedBytes: 11_751_669_760, swapTotalBytes: 2_147_483_648, swapUsedBytes: 978_384_322 },
+      storage: {
+        root: { totalBytes: 494_384_795_648, usedBytes: 350_988_324_864, availableBytes: 143_396_470_784 },
+        home: null,
+      },
+      battery: { present: true, percent: 99, powerSource: "battery", status: "discharging", remainingMin: 1200 },
+      power: { preventSleep: true, sleepHolders: ["Amphetamine"], cpuSpeedLimitPct: null },
+      network: { addresses: ["10.0.0.2"], ssid: "HomeNet", rxBytesPerS: 11633, txBytesPerS: 450198 },
+      processes: {
+        hub: { pid: 38402, rssBytes: 69_255_168, cpuPct: 1.2 },
+        bridges: [{ id: "i1", workspace: "/w/proj", pid: 123, rssBytes: 300_000_000, cpuPct: 4.2 }],
+      },
+      hub: { version: "0.62.0", uptimeS: 9000, instances: 1 },
+    }),
+  );
+  const stats = await client().systemStats();
+  expect(requested[0]).toBe("http://hub/api/system-stats");
+  expect(stats.cpu.usagePct).toBe(12.3);
+  expect(stats.power.sleepHolders).toEqual(["Amphetamine"]);
+  expect(stats.processes.bridges).toHaveLength(1);
+});
+
+test("systemStats surfaces a 404 hub (route not served yet) as a HubApiError with status", async () => {
+  responses.push(new Response("no route", { status: 404 }));
+  const err = await client().systemStats().catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(HubApiError);
+  expect(err).toMatchObject({ status: 404 });
+});
