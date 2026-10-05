@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { useBackHandler } from "../../lib/backNav";
@@ -19,19 +12,42 @@ import type {
   WorkflowWorkspaceNode,
 } from "../../lib/types";
 import { ConfigBlock, ConfigEmpty, fmtStamp } from "./ConfigPage";
+import { ConfigField, ConfigFormSheet, configInputClass } from "./ConfigFormSheet";
 import {
-  ConfigField,
-  ConfigFormSheet,
-  configInputClass,
-} from "./ConfigFormSheet";
+  ArtifactMetaCard,
+  BoardView,
+  ChartView,
+  MetricsTiles,
+  RawData,
+  TableView,
+  cellText,
+} from "./WorkflowArtifactViews";
+import {
+  actorKeyOf,
+  describeRunEvent,
+  instanceKeyOf,
+  nodeStateWord,
+  reduceSlice,
+  statusWord,
+  type NodeAgg,
+} from "./workflowRunEventText";
 
 // One workflow run's detail view (bridge 0.48.0, ADR-0029): the journal
 // events, the artifacts, and the workspace nodes the backend's v4 queries
 // expose — everything the chat progress card deliberately compresses.
 //
+// The journal contract does not restate the engine's payload shapes, so this
+// view owns a per-kind rendering layer (workflowRunEventText for journal
+// events, WorkflowArtifactViews for preset specs); raw JSON is an explicit
+// toggle, never the default. Node lifecycles fold per instance into one line
+// showing the LATEST state.
+//
 // Live-ness is polling, not push: the journal cursor (`afterSequence`) never
 // invalidates, so a 3s tick while the run is active appends only the new
-// lines, and a settled run costs exactly one fetch per tab.
+// lines, and a settled run costs exactly one fetch per tab. Appends are
+// sequence-filtered regardless — a cursor that degenerates (a dropped
+// sequence) makes the server answer with the FULL journal, which must never
+// be re-appended onto the list.
 
 /**
  * Desktop-parity status presentation (upstream run-status-presentation): a
@@ -59,30 +75,27 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status?: string }) {
+  const { t } = useTranslation();
   const token = status ?? "";
   return (
     <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-dim">
-      <span
-        className={`size-1.5 shrink-0 rounded-full ${
-          STATUS_DOT[token] ?? "bg-white/35"
-        }`}
-      />
-      {token || "?"}
+      <span className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[token] ?? "bg-white/35"}`} />
+      {token ? statusWord(t, token) : "?"}
     </span>
   );
 }
 
-/** Pretty JSON for the structured viewers, capped so a huge payload cannot wedge the DOM. */
-const JSON_CAP = 20_000;
-export function prettyJson(value: unknown): string {
-  const text = (() => {
-    try {
-      return JSON.stringify(value, null, 2) ?? "null";
-    } catch {
-      return String(value);
-    }
-  })();
-  return text.length > JSON_CAP ? text.slice(0, JSON_CAP) + "\n…" : text;
+/**
+ * Highest journal sequence seen — the safe resume cursor. NOT the last
+ * element's sequence: a clipped journal page can end on an event without one,
+ * and a degenerate cursor makes the server replay the whole journal.
+ */
+function maxSequence(events: WorkflowRunEvent[] | null): number {
+  let max = 0;
+  for (const e of events ?? []) {
+    if (typeof e.sequence === "number" && e.sequence > max) max = e.sequence;
+  }
+  return max;
 }
 
 /** The newest version number an artifact advertises (top level or versions[]). */
@@ -137,12 +150,39 @@ function nodeSummaryText(s: WorkflowNodeSummary): string {
   const parts: string[] = [];
   if (s.resultCount !== undefined) parts.push(`${s.resultCount}`);
   if (s.exitCode !== undefined) parts.push(`exit ${s.exitCode}`);
-  if (s.stdoutBytes !== undefined)
-    parts.push(`out ${formatBytes(s.stdoutBytes)}`);
-  if (s.stderrBytes !== undefined)
-    parts.push(`err ${formatBytes(s.stderrBytes)}`);
+  if (s.stdoutBytes !== undefined) parts.push(`out ${formatBytes(s.stdoutBytes)}`);
+  if (s.stderrBytes !== undefined) parts.push(`err ${formatBytes(s.stderrBytes)}`);
   if (s.resultBytes !== undefined) parts.push(formatBytes(s.resultBytes));
   return parts.join(" · ");
+}
+
+/**
+ * The node's WHAT — its call arguments flattened to one line. `args` is the
+ * only field carrying a human-readable description of the operation (the
+ * command run, the path read); strings join as-is, objects compact to
+ * single-line JSON so the row stays a row.
+ */
+function argsText(n: WorkflowWorkspaceNode): string | undefined {
+  const one = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.trim() || undefined;
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (typeof v === "object" && v !== null) {
+      try {
+        const s = JSON.stringify(v);
+        return s && s !== "{}" && s !== "[]" ? s : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+  const args = n.args;
+  if (Array.isArray(args)) {
+    const parts = args.map(one).filter((v): v is string => v !== undefined);
+    return parts.length > 0 ? parts.join(" ").slice(0, 160) : undefined;
+  }
+  const single = one(args);
+  return single !== undefined ? single.slice(0, 160) : undefined;
 }
 
 /** Cap the chunk ask: ≤512KiB is the upstream per-read maximum anyway. */
@@ -180,13 +220,11 @@ export function WorkflowRunDetail({
   const [hasMore, setHasMore] = useState(false);
   const [artifacts, setArtifacts] = useState<WorkflowArtifact[] | null>(null);
   const [nodes, setNodes] = useState<WorkflowWorkspaceNode[] | null>(null);
-  const [openArtifact, setOpenArtifact] = useState<WorkflowArtifact | null>(
-    null,
-  );
+  const [openArtifact, setOpenArtifact] = useState<WorkflowArtifact | null>(null);
   const [nodeResult, setNodeResult] = useState<{
     key: string;
     status?: string;
-    body: string;
+    body: unknown;
     truncated?: boolean;
   } | null>(null);
   // Set when the polls stop believing the session is reachable: the launch
@@ -226,9 +264,7 @@ export function WorkflowRunDetail({
       if (eventsInFlight.current) return;
       eventsInFlight.current = true;
       setEventsBusy(true);
-      const after = initial
-        ? undefined
-        : (events?.[events.length - 1]?.sequence ?? undefined);
+      const after = initial ? undefined : maxSequence(events);
       const res = await workflowAction(
         "load run events",
         (c) => c.runEvents(instanceId, sessionId, runId, after),
@@ -237,8 +273,19 @@ export function WorkflowRunDetail({
       eventsInFlight.current = false;
       setEventsBusy(false);
       if (!res) return;
-      if (initial) setEvents(res.events);
-      else setEvents((prev) => [...(prev ?? []), ...res.events]);
+      if (initial) {
+        setEvents(res.events);
+      } else {
+        // Defensive dedupe: an `after` the server could not honor answers
+        // with the FULL journal — keep only sequences past what we hold.
+        setEvents((prev) => {
+          const floor = maxSequence(prev);
+          return [
+            ...(prev ?? []),
+            ...res.events.filter((e) => typeof e.sequence === "number" && e.sequence > floor),
+          ];
+        });
+      }
       setHasMore(res.hasMore === true);
     },
     [workflowAction, instanceId, sessionId, runId, events],
@@ -258,9 +305,7 @@ export function WorkflowRunDetail({
   // consecutive failed ticks retire the poller entirely (read-only view).
   const active =
     !sessionDead &&
-    (summary === null ||
-      summary.status === "running" ||
-      summary.status === "pending");
+    (summary === null || summary.status === "running" || summary.status === "pending");
   useEffect(() => {
     if (!active) return;
     const id = setInterval(async () => {
@@ -284,9 +329,7 @@ export function WorkflowRunDetail({
     if (tab === "artifacts" && artifacts === null) {
       void workflowAction("load artifacts", (c) =>
         c.runArtifacts(instanceId, sessionId, runId),
-      ).then((res) =>
-        setArtifacts((res?.artifacts as WorkflowArtifact[]) ?? []),
-      );
+      ).then((res) => setArtifacts((res?.artifacts as WorkflowArtifact[]) ?? []));
     }
     if (tab === "workspace" && nodes === null) {
       void workflowAction("load workspace", (c) =>
@@ -308,33 +351,41 @@ export function WorkflowRunDetail({
     if (ok) void refreshSummary();
   }
 
-  // Phases entered so far (journal `phase-entered` events) — the last one is
-  // where the run currently stands.
-  const phases = useMemo(
-    () =>
-      (events ?? [])
-        .filter((e) => e.type === "phase-entered")
-        .map((e) => {
-          const p = e.payload ?? {};
-          for (const key of ["phaseName", "name"]) {
-            const v = p[key];
-            if (typeof v === "string" && v) return v;
-          }
-          return null;
-        })
-        .filter((v): v is string => v !== null),
-    [events],
-  );
+  // Phases entered so far (journal `phase-entered` events), merged per name:
+  // a re-entered phase counts up (`×N`), the last one is where the run
+  // currently stands. Resume replays the prefix, so fold by max ordinal.
+  const phases = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const e of events ?? []) {
+      if (e.type !== "phase-entered") continue;
+      const p = e.payload ?? {};
+      const name = typeof p.name === "string" && p.name ? p.name : null;
+      if (!name) continue;
+      const ordinal = typeof p.ordinal === "number" ? p.ordinal : 1;
+      seen.set(name, Math.max(seen.get(name) ?? 0, ordinal));
+    }
+    return [...seen.entries()].map(([name, times]) => ({ name, times }));
+  }, [events]);
 
   // Events sliced at every phase-entered boundary (the journal has no
   // phase-exited — entering N implies N-1 done): each slice renders as one
-  // phase section with its actors and aggregated nodes underneath. A leading
-  // slice (phase: null) holds whatever preceded the first phase.
-  const phaseSlices = useMemo<PhaseSlice[]>(() => {
-    const out: PhaseSlice[] = [];
+  // phase section. A leading slice (phase: null) holds whatever preceded the
+  // first phase. Resume REPLAYS the script prefix — the same instances and
+  // actors re-emit into later slices — so each node renders only in the slice
+  // holding its LAST event and each actor only in the slice of its FIRST
+  // creation (nodeHome/actorHome); without that, a resumed run shows every
+  // node twice.
+  const phaseSlices = useMemo<{
+    slices: PhaseSlice[];
+    nodeHome: Map<string, number>;
+    actorHome: Map<string, number>;
+  }>(() => {
+    const slices: PhaseSlice[] = [];
+    const nodeHome = new Map<string, number>();
+    const actorHome = new Map<string, number>();
     let cur: PhaseSlice = { phase: null, events: [] };
     const pushIfUsed = () => {
-      if (cur.events.length > 0 || cur.phase !== null) out.push(cur);
+      if (cur.events.length > 0 || cur.phase !== null) slices.push(cur);
     };
     for (const e of events ?? []) {
       if (e.type === "phase-entered") {
@@ -350,9 +401,17 @@ export function WorkflowRunDetail({
         continue;
       }
       cur.events.push(e);
+      // `slices.length` is cur's own index — cur is not pushed yet.
+      const idx = slices.length;
+      if (e.type.startsWith("node-")) {
+        nodeHome.set(instanceKeyOf(e.payload ?? {}), idx);
+      } else if (e.type === "actor-created") {
+        const key = actorKeyOf(e.payload ?? {});
+        if (!actorHome.has(key)) actorHome.set(key, idx);
+      }
     }
     pushIfUsed();
-    return out;
+    return { slices, nodeHome, actorHome };
   }, [events]);
 
   const tabs: Array<{ id: Tab; label: string }> = [
@@ -435,9 +494,7 @@ export function WorkflowRunDetail({
             key={id}
             onClick={() => setTab(id)}
             className={`flex-1 rounded-lg px-2 py-1.5 text-xs ${
-              tab === id
-                ? "bg-white/[0.1] font-medium text-ink"
-                : "text-dim active:bg-white/[0.05]"
+              tab === id ? "bg-white/[0.1] font-medium text-ink" : "text-dim active:bg-white/[0.05]"
             }`}
           >
             {label}
@@ -458,10 +515,13 @@ export function WorkflowRunDetail({
               <ConfigEmpty text={t("zconfig.workflowEventsEmpty")} />
             ) : (
               <div className="px-4">
-                {phaseSlices.map((slice, i) => (
+                {phaseSlices.slices.map((slice, i) => (
                   <PhaseSection
                     key={`${i}-${slice.phase ?? "pre"}`}
                     slice={slice}
+                    sliceIndex={i}
+                    nodeHome={phaseSlices.nodeHome}
+                    actorHome={phaseSlices.actorHome}
                   />
                 ))}
                 {events === null && !sessionDead && !active && (
@@ -505,9 +565,7 @@ export function WorkflowRunDetail({
                     className="flex w-full items-start gap-3 px-4 py-3 text-left active:bg-white/[0.05]"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-ink">
-                        {a.title ?? a.id}
-                      </span>
+                      <span className="block text-sm text-ink">{a.title ?? a.id}</span>
                       <span className="block text-[11px] text-faint">
                         {a.kind}
                         {a.versions?.length ? ` · v${latestVersion(a)}` : ""}
@@ -530,8 +588,15 @@ export function WorkflowRunDetail({
                 {(nodes ?? []).map((n, i) => {
                   const key = `${n.siteId ?? "?"}:${n.ordinal ?? i}`;
                   const dur = fmtDuration(n.createdAt, n.updatedAt);
-                  const exitBad =
-                    n.summary?.exitCode !== undefined && n.summary.exitCode !== 0;
+                  const exitBad = n.summary?.exitCode !== undefined && n.summary.exitCode !== 0;
+                  const ref = [
+                    n.siteId !== undefined
+                      ? `${n.siteId}${n.ordinal !== undefined ? `@${n.ordinal}` : ""}`
+                      : null,
+                    n.op ?? null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
                   return (
                     <div key={key} className="px-4 py-2.5">
                       <button
@@ -544,33 +609,35 @@ export function WorkflowRunDetail({
                           {(n.op ?? "?").slice(0, 2)}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="flex items-baseline gap-2">
-                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">
-                              {n.op ?? key}
-                            </span>
-                            {dur && (
-                              <span className="shrink-0 text-[10px] tabular-nums text-faint">
-                                +{dur}
-                              </span>
-                            )}
+                          {/* The WHAT (command / path / task) leads; the
+                              internal ref and byte counts demote to a meta
+                              line — they identify the row, they are not it. */}
+                          <span className="block truncate text-xs text-ink">
+                            {argsText(n) ?? n.op ?? key}
                           </span>
-                          {n.summary && (
-                            <span
-                              className={`block truncate text-[11px] ${
-                                exitBad ? "text-red-300/90" : "text-faint"
-                              }`}
-                            >
-                              {nodeSummaryText(n.summary)}
-                            </span>
-                          )}
+                          <span
+                            className={`block truncate font-mono text-[10px] ${
+                              exitBad ? "text-red-300/90" : "text-faint"
+                            }`}
+                          >
+                            {[ref, n.summary ? nodeSummaryText(n.summary) : null]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
                         </span>
+                        {dur && (
+                          <span className="shrink-0 text-[10px] tabular-nums text-faint">
+                            +{dur}
+                          </span>
+                        )}
                         <StatusBadge status={n.status} />
                       </button>
                       {nodeResult?.key === key && (
-                        <pre className="mt-2 max-h-64 overflow-auto rounded-xl bg-raised p-3 font-mono text-[11px] leading-relaxed text-dim ring-1 ring-hairline">
-                          {nodeResult.body}
-                          {nodeResult.truncated ? "\n…" : ""}
-                        </pre>
+                        <NodeResultView
+                          status={nodeResult.status}
+                          body={nodeResult.body}
+                          truncated={nodeResult.truncated}
+                        />
                       )}
                     </div>
                   );
@@ -625,10 +692,7 @@ export function WorkflowRunDetail({
     setNodeResult({
       key,
       status: res.status,
-      body:
-        res.error !== undefined && res.error !== null
-          ? prettyJson(res.error)
-          : prettyJson(res.result),
+      body: res.error !== undefined && res.error !== null ? res.error : res.result,
       truncated: res.truncated,
     });
   }
@@ -661,9 +725,7 @@ function AmendSheet({
   const modelValue = clearModel ? null : model.trim() || undefined;
   const parsedConcurrency = concurrency.trim();
   const concurrencyNumber =
-    !clearConcurrency && parsedConcurrency
-      ? Number(parsedConcurrency)
-      : undefined;
+    !clearConcurrency && parsedConcurrency ? Number(parsedConcurrency) : undefined;
   const concurrencyValue: number | null | undefined = clearConcurrency
     ? null
     : concurrencyNumber !== undefined &&
@@ -672,13 +734,8 @@ function AmendSheet({
       ? concurrencyNumber
       : undefined;
   const concurrencyInvalid =
-    !clearConcurrency &&
-    parsedConcurrency !== "" &&
-    concurrencyValue === undefined;
-  const empty =
-    modelValue === undefined &&
-    concurrencyValue === undefined &&
-    !clearConcurrency;
+    !clearConcurrency && parsedConcurrency !== "" && concurrencyValue === undefined;
+  const empty = modelValue === undefined && concurrencyValue === undefined && !clearConcurrency;
 
   return (
     <ConfigFormSheet
@@ -768,113 +825,50 @@ interface PhaseSlice {
   events: WorkflowRunEvent[];
 }
 
-/** A node's folded lifecycle: the latest of its queued→…→settled events. */
-interface NodeAgg {
-  site: string;
-  ordinal?: number;
-  state: "active" | "ok" | "failed" | "cancelled";
-  head?: string;
-}
-
-/** The journal may carry the node's task head under any of these keys. */
-function instructionHead(p: Record<string, unknown>): string | undefined {
-  for (const k of ["instructions", "instruction", "prompt", "task", "description"]) {
-    const v = p[k];
-    if (typeof v === "string" && v.trim()) return v.trim().slice(0, 80);
-  }
-  return undefined;
-}
-
 /**
- * Fold one slice's events: node-* lifecycles collapse per (siteId, ordinal)
- * into a single line each (settled is final — later replayed lifecycle noise
- * must not reopen it), actor-created becomes a hiring line, run-settled a
- * closing line, and everything chatty stays an expandable EventRow.
+ * Vertical mini timeline: one row per entered phase with a connecting spine.
+ * Entering phase N means N-1 finished; the newest row is the head — pulsing
+ * while the run flies, plain once it settles. Vertical because this is a
+ * phone: a horizontal station strip truncates behind a sideways scroll the
+ * user cannot know exists.
  */
-function reduceSlice(events: WorkflowRunEvent[]) {
-  const nodes = new Map<string, NodeAgg>();
-  const actors: Array<{ label: string }> = [];
-  const others: WorkflowRunEvent[] = [];
-  let settled: string | null = null;
-  for (const ev of events) {
-    const p = ev.payload ?? {};
-    if (ev.type === "actor-created") {
-      const name = [p.name, p.actorName, p.siteId, p.actorSiteId].find(
-        (v): v is string => typeof v === "string" && v.length > 0,
-      );
-      actors.push({ label: name ?? "?" });
-      continue;
-    }
-    if (ev.type === "run-settled") {
-      settled = typeof p.status === "string" ? p.status : "unknown";
-      continue;
-    }
-    if (ev.type.startsWith("node-")) {
-      const site = typeof p.siteId === "string" ? p.siteId : "";
-      const ordinal = typeof p.ordinal === "number" ? p.ordinal : undefined;
-      const key = `${site}:${ordinal ?? "?"}`;
-      const prev = nodes.get(key);
-      if (prev && prev.state !== "active") continue;
-      const outcome = p.outcome;
-      nodes.set(key, {
-        site,
-        ordinal,
-        state:
-          outcome === "ok" || outcome === "failed" || outcome === "cancelled"
-            ? outcome
-            : "active",
-        head: prev?.head ?? instructionHead(p),
-      });
-      continue;
-    }
-    others.push(ev);
-  }
-  return { actors, nodes: [...nodes.values()], others, settled };
-}
-
-/**
- * Desktop-parity mini timeline (upstream WorkflowTimeline, mobile-sized): one
- * station per entered phase with a connecting line; entering phase N means
- * N-1 finished, so every line is a passed segment. The newest station is the
- * head — pulsing while the run flies, plain once it settles.
- */
-function PhaseTimeline({ phases, running }: { phases: string[]; running: boolean }) {
+function PhaseTimeline({
+  phases,
+  running,
+}: {
+  phases: Array<{ name: string; times: number }>;
+  running: boolean;
+}) {
   return (
-    <div className="mx-4 mb-3 overflow-x-auto pb-1">
-      <ol className="flex min-w-max items-center">
-        {phases.map((p, i) => {
-          const head = i === phases.length - 1;
-          return (
-            <li key={`${i}-${p}`} className="flex items-center">
-              {i > 0 && <span className="h-px w-6 bg-emerald-400/40" />}
-              <span className="flex items-center gap-1.5 px-1.5 py-1.5">
-                <span
-                  className={`size-2.5 shrink-0 rounded-full ${
-                    head
-                      ? running
-                        ? "animate-pulse bg-sky-400"
-                        : "bg-sky-400"
-                      : "bg-emerald-400/80"
-                  }`}
-                />
-                <span
-                  className={`whitespace-nowrap font-mono text-[11px] ${
-                    head ? "font-medium text-ink" : "text-faint"
-                  }`}
-                >
-                  {p}
-                </span>
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
+    <ol className="mx-4 mb-3 flex flex-col">
+      {phases.map((p, i) => {
+        const head = i === phases.length - 1;
+        return (
+          <li key={`${i}-${p.name}`} className="flex gap-2.5">
+            <span className="flex flex-col items-center">
+              <span
+                className={`mt-[3px] size-2.5 shrink-0 rounded-full ${
+                  head ? (running ? "animate-pulse bg-sky-400" : "bg-sky-400") : "bg-emerald-400/80"
+                }`}
+              />
+              {!head && <span className="min-h-3 w-px flex-1 bg-white/15" />}
+            </span>
+            <span
+              className={`pb-2 font-mono text-[11px] ${head ? "font-medium text-ink" : "text-dim"}`}
+            >
+              {p.name}
+              {p.times > 1 ? ` · ×${p.times}` : ""}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
-/** One node's folded line: status dot + site#ordinal + task head. */
+/** One node's folded line: state dot + name + task/activity + outcome word. */
 function NodeLine({ n }: { n: NodeAgg }) {
+  const { t } = useTranslation();
   const dot =
     n.state === "ok"
       ? "bg-emerald-400"
@@ -882,46 +876,61 @@ function NodeLine({ n }: { n: NodeAgg }) {
         ? "bg-red-400"
         : n.state === "cancelled"
           ? "bg-white/35"
-          : "animate-pulse bg-sky-400";
-  const label = `${n.site || "?"}${n.ordinal !== undefined ? ` #${n.ordinal}` : ""}`;
+          : n.state === "waiting" || n.state === "repairing"
+            ? "bg-amber-400"
+            : "animate-pulse bg-sky-400";
+  const word = nodeStateWord(t, n.state);
+  const wordCls =
+    n.state === "failed" ? "text-red-300" : n.state === "ok" ? "text-emerald-300/80" : "text-faint";
+  const title = n.label ?? `${n.site || "?"}${n.ordinal !== undefined ? `@${n.ordinal}` : ""}`;
+  const sub = n.activity ?? n.head;
   return (
-    <div className="flex items-baseline gap-2 py-1">
-      <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-      <span className="max-w-24 shrink-0 truncate font-mono text-[11px] text-dim">
-        {label}
-      </span>
-      {n.head ? (
-        <span className="min-w-0 flex-1 truncate text-[11px] text-faint">{n.head}</span>
-      ) : null}
-      {n.state !== "active" && (
-        <span
-          className={`shrink-0 text-[10px] ${
-            n.state === "failed"
-              ? "text-red-300"
-              : n.state === "ok"
-                ? "text-emerald-300/80"
-                : "text-faint"
-          }`}
-        >
-          {n.state}
+    <div className="py-1">
+      <div className="flex items-center gap-2">
+        <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-dim">
+          {title}
+          {sub ? <span className="text-faint"> — {sub}</span> : null}
         </span>
-      )}
+        {word !== null && <span className={`shrink-0 text-[10px] ${wordCls}`}>{word}</span>}
+      </div>
+      {n.state === "failed" && n.error ? (
+        <p className="mt-0.5 truncate pl-3.5 text-[10px] text-red-300/90">{n.error}</p>
+      ) : null}
     </div>
   );
 }
 
-/** One phase section: header, hired actors, folded nodes, raw leftovers. */
-function PhaseSection({ slice }: { slice: PhaseSlice }) {
+/**
+ * One phase section: header, hired actors, folded nodes, usage, leftovers.
+ * Nodes/actors are filtered to the ones this slice OWNS (their last/first
+ * event fell here) — see phaseSlices for why replayed prefixes must not
+ * double-render.
+ */
+function PhaseSection({
+  slice,
+  sliceIndex,
+  nodeHome,
+  actorHome,
+}: {
+  slice: PhaseSlice;
+  sliceIndex: number;
+  nodeHome: Map<string, number>;
+  actorHome: Map<string, number>;
+}) {
   const { t } = useTranslation();
-  const { actors, nodes, others, settled } = useMemo(
-    () => reduceSlice(slice.events),
-    [slice],
+  const { actors, nodes, others, settled, spentTokens } = useMemo(
+    () => reduceSlice(t, slice.events),
+    [t, slice],
   );
+  const ownNodes = nodes.filter((n) => nodeHome.get(n.key) === sliceIndex);
+  const ownActors = actors.filter((a) => actorHome.get(a.key) === sliceIndex);
   if (
-    actors.length === 0 &&
-    nodes.length === 0 &&
+    ownActors.length === 0 &&
+    ownNodes.length === 0 &&
     others.length === 0 &&
-    settled === null
+    settled === null &&
+    spentTokens === null
   )
     return null;
   return (
@@ -929,54 +938,141 @@ function PhaseSection({ slice }: { slice: PhaseSlice }) {
       {slice.phase !== null && (
         <header className="mb-1 flex items-baseline gap-2 border-b border-hairline pb-1">
           <span className="font-mono text-xs font-medium text-ink">{slice.phase}</span>
-          {nodes.length > 0 && (
+          {ownNodes.length > 0 && (
             <span className="text-[10px] text-faint">
-              {t("zconfig.workflowPhaseNodes", { n: nodes.length })}
+              {t("zconfig.workflowPhaseNodes", { n: ownNodes.length })}
             </span>
           )}
         </header>
       )}
-      {actors.map((a, i) => (
-        <p key={i} className="truncate py-1 font-mono text-[11px] text-faint">
-          + {a.label}
+      {ownActors.map((a) => (
+        <p key={a.key} className="truncate py-1 text-[11px] text-faint">
+          {t("zconfig.wfEvActorCreated")} · {a.label}
         </p>
       ))}
-      {nodes.map((n) => (
-        <NodeLine key={`${n.site}:${n.ordinal ?? "?"}`} n={n} />
+      {ownNodes.map((n) => (
+        <NodeLine key={n.key} n={n} />
       ))}
+      {spentTokens !== null && (
+        <p className="py-1 text-[10px] tabular-nums text-faint">
+          {t("zconfig.wfEvUsageUpdated")} · {spentTokens.toLocaleString()} tokens
+        </p>
+      )}
       {others.map((ev) => (
         <EventRow key={ev.sequence} ev={ev} />
       ))}
-      {settled !== null && (
-        <p className="py-1 font-mono text-[11px] text-dim">
-          = run settled · {settled}
-        </p>
-      )}
+      {settled !== null && <EventRow ev={settled} />}
     </section>
   );
 }
 
-/** One journal row: sequence + type, payload expandable in place. */
+/**
+ * One journal row: a readable label + detail line (describeRunEvent), payload
+ * reachable behind an explicit raw toggle. Sequence numbers stay out of the
+ * default view — they are journal coordinates, not information.
+ */
 function EventRow({ ev }: { ev: WorkflowRunEvent }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const desc = describeRunEvent(t, ev);
   return (
-    <div className="border-b border-hairline py-2.5 last:border-0">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-baseline gap-2 text-left"
-      >
-        <span className="shrink-0 font-mono text-[10px] tabular-nums text-faint">
-          #{ev.sequence}
+    <div className="border-b border-hairline py-2 last:border-0">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-baseline gap-2 text-left">
+        <span
+          className={`max-w-[45%] shrink-0 truncate text-xs ${
+            desc.monoLabel
+              ? "font-mono text-faint"
+              : desc.tone === "failed"
+                ? "text-red-300"
+                : "text-dim"
+          }`}
+        >
+          {desc.label}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-dim">
-          {ev.type}
-        </span>
+        {desc.detail ? (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-faint">{desc.detail}</span>
+        ) : null}
       </button>
-      {open && (
-        <pre className="mt-1.5 max-h-72 overflow-auto rounded-xl bg-raised p-3 font-mono text-[11px] leading-relaxed text-dim ring-1 ring-hairline">
-          {prettyJson(ev.payload)}
+      {open && <RawData value={ev.payload} />}
+    </div>
+  );
+}
+
+/**
+ * A workspace node's expanded body, structured before raw: strings render as
+ * text, world.run-shaped results split into exit code + output streams, and
+ * plain objects become key-value rows. The full JSON stays one toggle away.
+ */
+function NodeResultView({
+  status,
+  body,
+  truncated,
+}: {
+  status?: string;
+  body: unknown;
+  truncated?: boolean;
+}) {
+  const { t } = useTranslation();
+  const isRecord = typeof body === "object" && body !== null && !Array.isArray(body);
+  const rec = isRecord ? (body as Record<string, unknown>) : null;
+  const run =
+    rec !== null && ("stdout" in rec || "stderr" in rec || "exitCode" in rec) ? rec : null;
+  const stdout = run !== null && typeof run.stdout === "string" ? run.stdout : null;
+  const stderr = run !== null && typeof run.stderr === "string" ? run.stderr : null;
+  const exitCode = run !== null && typeof run.exitCode === "number" ? run.exitCode : null;
+  const rest =
+    run !== null
+      ? Object.entries(run).filter(([k]) => !["stdout", "stderr", "exitCode"].includes(k))
+      : rec !== null
+        ? Object.entries(rec)
+        : [];
+  return (
+    <div className="mt-2 rounded-xl bg-raised p-3 ring-1 ring-hairline">
+      {/* v4 node status enum: running | completed | failed — red is for
+          failed only; anything else (incl. unknown tokens) stays quiet. */}
+      {status === "failed" ? <p className="mb-1.5 text-[11px] text-red-300">{status}</p> : null}
+      {typeof body === "string" ? (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-dim">
+          {body}
         </pre>
+      ) : run !== null ? (
+        <>
+          {exitCode !== null && (
+            <p
+              className={`mb-1.5 font-mono text-[11px] ${
+                exitCode !== 0 ? "text-red-300" : "text-faint"
+              }`}
+            >
+              exit {exitCode}
+            </p>
+          )}
+          {stdout && (
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-dim">
+              {stdout}
+            </pre>
+          )}
+          {stderr && (
+            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-red-300/90">
+              {stderr}
+            </pre>
+          )}
+        </>
+      ) : rec !== null ? (
+        <div className="flex flex-col gap-0.5">
+          {rest.map(([k, v]) => (
+            <p key={k} className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 shrink-0 truncate text-[11px] text-faint">{k}</span>
+              <span className="min-w-0 break-all text-right font-mono text-[11px] text-dim">
+                {cellText(v)}
+              </span>
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="break-all font-mono text-[11px] text-dim">{cellText(body)}</p>
       )}
+      {truncated && <p className="mt-1 text-[10px] text-faint">{t("zconfig.workflowTruncated")}</p>}
+      <RawData value={body} />
     </div>
   );
 }
@@ -1006,9 +1102,7 @@ function ViewerShell({
         >
           <ArrowLeft className="size-4.5" />
         </button>
-        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">
-          {title}
-        </h1>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h1>
       </header>
       <div className="flex-1 overflow-y-auto px-4 pb-[max(var(--safe-bottom),1rem)]">
         {children}
@@ -1019,8 +1113,10 @@ function ViewerShell({
 
 /**
  * One artifact, by kind: markdown renders (the shared renderer), text files
- * stream in chunks, boards paginate their items, and every other structured
- * kind falls back to a pretty JSON view of its top-level fields.
+ * stream in chunks, and the four preset kinds draw their spec-declared views
+ * (WorkflowArtifactViews), degrading to key-value cards when a spec cannot
+ * be parsed. Unknown kinds show a metadata card; raw JSON is always one
+ * toggle away, never the default view.
  */
 function ArtifactViewer({
   instanceId,
@@ -1096,8 +1192,7 @@ function ArtifactViewer({
   useEffect(() => {
     if (nextOffset !== null || text === null) return;
     let bad = 0;
-    for (let i = 0; i < text.length; i++)
-      if (text.charCodeAt(i) === 0xfffd) bad++;
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 0xfffd) bad++;
     if (text.length > 0 && bad / text.length > 0.01) setBinary(true);
   }, [nextOffset, text]);
 
@@ -1112,20 +1207,17 @@ function ArtifactViewer({
       if (!res) return;
       const lastSeq = res.items[res.items.length - 1]?.sequence;
       if (lastSeq !== undefined) setDataCursor(lastSeq);
-      setDataItems((prev) =>
-        initial || prev === null
-          ? res.items.map((it) => ({
-              sequence: it.sequence ?? 0,
-              item: it.item,
-            }))
-          : [
-              ...prev,
-              ...res.items.map((it) => ({
-                sequence: it.sequence ?? 0,
-                item: it.item,
-              })),
-            ],
-      );
+      setDataItems((prev) => {
+        const mapped = res.items.map((it) => ({
+          sequence: it.sequence ?? 0,
+          item: it.item,
+        }));
+        if (initial || prev === null) return mapped;
+        // Same defensive dedupe as the journal poll: an unadvancing cursor
+        // answers with the same page — keep only items past what we hold.
+        const floor = prev.reduce((m, it) => Math.max(m, it.sequence), 0);
+        return [...prev, ...mapped.filter((it) => it.sequence > floor)];
+      });
       setDataHasMore(res.hasMore === true);
     },
     [workflowAction, instanceId, sessionId, runId, artifact, dataCursor],
@@ -1134,7 +1226,7 @@ function ArtifactViewer({
   useEffect(() => {
     if (kind === "markdown" || kind === "file") {
       void loadChunk(0, false);
-    } else if (kind === "board" || kind === "table" || kind === "metrics") {
+    } else if (kind === "board" || kind === "table" || kind === "metrics" || kind === "chart") {
       void loadData(true);
     } else {
       setBusy(false);
@@ -1147,13 +1239,15 @@ function ArtifactViewer({
     if (kind === "markdown" && text !== null && !binary) setMarkdown(text);
   }, [kind, text, binary]);
 
+  // Preset kinds carry their declaration spec on the artifact (passed through
+  // untouched by the bridge); every renderer degrades to KeyValueCards when
+  // it cannot parse it, and the raw items stay behind one toggle.
+  const spec = (artifact as { spec?: unknown }).spec;
+  const isPreset = kind === "board" || kind === "table" || kind === "metrics" || kind === "chart";
+
   return (
     <ViewerShell title={artifact.title ?? artifact.id} onBack={onBack}>
-      {busy &&
-      text === null &&
-      markdown === null &&
-      dataItems === null &&
-      kind !== "chart" ? (
+      {busy && text === null && markdown === null && dataItems === null ? (
         <div className="flex justify-center py-10">
           <RefreshCw className="size-5 animate-spin text-faint" />
         </div>
@@ -1185,176 +1279,29 @@ function ArtifactViewer({
           )}
         </>
       ) : kind === "table" ? (
-        <TableView items={dataItems} spec={artifact.spec} />
+        <TableView items={dataItems} spec={spec} />
       ) : kind === "metrics" ? (
-        <MetricsView items={dataItems} />
+        <MetricsTiles items={dataItems} spec={spec} />
       ) : kind === "board" ? (
-        <>
-          {(dataItems ?? []).map((it) => (
-            <pre
-              key={it.sequence}
-              className="mb-3 whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim"
-            >
-              {prettyJson(it.item)}
-            </pre>
-          ))}
-        </>
+        <BoardView items={dataItems} spec={spec} />
+      ) : kind === "chart" ? (
+        <ChartView items={dataItems} spec={spec} />
       ) : (
-        <pre className="whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim">
-          {prettyJson(artifact)}
-        </pre>
+        <>
+          <ArtifactMetaCard artifact={artifact} />
+          <RawData value={artifact} />
+        </>
       )}
-      {(kind === "board" || kind === "table" || kind === "metrics") &&
-        dataHasMore && (
-          <button
-            onClick={() => void loadData(false)}
-            disabled={busy}
-            className="mt-4 w-full rounded-xl bg-raised px-3 py-2.5 text-sm text-dim active:bg-white/[0.07]"
-          >
-            {t("zconfig.workflowLoadMore")}
-          </button>
-        )}
+      {isPreset && <RawData value={(dataItems ?? []).map((it) => it.item)} />}
+      {isPreset && dataHasMore && (
+        <button
+          onClick={() => void loadData(false)}
+          disabled={busy}
+          className="mt-4 w-full rounded-xl bg-raised px-3 py-2.5 text-sm text-dim active:bg-white/[0.07]"
+        >
+          {t("zconfig.workflowLoadMore")}
+        </button>
+      )}
     </ViewerShell>
-  );
-}
-
-/** Short cell text for a table cell / metric value. */
-function cellText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return prettyJson(value);
-  return String(value);
-}
-
-/**
- * Table artifacts: column labels come from the spec's declared columns when
- * they parse (labels/keys in any common spelling), else from the first row's
- * own keys — the report items are plain objects by construction.
- */
-function TableView({
-  items,
-  spec,
-}: {
-  items: Array<{ sequence: number; item: unknown }> | null;
-  spec: unknown;
-}) {
-  const rows = (items ?? []).map((it) =>
-    typeof it.item === "object" && it.item !== null && !Array.isArray(it.item)
-      ? (it.item as Record<string, unknown>)
-      : null,
-  );
-  const firstRow = rows.find((r) => r !== null) ?? null;
-  const columns: string[] = (() => {
-    const declared = (() => {
-      if (typeof spec !== "object" || spec === null) return null;
-      const cols = (spec as Record<string, unknown>)["columns"];
-      if (!Array.isArray(cols)) return null;
-      return cols
-        .map((c) => {
-          if (typeof c === "string") return c;
-          if (typeof c === "object" && c !== null) {
-            const o = c as Record<string, unknown>;
-            for (const key of ["label", "title", "name", "key", "field"]) {
-              const v = o[key];
-              if (typeof v === "string" && v) return v;
-            }
-          }
-          return null;
-        })
-        .filter((v): v is string => v !== null);
-    })();
-    if (declared && declared.length > 0) return declared;
-    return firstRow ? Object.keys(firstRow) : [];
-  })();
-
-  if (items === null || rows.every((r) => r === null)) {
-    return (
-      <pre className="whitespace-pre-wrap break-all pt-2 font-mono text-[11px] leading-relaxed text-dim">
-        {(items ?? []).map((it) => prettyJson(it.item)).join("\n\n---\n\n")}
-      </pre>
-    );
-  }
-
-  return (
-    <div className="overflow-x-auto pt-2">
-      <table className="w-full border-collapse text-left text-[11px]">
-        <thead>
-          <tr>
-            {columns.map((c) => (
-              <th
-                key={c}
-                className="whitespace-nowrap border-b border-hairline px-2 py-1.5 font-medium text-dim"
-              >
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={items[i]!.sequence} className="align-top">
-              {columns.map((c) => (
-                <td
-                  key={c}
-                  className="max-w-64 truncate border-b border-hairline/50 px-2 py-1.5 text-dim"
-                >
-                  {r === null ? prettyJson(items[i]!.item) : cellText(r[c])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/** Metrics artifacts: one key-value card per report item. */
-function MetricsView({
-  items,
-}: {
-  items: Array<{ sequence: number; item: unknown }> | null;
-}) {
-  if (items === null) return null;
-  return (
-    <div className="flex flex-col gap-2 pt-2">
-      {items.map((it) => {
-        if (
-          typeof it.item !== "object" ||
-          it.item === null ||
-          Array.isArray(it.item)
-        ) {
-          return (
-            <pre
-              key={it.sequence}
-              className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-dim"
-            >
-              {prettyJson(it.item)}
-            </pre>
-          );
-        }
-        return (
-          <div
-            key={it.sequence}
-            className="rounded-xl bg-surface px-3 py-2 ring-1 ring-hairline"
-          >
-            {Object.entries(it.item as Record<string, unknown>).map(
-              ([k, v]) => (
-                <div
-                  key={k}
-                  className="flex items-baseline justify-between gap-3 py-0.5"
-                >
-                  <span className="min-w-0 truncate text-[11px] text-faint">
-                    {k}
-                  </span>
-                  <span className="shrink-0 font-mono text-xs text-ink">
-                    {cellText(v)}
-                  </span>
-                </div>
-              ),
-            )}
-          </div>
-        );
-      })}
-    </div>
   );
 }
