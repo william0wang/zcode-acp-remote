@@ -295,6 +295,7 @@
     "workflowDismissRun": "移除记录",
     "workflowClearFinished": "清除已结束",
     "workflowActiveTitle": "执行中的工作流",
+    "workflowRecentTitle": "最近完成的工作流",
     "workflowOpenSession": "打开会话",
     "workflowResume": "恢复",
     "workflowRunUnknownSession": "在别处启动——此处仅只读",

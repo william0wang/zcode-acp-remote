@@ -221,22 +221,14 @@ export interface AcpDiffContent {
 }
 
 function isTextContent(c: unknown): c is AcpTextContent {
-  return (
-    typeof c === "object" &&
-    c !== null &&
-    (c as { type?: string }).type === "text"
-  );
+  return typeof c === "object" && c !== null && (c as { type?: string }).type === "text";
 }
 
 // The bridge wraps plain results as {type:"content", content:{type:"text"}}
 // (Bash output, plan text, question text); unwrap those too.
 function unwrapText(c: unknown): string | null {
   if (isTextContent(c)) return c.text;
-  if (
-    typeof c === "object" &&
-    c !== null &&
-    (c as { type?: string }).type === "content"
-  ) {
+  if (typeof c === "object" && c !== null && (c as { type?: string }).type === "content") {
     const inner = (c as { content?: unknown }).content;
     if (isTextContent(inner)) return inner.text;
   }
@@ -246,11 +238,7 @@ function unwrapText(c: unknown): string | null {
 function isDiffContent(c: unknown): c is AcpDiffContent {
   if (typeof c !== "object" || c === null) return false;
   const d = c as Partial<AcpDiffContent>;
-  return (
-    d.type === "diff" &&
-    typeof d.newText === "string" &&
-    typeof d.path === "string"
-  );
+  return d.type === "diff" && typeof d.newText === "string" && typeof d.path === "string";
 }
 
 // Chunk content is a SINGLE ContentBlock on the wire; tool_call_update
@@ -432,8 +420,7 @@ export interface WorkflowGateBlock {
 }
 
 /** The switch's write vocabulary (bridge ≥0.53): "auto" follows the remote verdict. */
-export type WorkflowGateModeSetting =
-  "auto" | "disabled" | "onDemand" | "alwaysOn";
+export type WorkflowGateModeSetting = "auto" | "disabled" | "onDemand" | "alwaysOn";
 
 export interface WorkflowGateSetResponse {
   ok: boolean;
@@ -632,6 +619,12 @@ export interface WorkflowOverviewResponse {
   ok: boolean;
   groups: WorkflowHubGroup[];
   activeRuns: WorkflowRunRow[];
+  /**
+   * The same journal read's finished complement (terminal statuses, newest
+   * first, hub-capped): the top-level "recently finished" list's feed — a
+   * settled run otherwise only resurfaces inside its workflow's history.
+   */
+  recentRuns: WorkflowRunRow[];
 }
 
 /**
@@ -877,12 +870,7 @@ export interface WorkflowCreatePromptResponse {
 
 /** The install outcome of an app update, as the bridge reports it. */
 export type AppUpdateStage =
-  | "idle"
-  | "downloading"
-  | "installing"
-  | "done"
-  | "needs-user-install"
-  | "failed";
+  "idle" | "downloading" | "installing" | "done" | "needs-user-install" | "failed";
 
 export interface AppUpdateState {
   stage: AppUpdateStage;

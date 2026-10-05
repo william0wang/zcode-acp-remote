@@ -14,16 +14,10 @@ import {
   ConfigFormSheet,
   configInputClass,
 } from "../../components/config/ConfigFormSheet";
-import {
-  StatusBadge,
-  WorkflowRunDetail,
-} from "../../components/config/WorkflowRunDetail";
+import { StatusBadge, WorkflowRunDetail } from "../../components/config/WorkflowRunDetail";
 import { lookupLaunch } from "../../lib/workflow-launches";
 import { argsDeclaration, parseArgsInput } from "../../lib/workflow-args";
-import {
-  WorkflowArgsForm,
-  type ArgsFormState,
-} from "../../components/config/WorkflowArgsForm";
+import { WorkflowArgsForm, type ArgsFormState } from "../../components/config/WorkflowArgsForm";
 import type {
   ConversationRunSummary,
   WorkflowDetailResponse,
@@ -102,9 +96,7 @@ export function WorkflowsPage() {
   // follow the run), 30s once everything is settled — a steady 5s idle poll
   // is pure hub churn for a page that rarely changes.
   const anyRunning =
-    (hubGroups?.some((g) =>
-      Object.values(g.lastRuns).some((r) => RUN_ACTIVE.has(r.status)),
-    ) ??
+    (hubGroups?.some((g) => Object.values(g.lastRuns).some((r) => RUN_ACTIVE.has(r.status))) ??
       false) ||
     (activeRuns?.some((r) => RUN_ACTIVE.has(r.status)) ?? false);
   useEffect(() => {
@@ -125,9 +117,7 @@ export function WorkflowsPage() {
     setComposerPrefill(res.prompt);
     closeConfig();
     if (!useAppStore.getState().activeSessionId) {
-      useAppStore
-        .getState()
-        .notify("prompt staged — open a session to review and send it");
+      useAppStore.getState().notify("prompt staged — open a session to review and send it");
     }
   }
 
@@ -170,9 +160,7 @@ export function WorkflowsPage() {
   const groups = hubGroups ?? [];
   const allEmpty =
     groups.length > 0 &&
-    groups.every(
-      (g) => g.error === null && g.workflows.length === 0 && g.invalid.length === 0,
-    );
+    groups.every((g) => g.error === null && g.workflows.length === 0 && g.invalid.length === 0);
 
   return (
     <ConfigPageFrame
@@ -205,6 +193,13 @@ export function WorkflowsPage() {
         }
       />
 
+      <RecentRunsBlock
+        instanceId={instanceId}
+        onOpenRun={(sessionId, runId, name, ownerInstanceId) =>
+          setRunDetail({ sessionId, runId, name, instanceId: ownerInstanceId })
+        }
+      />
+
       {allEmpty ? (
         <ConfigEmpty text={t("zconfig.workflowsEmpty")} />
       ) : (
@@ -212,9 +207,7 @@ export function WorkflowsPage() {
           <GroupBlock
             key={g.scope === "global" ? "global" : g.instanceId}
             group={g}
-            onOpen={(name) =>
-              setSelected({ scope: g.scope, name, instanceId: g.instanceId })
-            }
+            onOpen={(name) => setSelected({ scope: g.scope, name, instanceId: g.instanceId })}
           />
         ))
       )}
@@ -250,12 +243,7 @@ function ActiveRunsBlock({
    *  is not attached to any session (the hub's owner annotation still routes
    *  stop/detail correctly). */
   instanceId: string | null;
-  onOpenRun: (
-    sessionId: string,
-    runId: string,
-    name: string,
-    ownerInstanceId: string,
-  ) => void;
+  onOpenRun: (sessionId: string, runId: string, name: string, ownerInstanceId: string) => void;
 }) {
   const { t } = useTranslation();
   const workflowAction = useAppStore((s) => s.workflowAction);
@@ -267,9 +255,7 @@ function ActiveRunsBlock({
   // runs and launch memory covers this app's own, but a run started in the
   // open session before this app's data survived (or that the bridge cannot
   // alias-resolve) is only reachable through this map.
-  const [sessionRuns, setSessionRuns] = useState<Map<string, string>>(
-    new Map(),
-  );
+  const [sessionRuns, setSessionRuns] = useState<Map<string, string>>(new Map());
   // Epoch guard: an in-flight read from a PREVIOUS instance (or a closed
   // page) must not land — its rows would misattribute stop actions to the
   // wrong instance for up to a poll cycle.
@@ -311,14 +297,12 @@ function ActiveRunsBlock({
 
   async function stop(row: WorkflowRunRow) {
     const launch = lookupLaunch(row.runId);
-    const sessionId =
-      launch?.acpSessionId ?? row.acpSessionId ?? sessionRuns.get(row.runId);
+    const sessionId = launch?.acpSessionId ?? row.acpSessionId ?? sessionRuns.get(row.runId);
     if (!sessionId) return;
     // The hub's owner annotation is the live truth (that instance currently
     // lists the session); launch memory is the fallback for rows the hub
     // could not place.
-    const ownerInstanceId =
-      row.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? undefined;
+    const ownerInstanceId = row.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? undefined;
     const ok = await stopWorkflowRun(row.runId, sessionId, ownerInstanceId);
     if (ok) void useAppStore.getState().loadWorkflowHub();
   }
@@ -327,30 +311,22 @@ function ActiveRunsBlock({
     <ConfigBlock title={t("zconfig.workflowActiveTitle")} divided>
       {rows.map((r) => {
         const launch = lookupLaunch(r.runId);
-        const rowSessionId =
-          launch?.acpSessionId ?? r.acpSessionId ?? sessionRuns.get(r.runId);
-        const rowInstanceId =
-          r.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? "";
+        const rowSessionId = launch?.acpSessionId ?? r.acpSessionId ?? sessionRuns.get(r.runId);
+        const rowInstanceId = r.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? "";
         const label = r.name ?? r.runId.slice(0, 12);
         return (
           <div key={r.runId} className="px-4 py-3">
             <div className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm text-ink">
-                {label}
-              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">{label}</span>
               {r.updatedAt ? (
-                <span className="shrink-0 text-[10px] text-faint">
-                  {fmtStamp(r.updatedAt)}
-                </span>
+                <span className="shrink-0 text-[10px] text-faint">{fmtStamp(r.updatedAt)}</span>
               ) : null}
               <StatusBadge status={r.status} />
             </div>
             {rowSessionId && rowInstanceId && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <button
-                  onClick={() =>
-                    onOpenRun(rowSessionId, r.runId, r.name ?? label, rowInstanceId)
-                  }
+                  onClick={() => onOpenRun(rowSessionId, r.runId, r.name ?? label, rowInstanceId)}
                   className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
                 >
                   {t("zconfig.workflowRunDetail")}
@@ -360,6 +336,90 @@ function ActiveRunsBlock({
                   className="rounded-lg bg-red-500/15 px-2.5 py-1.5 text-[11px] font-medium text-red-300 active:bg-red-500/25"
                 >
                   {t("zconfig.workflowStopRun")}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </ConfigBlock>
+  );
+}
+
+/**
+ * The finished complement of the live zone: the overview's terminal rows,
+ * newest first (hub-capped) — the top-level answer to "where did my finished
+ * runs go" (before this, a settled run only resurfaced two taps deep inside
+ * its workflow's history). Rows stay VISIBLE even when no session address is
+ * known (an old journal row the bridge can no longer alias-join) — visibility
+ * is the point; the detail button simply hides for those. Dismissal rides
+ * the same hide list the per-workflow history uses.
+ */
+function RecentRunsBlock({
+  instanceId,
+  onOpenRun,
+}: {
+  /** The connected instance — LAST-RESORT action address; null when the app
+   *  is not attached to any session (the hub's owner annotation still routes
+   *  the detail view correctly). */
+  instanceId: string | null;
+  onOpenRun: (sessionId: string, runId: string, name: string, ownerInstanceId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const rows = useAppStore((s) => s.workflowRecentRuns);
+  const workflowAction = useAppStore((s) => s.workflowAction);
+  const loadWorkflowHub = useAppStore((s) => s.loadWorkflowHub);
+
+  if (rows === null || rows.length === 0) return null;
+
+  async function dismiss(row: WorkflowRunRow) {
+    const iid = row.ownerInstanceId ?? lookupLaunch(row.runId)?.instanceId ?? instanceId;
+    if (!iid) return;
+    const ok = await workflowAction(
+      "dismiss run",
+      (c) => c.dismissWorkflowRun(iid, row.runId),
+      false,
+      undefined,
+      iid,
+    );
+    if (ok) void loadWorkflowHub();
+  }
+
+  return (
+    <ConfigBlock title={t("zconfig.workflowRecentTitle")} divided>
+      {rows.map((r) => {
+        const launch = lookupLaunch(r.runId);
+        const rowSessionId = launch?.acpSessionId ?? r.acpSessionId;
+        const rowInstanceId = r.ownerInstanceId ?? launch?.instanceId ?? instanceId ?? "";
+        const label = r.name ?? r.runId.slice(0, 12);
+        return (
+          <div key={r.runId} className="px-4 py-3">
+            <div className="flex items-baseline gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-ink">{label}</span>
+                <span className="block text-[11px] text-faint">
+                  {r.updatedAt ? `${fmtStamp(r.updatedAt)} · ` : ""}
+                  {r.spentTokens ? `${fmtTokens(r.spentTokens)} · ` : ""}
+                  {r.artifacts?.length ? `${r.artifacts.length}◆` : ""}
+                </span>
+              </span>
+              <StatusBadge status={r.status} />
+              <button
+                onClick={() => void dismiss(r)}
+                aria-label={t("zconfig.workflowDismissRun")}
+                title={t("zconfig.workflowDismissRun")}
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint active:bg-white/[0.1]"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+            {rowSessionId && rowInstanceId && (
+              <div className="mt-2">
+                <button
+                  onClick={() => onOpenRun(rowSessionId, r.runId, r.name ?? label, rowInstanceId)}
+                  className="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-dim active:bg-white/[0.1]"
+                >
+                  {t("zconfig.workflowRunDetail")}
                 </button>
               </div>
             )}
@@ -382,7 +442,7 @@ function GroupBlock({
   const label =
     group.scope === "global"
       ? t("zconfig.workflowScope_global")
-      : (group.workspace.split("/").pop() || group.workspace);
+      : group.workspace.split("/").pop() || group.workspace;
   if (group.error) {
     return (
       <ConfigBlock title={label} divided>
@@ -409,9 +469,7 @@ function GroupBlock({
             className="flex w-full flex-col gap-1 px-4 py-3 text-left active:bg-white/[0.05]"
           >
             <span className="flex w-full items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm text-ink">
-                {w.name}
-              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">{w.name}</span>
               {last ? <StatusBadge status={last.status} /> : null}
               <ChevronRight className="size-4 shrink-0 text-faint" />
             </span>
@@ -423,9 +481,7 @@ function GroupBlock({
             {(last?.updatedAt || argNames.length > 0) && (
               <span className="mt-0.5 flex w-full flex-wrap items-center gap-1.5">
                 {last?.updatedAt ? (
-                  <span className="text-[10px] text-faint">
-                    {fmtStamp(last.updatedAt)}
-                  </span>
+                  <span className="text-[10px] text-faint">{fmtStamp(last.updatedAt)}</span>
                 ) : null}
                 {argNames.slice(0, 3).map((a) => (
                   <span
@@ -436,9 +492,7 @@ function GroupBlock({
                   </span>
                 ))}
                 {argNames.length > 3 && (
-                  <span className="text-[10px] text-faint">
-                    +{argNames.length - 3}
-                  </span>
+                  <span className="text-[10px] text-faint">+{argNames.length - 3}</span>
                 )}
               </span>
             )}
@@ -448,14 +502,8 @@ function GroupBlock({
       {group.invalid.length > 0 &&
         group.invalid.map((e, i) => (
           <div key={i} className="px-4 py-2.5">
-            <p className="truncate font-mono text-[10px] text-faint">
-              {e.path}
-            </p>
-            {e.reason && (
-              <p className="truncate text-[11px] text-amber-300/80">
-                {e.reason}
-              </p>
-            )}
+            <p className="truncate font-mono text-[10px] text-faint">{e.path}</p>
+            {e.reason && <p className="truncate text-[11px] text-amber-300/80">{e.reason}</p>}
           </div>
         ))}
     </ConfigBlock>
@@ -476,12 +524,7 @@ function WorkflowDetail({
   /** The instance whose group opened this page — actions address it. */
   instanceId: string;
   onBack: () => void;
-  onOpenRun: (
-    sessionId: string,
-    runId: string,
-    name: string,
-    ownerInstance: string,
-  ) => void;
+  onOpenRun: (sessionId: string, runId: string, name: string, ownerInstance: string) => void;
 }) {
   const { t } = useTranslation();
   const workflowAction = useAppStore((s) => s.workflowAction);
@@ -492,9 +535,7 @@ function WorkflowDetail({
 
   const [detail, setDetail] = useState<WorkflowDetailResponse | null>(null);
   const [runs, setRuns] = useState<WorkflowRunRow[] | null>(null);
-  const [summaries, setSummaries] = useState<
-    Record<string, ConversationRunSummary[]>
-  >({});
+  const [summaries, setSummaries] = useState<Record<string, ConversationRunSummary[]>>({});
   const [scriptOpen, setScriptOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingDesc, setEditingDesc] = useState(false);
@@ -540,8 +581,7 @@ function WorkflowDetail({
           .filter((sid): sid is string => Boolean(sid)),
       ),
     );
-    if (sessionIds.length > 0)
-      setSummaries(await loadRunSummaries(sessionIds, instanceId));
+    if (sessionIds.length > 0) setSummaries(await loadRunSummaries(sessionIds, instanceId));
     if (!skipDetail) setLoading(false);
   }
 
@@ -552,8 +592,7 @@ function WorkflowDetail({
 
   // While this workflow's newest run is active, refresh the history rows so
   // the badge and the resume affordance follow the run (bridge 5s poll).
-  const runActive =
-    runs?.some((r) => RUN_ACTIVE.has(r.status)) ?? false;
+  const runActive = runs?.some((r) => RUN_ACTIVE.has(r.status)) ?? false;
   useEffect(() => {
     if (!runActive) return;
     const timer = setInterval(() => void load(true), 5000);
@@ -606,9 +645,7 @@ function WorkflowDetail({
       );
     useAppStore.getState().closeConfig();
     if (!useAppStore.getState().activeSessionId) {
-      useAppStore
-        .getState()
-        .notify("prompt staged — open a session to review and send it");
+      useAppStore.getState().notify("prompt staged — open a session to review and send it");
     }
   }
 
@@ -657,9 +694,7 @@ function WorkflowDetail({
   }
 
   async function clearFinished() {
-    const ids = (runs ?? [])
-      .filter((r) => !RUN_ACTIVE.has(r.status))
-      .map((r) => r.runId);
+    const ids = (runs ?? []).filter((r) => !RUN_ACTIVE.has(r.status)).map((r) => r.runId);
     if (ids.length === 0) return;
     const res = await workflowAction(
       "clear finished runs",
@@ -711,9 +746,7 @@ function WorkflowDetail({
             {t(`zconfig.workflowScope_${scope}`)}
           </span>
           {scope === "project" && (
-            <span className="truncate text-[10px] text-faint">
-              {instanceId}
-            </span>
+            <span className="truncate text-[10px] text-faint">{instanceId}</span>
           )}
         </div>
         {descText ? (
@@ -728,9 +761,7 @@ function WorkflowDetail({
         ) : null}
         {detail?.path && (
           <div className="px-4 pb-2.5">
-            <p className="break-all font-mono text-[10px] text-faint">
-              {detail.path}
-            </p>
+            <p className="break-all font-mono text-[10px] text-faint">{detail.path}</p>
           </div>
         )}
         {detail && (
@@ -800,9 +831,7 @@ function WorkflowDetail({
             onClick={() => setScriptOpen(!scriptOpen)}
             className="w-full px-4 py-2.5 text-left text-xs text-dim active:bg-white/[0.05]"
           >
-            {scriptOpen
-              ? t("zconfig.workflowHideScript")
-              : t("zconfig.workflowShowScript")}
+            {scriptOpen ? t("zconfig.workflowHideScript") : t("zconfig.workflowShowScript")}
           </button>
           {scriptOpen && (
             <pre className="max-h-80 overflow-auto px-4 pb-3 font-mono text-[10px] leading-relaxed text-faint">
@@ -813,22 +842,19 @@ function WorkflowDetail({
       )}
 
       <ConfigBlock title={t("zconfig.workflowRunsTitle")} divided>
-        {runs !== null &&
-          runs.some((r) => !RUN_ACTIVE.has(r.status)) && (
-            <button
-              onClick={() => void clearFinished()}
-              className="w-full px-4 py-2 text-left text-[11px] text-faint active:bg-white/[0.05]"
-            >
-              {t("zconfig.workflowClearFinished")}
-            </button>
-          )}
+        {runs !== null && runs.some((r) => !RUN_ACTIVE.has(r.status)) && (
+          <button
+            onClick={() => void clearFinished()}
+            className="w-full px-4 py-2 text-left text-[11px] text-faint active:bg-white/[0.05]"
+          >
+            {t("zconfig.workflowClearFinished")}
+          </button>
+        )}
         {runs === null ? (
           // Loading only while a read is in flight; a FAILED read keeps
           // `runs` null with no spinner — the toast owns that story.
           loading ? (
-            <p className="px-4 py-4 text-xs text-faint">
-              {t("zconfig.loading")}
-            </p>
+            <p className="px-4 py-4 text-xs text-faint">{t("zconfig.loading")}</p>
           ) : null
         ) : runs.length === 0 ? (
           <ConfigEmpty text={t("zconfig.workflowRunsEmpty")} />
@@ -847,9 +873,7 @@ function WorkflowDetail({
               <div key={r.runId} className="px-4 py-3">
                 <div className="flex items-baseline gap-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm text-ink">
-                      {r.name ?? r.runId.slice(0, 12)}
-                    </span>
+                    <span className="block text-sm text-ink">{r.name ?? r.runId.slice(0, 12)}</span>
                     <span className="block text-[11px] text-faint">
                       {r.updatedAt ? `${fmtStamp(r.updatedAt)} · ` : ""}
                       {r.spentTokens ? `${fmtTokens(r.spentTokens)} · ` : ""}
@@ -957,9 +981,7 @@ function StartSheet({
   return (
     <ConfigFormSheet
       title={t("zconfig.workflowStart")}
-      submitDisabled={
-        typed ? form.error !== undefined : parsed.error !== undefined
-      }
+      submitDisabled={typed ? form.error !== undefined : parsed.error !== undefined}
       onClose={onClose}
       onSubmit={() => onStart(typed ? form.args : parsed.args)}
     >
@@ -968,9 +990,7 @@ function StartSheet({
       ) : (
         <ConfigField
           label={t("zconfig.workflowStartArgs")}
-          hint={
-            parsed.error ? parsed.error : t("zconfig.workflowStartArgsHint")
-          }
+          hint={parsed.error ? parsed.error : t("zconfig.workflowStartArgsHint")}
         >
           <textarea
             value={text}
@@ -982,9 +1002,7 @@ function StartSheet({
           />
         </ConfigField>
       )}
-      {typed && form.error ? (
-        <p className="px-1 text-[11px] text-red-400">{form.error}</p>
-      ) : null}
+      {typed && form.error ? <p className="px-1 text-[11px] text-red-400">{form.error}</p> : null}
     </ConfigFormSheet>
   );
 }
@@ -1010,9 +1028,7 @@ function MetaSheet({
       title={t("zconfig.workflowEditDescription")}
       submitDisabled={description.trim() === ""}
       onClose={onClose}
-      onSubmit={() =>
-        onSave({ description: description.trim(), whenToUse: whenToUse.trim() })
-      }
+      onSubmit={() => onSave({ description: description.trim(), whenToUse: whenToUse.trim() })}
     >
       <ConfigField label={t("zconfig.workflowDescription")}>
         <textarea

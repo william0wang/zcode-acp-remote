@@ -88,8 +88,7 @@ function cacheHitRate(u: unknown): number | null {
   if (!v || typeof v !== "object") return null;
   if (typeof v.cachedReadTokens !== "number") return null;
   const input = typeof v.inputTokens === "number" ? v.inputTokens : 0;
-  const write =
-    typeof v.cachedWriteTokens === "number" ? v.cachedWriteTokens : 0;
+  const write = typeof v.cachedWriteTokens === "number" ? v.cachedWriteTokens : 0;
   const denom = input + v.cachedReadTokens + write;
   return denom > 0 ? Math.round((v.cachedReadTokens / denom) * 100) : null;
 }
@@ -122,18 +121,18 @@ function parseUsageStats(result: unknown): AccountUsageStats | null {
 
   return {
     glm: {
-      kind: (
-        ["success", "auth_error", "rate_limited", "unavailable"] as const
-      ).includes(glm.kind as GlmUsageStats["kind"])
+      kind: (["success", "auth_error", "rate_limited", "unavailable"] as const).includes(
+        glm.kind as GlmUsageStats["kind"],
+      )
         ? (glm.kind as GlmUsageStats["kind"])
         : "unavailable",
       ...(typeof glm.level === "string" ? { level: glm.level } : {}),
       ...(items ? { items: items as QuotaItem[] } : {}),
     },
     opencode: {
-      kind: (
-        ["success", "not_configured", "auth_error", "unavailable"] as const
-      ).includes(go.kind as GoUsageStats["kind"])
+      kind: (["success", "not_configured", "auth_error", "unavailable"] as const).includes(
+        go.kind as GoUsageStats["kind"],
+      )
         ? (go.kind as GoUsageStats["kind"])
         : "unavailable",
       ...(windows ? { windows: windows as GoWindowEntry[] } : {}),
@@ -142,14 +141,9 @@ function parseUsageStats(result: unknown): AccountUsageStats | null {
     ...(oc
       ? {
           ollama: {
-            kind: (
-              [
-                "success",
-                "not_configured",
-                "auth_error",
-                "unavailable",
-              ] as const
-            ).includes(oc.kind as OllamaUsageStats["kind"])
+            kind: (["success", "not_configured", "auth_error", "unavailable"] as const).includes(
+              oc.kind as OllamaUsageStats["kind"],
+            )
               ? (oc.kind as OllamaUsageStats["kind"])
               : "unavailable",
             ...(Array.isArray(oc.windows)
@@ -314,6 +308,9 @@ export interface AppState extends ConfigSlice {
   // status pending/running, owner-instance annotated by the hub). The
   // page's live zone renders exactly this — no per-instance queries.
   workflowActiveRuns: WorkflowRunRow[] | null;
+  // The same overview's finished complement (terminal rows, newest first,
+  // hub-capped) — the page's recently-finished list renders exactly this.
+  workflowRecentRuns: WorkflowRunRow[] | null;
   // The overview load's own error (a hub too old to serve the route, or a
   // transport failure on the first load). Kept SEPARATE from configError:
   // the list-changed notification can refresh the hub while another section
@@ -352,11 +349,7 @@ export interface AppState extends ConfigSlice {
   // Upserts by normalized hubUrl: an existing entry gets the new token and
   // becomes active; otherwise a new entry is appended (name defaults to the
   // URL host). Connecting NEVER drops the other saved servers.
-  connectToHub: (input: {
-    hubUrl: string;
-    token: string;
-    name?: string;
-  }) => void;
+  connectToHub: (input: { hubUrl: string; token: string; name?: string }) => void;
   // Tears the connection down and clears the active selection; the saved
   // server list itself is kept (the manager screen lists them).
   disconnectHub: () => void;
@@ -394,10 +387,7 @@ export interface AppState extends ConfigSlice {
   // with the listing's instance), then attach and session/load the store id —
   // the normal connect path replays the history. Resolves true only on a
   // successful attach (see createProjectSession).
-  resumeProjectSession: (
-    workspacePath: string,
-    sessionId: string,
-  ) => Promise<boolean>;
+  resumeProjectSession: (workspacePath: string, sessionId: string) => Promise<boolean>;
   openSession: (instanceId: string, sessionId: string) => Promise<void>;
   // Foreground wake hook: proves the WS pipe is actually alive (Android deep
   // sleep leaves zombie sockets that never fire onclose) and reconnects if
@@ -428,11 +418,7 @@ export interface AppState extends ConfigSlice {
   // The one-shot auto-title never revises a title; this is the manual path.
   // Updates the local list optimistically; the bridge broadcasts the change
   // to attached clients and the next discovery poll reconciles.
-  renameSession: (
-    instanceId: string,
-    sessionId: string,
-    title: string,
-  ) => Promise<void>;
+  renameSession: (instanceId: string, sessionId: string, title: string) => Promise<void>;
   // Terminates a remote-incubated bridge via the hub's instance shutdown
   // endpoint — the "close the session window" counterpart for app-created
   // instances. Editor-origin bridges are refused server-side (403).
@@ -458,10 +444,7 @@ export interface AppState extends ConfigSlice {
   answerPermission: (requestId: number, optionId: string) => void;
   // Resolves a pending elicitation form: content answers it (accept), null
   // declines. Same first-response-wins race as permissions.
-  answerElicitation: (
-    requestId: number,
-    content: Record<string, string | string[]> | null,
-  ) => void;
+  answerElicitation: (requestId: number, content: Record<string, string | string[]> | null) => void;
   dismissNotice: () => void;
   // Ephemeral UI feedback (download progress, copy confirmations); renders
   // above every overlay and auto-clears.
@@ -557,9 +540,7 @@ const DISCOVERY_FAIL_THRESHOLD = 3;
 function isTransientConnError(e: unknown): boolean {
   if (e instanceof HubApiError) return e.network;
   const msg = e instanceof Error ? e.message : String(e);
-  return (
-    msg.includes("connection closed") || msg.includes("connection not open")
-  );
+  return msg.includes("connection closed") || msg.includes("connection not open");
 }
 
 function stopReconnect(): void {
@@ -592,8 +573,7 @@ function mergeCreatedSession(
       },
     ];
   const inst = instances[idx];
-  if (inst.sessions.some((x) => x.sessionId === session.sessionId))
-    return instances;
+  if (inst.sessions.some((x) => x.sessionId === session.sessionId)) return instances;
   const next = [...instances];
   next[idx] = {
     ...inst,
@@ -604,10 +584,7 @@ function mergeCreatedSession(
 }
 
 // The profile matching the book's active entry (first entry as fallback).
-function activeProfile(
-  servers: SavedServer[],
-  activeId: string | null,
-): ConnectionProfile | null {
+function activeProfile(servers: SavedServer[], activeId: string | null): ConnectionProfile | null {
   const s = servers.find((x) => x.id === activeId) ?? servers[0];
   return s ? { hubUrl: s.hubUrl, token: s.token } : null;
 }
@@ -690,6 +667,7 @@ function connectionResetPatch(): Partial<AppState> {
     configWorkflowGate: null,
     workflowHub: null,
     workflowActiveRuns: null,
+    workflowRecentRuns: null,
     workflowHubError: null,
     workflowHubLoading: false,
     workflowRunTarget: null,
@@ -783,14 +761,12 @@ export const useAppStore = create<AppState>((set, get) => {
 
   // Replay bursts hundreds of updates in one go; batching them into a single
   // store write keeps render cost O(bursts) instead of O(chunks).
-  let updateQueue: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
-    [];
+  let updateQueue: { sessionId: string; u: SessionUpdate; meta?: unknown }[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   // While a session/load_earlier request is in flight its updates must be
   // PREPENDED, not appended — buffer them until the request resolves.
   let collectingEarlier = false;
-  let earlierBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] =
-    [];
+  let earlierBuffer: { sessionId: string; u: SessionUpdate; meta?: unknown }[] = [];
   // Page updates (marked earlierPage) arriving OUTSIDE the collection window
   // — the load_earlier response already landed. They are replay content by
   // construction, never live, so they must not fall into applyUpdate (that
@@ -857,10 +833,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const seam = segment[segment.length - 1];
         segment = segment.slice(0, -1);
         if (segment.length === 0) return {};
-        rest = [
-          { ...seam, parts: [...seam.parts, ...rest[0].parts] },
-          ...rest.slice(1),
-        ];
+        rest = [{ ...seam, parts: [...seam.parts, ...rest[0].parts] }, ...rest.slice(1)];
       }
       return { messages: [...segment, ...rest] };
     });
@@ -953,11 +926,7 @@ export const useAppStore = create<AppState>((set, get) => {
     cacheActiveSnapshot();
   }
 
-  function applyUpdate(
-    sessionId: string,
-    u: SessionUpdate,
-    meta?: unknown,
-  ): void {
+  function applyUpdate(sessionId: string, u: SessionUpdate, meta?: unknown): void {
     updateQueue.push({ sessionId, u, meta });
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
@@ -972,9 +941,7 @@ export const useAppStore = create<AppState>((set, get) => {
   // (awaiting confirmation > running > just finished > idle).
   function setActivity(
     sessionId: string,
-    patch:
-      | Partial<SessionActivity>
-      | ((prev: SessionActivity) => Partial<SessionActivity>),
+    patch: Partial<SessionActivity> | ((prev: SessionActivity) => Partial<SessionActivity>),
   ): void {
     set((state) => {
       const prev: SessionActivity = state.sessionStates[sessionId] ?? {
@@ -996,9 +963,7 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   }
 
-  function buildApprovalContext(
-    params: Record<string, unknown>,
-  ): ApprovalContext | undefined {
+  function buildApprovalContext(params: Record<string, unknown>): ApprovalContext | undefined {
     const tc = (params.toolCall ?? null) as {
       toolCallId?: unknown;
       title?: unknown;
@@ -1007,12 +972,8 @@ export const useAppStore = create<AppState>((set, get) => {
     } | null;
     if (!tc || typeof tc !== "object") return undefined;
     const toolCallId =
-      typeof tc.toolCallId === "string" && tc.toolCallId
-        ? tc.toolCallId
-        : undefined;
-    const part = toolCallId
-      ? findToolCallPart(get().messages, toolCallId)
-      : null;
+      typeof tc.toolCallId === "string" && tc.toolCallId ? tc.toolCallId : undefined;
+    const part = toolCallId ? findToolCallPart(get().messages, toolCallId) : null;
     const rawInput = tc.rawInput;
     const plan =
       rawInput &&
@@ -1023,36 +984,23 @@ export const useAppStore = create<AppState>((set, get) => {
     // Wire-provided popup fields (bridge 0.33+): title and content text
     // blocks carry the readable form of the input — prefer them over the
     // matched tool_call part and the INPUT_KEYS heuristic.
-    const title =
-      typeof tc.title === "string" && tc.title ? tc.title : undefined;
+    const title = typeof tc.title === "string" && tc.title ? tc.title : undefined;
     let contentText: string | undefined;
     if (Array.isArray(tc.content)) {
       const texts = tc.content
-        .map(
-          (b) =>
-            (b as { content?: { text?: unknown } } | null)?.content?.text ??
-            null,
-        )
+        .map((b) => (b as { content?: { text?: unknown } } | null)?.content?.text ?? null)
         .filter((t): t is string => typeof t === "string" && t.length > 0);
       if (texts.length > 0) contentText = texts.join("\n\n");
     }
     let rawInputText: string | undefined;
     if (rawInput != null) {
       try {
-        rawInputText =
-          typeof rawInput === "string"
-            ? rawInput
-            : JSON.stringify(rawInput, null, 2);
+        rawInputText = typeof rawInput === "string" ? rawInput : JSON.stringify(rawInput, null, 2);
       } catch {
         rawInputText = String(rawInput);
       }
     }
-    if (
-      !toolCallId &&
-      rawInputText == null &&
-      title == null &&
-      contentText == null
-    )
+    if (!toolCallId && rawInputText == null && title == null && contentText == null)
       return undefined;
     return {
       toolCallId,
@@ -1079,8 +1027,7 @@ export const useAppStore = create<AppState>((set, get) => {
   } | null {
     const sessionId = String(params.sessionId ?? "");
     const message = typeof params.message === "string" ? params.message : "";
-    const schema = params.requestedSchema as
-      { properties?: Record<string, unknown> } | undefined;
+    const schema = params.requestedSchema as { properties?: Record<string, unknown> } | undefined;
     const props = schema?.properties;
     if (!sessionId || typeof props !== "object" || props === null) return null;
     const fields: ElicitField[] = [];
@@ -1110,8 +1057,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }));
       fields.push({
         key,
-        otherKey:
-          typeof props[`${key}_other`] === "object" ? `${key}_other` : null,
+        otherKey: typeof props[`${key}_other`] === "object" ? `${key}_other` : null,
         question: typeof prop.title === "string" ? prop.title : key,
         description:
           typeof prop.description === "string" && prop.description.trim()
@@ -1203,12 +1149,7 @@ export const useAppStore = create<AppState>((set, get) => {
     await s.refreshInstances({ probe: true });
     // Re-read after the await: the hub/instance may have changed meanwhile.
     const cur = get();
-    if (
-      !cur.profile ||
-      cur.profile !== s.profile ||
-      cur.instanceId !== s.instanceId
-    )
-      return;
+    if (!cur.profile || cur.profile !== s.profile || cur.instanceId !== s.instanceId) return;
     // Hub unreachable or discovery failed (phone just woke, network not yet
     // ready): instance liveness is UNKNOWN, not "gone" — retry in place
     // instead of bouncing the user out of the session. Only a successful
@@ -1257,10 +1198,7 @@ export const useAppStore = create<AppState>((set, get) => {
     await openConnection(cur.profile, cur.instanceId!);
   }
 
-  async function openConnection(
-    profile: ConnectionProfile,
-    instanceId: string,
-  ): Promise<void> {
+  async function openConnection(profile: ConnectionProfile, instanceId: string): Promise<void> {
     stopReconnect();
     const mySeq = ++connSeq;
     acp?.close();
@@ -1304,8 +1242,7 @@ export const useAppStore = create<AppState>((set, get) => {
         // Marked updates arriving OUTSIDE the window are still replay, never
         // live — they take the late-page buffer (prepended), never the tail.
         const marked =
-          isEarlierPageMeta((update as { _meta?: unknown })._meta) ||
-          isEarlierPageMeta(meta);
+          isEarlierPageMeta((update as { _meta?: unknown })._meta) || isEarlierPageMeta(meta);
         if (
           collectingEarlier &&
           sessionId === get().activeSessionId &&
@@ -1445,8 +1382,7 @@ export const useAppStore = create<AppState>((set, get) => {
           }
           return { permissions, elicitations };
         });
-        for (const sid of cleared)
-          setActivity(sid, { awaitingPermission: false });
+        for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
         pendingResponds.delete(id);
         pendingElicitResponds.delete(id);
       },
@@ -1524,6 +1460,7 @@ export const useAppStore = create<AppState>((set, get) => {
     loadingSession: false,
     workflowHub: null,
     workflowActiveRuns: null,
+    workflowRecentRuns: null,
     workflowHubError: null,
     workflowHubLoading: false,
     workflowRunTarget: null,
@@ -1715,9 +1652,7 @@ export const useAppStore = create<AppState>((set, get) => {
           return;
         }
         const msg =
-          e instanceof HubApiError
-            ? e.message
-            : `discovery failed: ${(e as Error).message}`;
+          e instanceof HubApiError ? e.message : `discovery failed: ${(e as Error).message}`;
         set({ instancesError: msg, hubOffline: false });
       }
     },
@@ -1785,17 +1720,12 @@ export const useAppStore = create<AppState>((set, get) => {
       // Attach to the requested session, else the most recently updated one.
       // noAttach (remote session-create): the caller opens a FRESH session
       // itself — never auto-attach a recycled instance's history.
-      if (
-        !opts?.noAttach &&
-        get().connState === "open" &&
-        !get().activeSessionId
-      ) {
+      if (!opts?.noAttach && get().connState === "open" && !get().activeSessionId) {
         const inst = get().instances.find((i) => i.id === instanceId);
         let target = attachSessionId ?? null;
         if (!target && inst?.sessions?.length) {
-          target = [...inst.sessions].sort(
-            (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-          )[0].sessionId;
+          target = [...inst.sessions].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]
+            .sessionId;
         }
         if (target) await get().loadSession(target);
       }
@@ -1933,9 +1863,7 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ notice: "notice.sessionRunning" });
         } else {
           set({
-            notice: `close session failed: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
+            notice: `close session failed: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
         return;
@@ -1946,19 +1874,14 @@ export const useAppStore = create<AppState>((set, get) => {
           i.id === instanceId
             ? {
                 ...i,
-                sessions: (i.sessions ?? []).filter(
-                  (s) => s.sessionId !== sessionId,
-                ),
+                sessions: (i.sessions ?? []).filter((s) => s.sessionId !== sessionId),
               }
             : i,
         ),
       }));
       // Closing the conversation we're looking at returns to the list
       // (connection stays, closeSession handles the session-scoped reset).
-      if (
-        get().instanceId === instanceId &&
-        get().activeSessionId === sessionId
-      ) {
+      if (get().instanceId === instanceId && get().activeSessionId === sessionId) {
         get().closeSession();
       }
       set({ notice: "notice.sessionClosed" });
@@ -1972,9 +1895,7 @@ export const useAppStore = create<AppState>((set, get) => {
         await client.shutdownInstance(instanceId);
       } catch (e) {
         set({
-          notice: `shutdown instance failed: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          notice: `shutdown instance failed: ${e instanceof Error ? e.message : String(e)}`,
         });
         return;
       }
@@ -2033,9 +1954,7 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ notice: "notice.sessionDeleteLive" });
         } else {
           set({
-            notice: `delete session failed: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
+            notice: `delete session failed: ${e instanceof Error ? e.message : String(e)}`,
           });
         }
         return false;
@@ -2052,9 +1971,7 @@ export const useAppStore = create<AppState>((set, get) => {
         await client.deleteProject(workspacePath);
       } catch (e) {
         set({
-          notice: `delete project failed: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          notice: `delete project failed: ${e instanceof Error ? e.message : String(e)}`,
         });
         return false;
       }
@@ -2214,9 +2131,7 @@ export const useAppStore = create<AppState>((set, get) => {
               modes?: { currentModeId?: string };
               configOptions?: ConfigOption[];
             } | null;
-            const configOptions = Array.isArray(res?.configOptions)
-              ? res!.configOptions!
-              : [];
+            const configOptions = Array.isArray(res?.configOptions) ? res!.configOptions! : [];
             const currentModeId = res?.modes?.currentModeId ?? null;
             // Unchanged: keep the painted messages/cursor/hasMore — they
             // stay valid for load_earlier. The metadata-only cursor anchors
@@ -2269,11 +2184,8 @@ export const useAppStore = create<AppState>((set, get) => {
         set({
           replayCursor: meta?.cursor ?? null,
           hasMore: meta?.hasMore ?? false,
-          totalMessages:
-            typeof meta?.totalMessages === "number" ? meta.totalMessages : null,
-          configOptions: Array.isArray(res?.configOptions)
-            ? res!.configOptions!
-            : [],
+          totalMessages: typeof meta?.totalMessages === "number" ? meta.totalMessages : null,
+          configOptions: Array.isArray(res?.configOptions) ? res!.configOptions! : [],
           currentModeId: res?.modes?.currentModeId ?? null,
           loadingSession: false,
           // A turn that survived the reconnect is still running on the bridge
@@ -2304,9 +2216,7 @@ export const useAppStore = create<AppState>((set, get) => {
             ? null
             : { notice: `session/load failed: ${(e as Error).message}` }),
           loadingSession: false,
-          ...(s.activeSessionId === sessionId && replaying
-            ? { messages: [] }
-            : {}),
+          ...(s.activeSessionId === sessionId && replaying ? { messages: [] } : {}),
         }));
       }
     },
@@ -2360,29 +2270,22 @@ export const useAppStore = create<AppState>((set, get) => {
             // plan/config/usage in old pages are stale: take messages only
           }
           let rest = state.messages;
-          if (
-            segment.length &&
-            rest.length &&
-            segment[segment.length - 1].id === rest[0].id
-          ) {
+          if (segment.length && rest.length && segment[segment.length - 1].id === rest[0].id) {
             // Seam dedupe: the same message split across pages.
             const seam = segment[segment.length - 1];
             segment = segment.slice(0, -1);
-            rest = [
-              { ...seam, parts: [...seam.parts, ...rest[0].parts] },
-              ...rest.slice(1),
-            ];
+            rest = [{ ...seam, parts: [...seam.parts, ...rest[0].parts] }, ...rest.slice(1)];
           }
-        const meta = readReplayMeta(result);
-        return {
-          messages: [...segment, ...rest],
-          replayCursor: meta?.cursor ?? null,
-          hasMore: meta?.hasMore ?? false,
-          loadingEarlier: false,
-        };
-      });
-      cacheActiveSnapshot();
-      return true;
+          const meta = readReplayMeta(result);
+          return {
+            messages: [...segment, ...rest],
+            replayCursor: meta?.cursor ?? null,
+            hasMore: meta?.hasMore ?? false,
+            loadingEarlier: false,
+          };
+        });
+        cacheActiveSnapshot();
+        return true;
       } catch (e) {
         collectingEarlier = false;
         earlierBuffer = [];
@@ -2408,8 +2311,7 @@ export const useAppStore = create<AppState>((set, get) => {
           configId,
           value,
         });
-        const opts = (result as { configOptions?: ConfigOption[] } | null)
-          ?.configOptions;
+        const opts = (result as { configOptions?: ConfigOption[] } | null)?.configOptions;
         if (Array.isArray(opts)) set({ configOptions: opts });
         // The bridge also broadcasts config_option_update / current_mode_update
         // to every client (editor included) — the store picks those up too.
@@ -2438,8 +2340,7 @@ export const useAppStore = create<AppState>((set, get) => {
           usageStatsAt: Date.now(),
         });
       } catch {
-        if (get().profile === profile)
-          set({ usageStats: null, quotaUnavailable: true });
+        if (get().profile === profile) set({ usageStats: null, quotaUnavailable: true });
       }
     },
 
@@ -2461,13 +2362,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       if (!client || !s.instanceId || !s.activeSessionId) return null;
       try {
-        return await client.fsFileText(
-          s.instanceId,
-          s.activeSessionId,
-          path,
-          line,
-          limit,
-        );
+        return await client.fsFileText(s.instanceId, s.activeSessionId, path, line, limit);
       } catch {
         return null;
       }
@@ -2493,10 +2388,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       const draft: PromptDraft = { text, images: images ?? [] };
       if (s.isRunning || s.loadingSession) {
-        setQueue(s.activeSessionId, [
-          ...(s.pendingPrompts[s.activeSessionId] ?? []),
-          draft,
-        ]);
+        setQueue(s.activeSessionId, [...(s.pendingPrompts[s.activeSessionId] ?? []), draft]);
         return;
       }
       await get().runPrompt(draft);
@@ -2504,13 +2396,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     runPrompt: async (draft) => {
       const s = get();
-      if (
-        !acp ||
-        s.connState !== "open" ||
-        !s.activeSessionId ||
-        s.loadingSession
-      )
-        return;
+      if (!acp || s.connState !== "open" || !s.activeSessionId || s.loadingSession) return;
       // Live turns never echo the user's message back (only replay does), so
       // insert it optimistically; replay replaces the whole history anyway.
       set((state) => {
@@ -2555,15 +2441,11 @@ export const useAppStore = create<AppState>((set, get) => {
         // Per-turn usage rides the prompt response (UNSTABLE ACP field).
         // Turns that report no cache numbers keep the previous rate.
         const hit = cacheHitRate(result?.usage);
-        if (hit !== null)
-          set((s) =>
-            s.activeSessionId === sessionId ? { cacheHit: hit } : {},
-          );
+        if (hit !== null) set((s) => (s.activeSessionId === sessionId ? { cacheHit: hit } : {}));
       } catch (e) {
         // A dropped connection kills the in-flight prompt, but the reconnect
         // replay rebuilds the truth — stay quiet and let the banner speak.
-        if (!isTransientConnError(e))
-          set({ notice: `prompt failed: ${(e as Error).message}` });
+        if (!isTransientConnError(e)) set({ notice: `prompt failed: ${(e as Error).message}` });
       } finally {
         localPromptActive = false;
         set({ isRunning: false });
@@ -2625,8 +2507,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return { permissions };
       });
-      for (const sid of cleared)
-        setActivity(sid, { awaitingPermission: false });
+      for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
       respond({ outcome: { outcome: "selected", optionId } });
     },
 
@@ -2645,8 +2526,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return { elicitations };
       });
-      for (const sid of cleared)
-        setActivity(sid, { awaitingPermission: false });
+      for (const sid of cleared) setActivity(sid, { awaitingPermission: false });
       // Wire shape (elicitation/create): accept carries the form content,
       // anything else declines. Absent fields = skipped questions.
       respond(content ? { action: "accept", content } : { action: "decline" });
@@ -2791,9 +2671,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return true;
       } catch (e) {
-        get().notify(
-          `stop run failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
+        get().notify(`stop run failed: ${e instanceof Error ? e.message : String(e)}`);
         return false;
       }
     },
@@ -2838,6 +2716,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({
           workflowHub: res.groups ?? [],
           workflowActiveRuns: res.activeRuns ?? [],
+          workflowRecentRuns: res.recentRuns ?? [],
           workflowHubError: null,
           workflowHubLoading: false,
         });
@@ -2855,7 +2734,7 @@ export const useAppStore = create<AppState>((set, get) => {
               : String(e);
         const hadData = get().workflowHub !== null;
         set({
-          ...(hadData ? {} : { workflowHub: [], workflowActiveRuns: [] }),
+          ...(hadData ? {} : { workflowHub: [], workflowActiveRuns: [], workflowRecentRuns: [] }),
           workflowHubError: hadData ? get().workflowHubError : message,
           workflowHubLoading: false,
         });
@@ -2869,7 +2748,6 @@ export const useAppStore = create<AppState>((set, get) => {
 // foreground return — the probe is one tiny round-trip on a healthy pipe.
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible")
-      useAppStore.getState().wakeProbe();
+    if (document.visibilityState === "visible") useAppStore.getState().wakeProbe();
   });
 }

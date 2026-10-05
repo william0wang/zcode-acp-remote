@@ -296,6 +296,7 @@
     "workflowDismissRun": "Remove from list",
     "workflowClearFinished": "Clear finished",
     "workflowActiveTitle": "Running workflows",
+    "workflowRecentTitle": "Recently finished workflows",
     "workflowOpenSession": "Open session",
     "workflowResume": "Resume",
     "workflowRunUnknownSession": "Started elsewhere — read-only here",
