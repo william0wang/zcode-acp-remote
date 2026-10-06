@@ -467,7 +467,13 @@
     "loading": "正在加载项目…",
     "empty": "没有匹配的项目",
     "sessionCount": "{{count}} 个会话",
-    "tooOld": "远程创建会话需要 bridge 0.17.0+"
+    "tooOld": "远程创建会话需要 bridge 0.17.0+",
+    "browse": "浏览目录",
+    "startHere": "在此启动会话",
+    "notAllowed": "无法在此目录启动新会话——它既不是已知项目，也不在桌面机配置的 remote.projectRoots 允许根目录内",
+    "loadingDirs": "正在读取目录…",
+    "emptyDir": "没有子目录",
+    "listTruncated": "仅显示前 2000 项"
   },
   "historyDialog": {
     "title": "会话历史",

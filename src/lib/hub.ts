@@ -1,6 +1,7 @@
 import type {
   AgentUpsert,
   ConversationRunsResponse,
+  FsBrowseResult,
   FsListing,
   HookEntryPatch,
   HubCreateInstanceResult,
@@ -156,6 +157,20 @@ export class HubClient {
     if (!Array.isArray(data))
       throw new HubApiError("unexpected /api/projects payload");
     return data as HubProject[];
+  }
+
+  /**
+   * One directory level of the hub machine's filesystem (bridge 0.65.0,
+   * browse-and-create). Absent `path` lists the home dir; navigate by the
+   * RESOLVED `path` in the answer, never by what was sent. `creatable` flags
+   * whether createInstance() accepts the listed directory itself — with no
+   * remote.projectRoots configured it is true only on known projects.
+   * 404 = missing path/file (or a bridge too old for the route).
+   */
+  async fsBrowse(path?: string): Promise<FsBrowseResult> {
+    const q = path ? `?path=${encodeURIComponent(path)}` : "";
+    const res = await this.fetch(`/api/fs/list${q}`);
+    return (await res.json()) as FsBrowseResult;
   }
 
   /**
@@ -846,7 +861,10 @@ export class HubClient {
    * bridge-side hide list — the journal itself has no delete). 409 while the
    * run is still flying.
    */
-  async dismissWorkflowRun(instanceId: string, runId: string): Promise<{ ok: boolean }> {
+  async dismissWorkflowRun(
+    instanceId: string,
+    runId: string,
+  ): Promise<{ ok: boolean }> {
     const res = await this.fetch(
       `${this.instSettings(instanceId)}/workflow-runs/${encodeURIComponent(runId)}/dismiss`,
       "POST",

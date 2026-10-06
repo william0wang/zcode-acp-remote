@@ -34,6 +34,20 @@ export interface HubProject {
   lastActive: number;
 }
 
+// GET /api/fs/list (bridge 0.65.0, browse-and-create): one directory level
+// of the hub machine's filesystem. `path` is the RESOLVED (realpath)
+// spelling — navigate by it, not by what was sent. Only subdirectories are
+// listed; hidden (`.`-prefixed) entries are included, filter client-side.
+// `creatable` = a NEW session may start in the listed directory itself
+// (known project, or under a configured remote.projectRoots root).
+export interface FsBrowseResult {
+  path: string;
+  parent: string | null;
+  creatable: boolean;
+  entries: Array<{ name: string }>;
+  truncated: boolean;
+}
+
 // POST /api/instances result: the (new or reused) serve instance id.
 export interface HubCreateInstanceResult {
   id: string;
@@ -221,14 +235,22 @@ export interface AcpDiffContent {
 }
 
 function isTextContent(c: unknown): c is AcpTextContent {
-  return typeof c === "object" && c !== null && (c as { type?: string }).type === "text";
+  return (
+    typeof c === "object" &&
+    c !== null &&
+    (c as { type?: string }).type === "text"
+  );
 }
 
 // The bridge wraps plain results as {type:"content", content:{type:"text"}}
 // (Bash output, plan text, question text); unwrap those too.
 function unwrapText(c: unknown): string | null {
   if (isTextContent(c)) return c.text;
-  if (typeof c === "object" && c !== null && (c as { type?: string }).type === "content") {
+  if (
+    typeof c === "object" &&
+    c !== null &&
+    (c as { type?: string }).type === "content"
+  ) {
     const inner = (c as { content?: unknown }).content;
     if (isTextContent(inner)) return inner.text;
   }
@@ -238,7 +260,11 @@ function unwrapText(c: unknown): string | null {
 function isDiffContent(c: unknown): c is AcpDiffContent {
   if (typeof c !== "object" || c === null) return false;
   const d = c as Partial<AcpDiffContent>;
-  return d.type === "diff" && typeof d.newText === "string" && typeof d.path === "string";
+  return (
+    d.type === "diff" &&
+    typeof d.newText === "string" &&
+    typeof d.path === "string"
+  );
 }
 
 // Chunk content is a SINGLE ContentBlock on the wire; tool_call_update
@@ -420,7 +446,8 @@ export interface WorkflowGateBlock {
 }
 
 /** The switch's write vocabulary (bridge ≥0.53): "auto" follows the remote verdict. */
-export type WorkflowGateModeSetting = "auto" | "disabled" | "onDemand" | "alwaysOn";
+export type WorkflowGateModeSetting =
+  "auto" | "disabled" | "onDemand" | "alwaysOn";
 
 export interface WorkflowGateSetResponse {
   ok: boolean;
@@ -870,7 +897,12 @@ export interface WorkflowCreatePromptResponse {
 
 /** The install outcome of an app update, as the bridge reports it. */
 export type AppUpdateStage =
-  "idle" | "downloading" | "installing" | "done" | "needs-user-install" | "failed";
+  | "idle"
+  | "downloading"
+  | "installing"
+  | "done"
+  | "needs-user-install"
+  | "failed";
 
 export interface AppUpdateState {
   stage: AppUpdateStage;

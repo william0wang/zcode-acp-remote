@@ -52,8 +52,11 @@ serve bridge for the workspace, and the fresh session's cwd is that project.
 Since server ADR-0016 the spawn opens a VISIBLE terminal REPL on the desktop
 (~20s registration budget), and the owner closing that window retires the
 bridge — the app treats the vanished instance like any dead bridge. The
-known-project list doubles as the create whitelist; there is no free-form
-path entry.
+known-project list is the default create whitelist; the browse mode (bridge
+0.65.0) walks the machine's directories via `GET /api/fs/list` and starts a
+session in any of them the hub flags `creatable` (a known project, or under
+a `remote.projectRoots` root configured on the hub machine — unconfigured,
+only known projects are creatable). There is no free-form path entry.
 _Avoid_: new tab, project open
 
 **Session History**:
