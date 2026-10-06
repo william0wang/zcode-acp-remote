@@ -303,3 +303,114 @@ test("a turn watched live re-enters without a full replay (tail-id reconcile)", 
   });
   await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
 });
+
+test("a thought-tailed turn reconciles on the raw thought_ id; a local optimistic tail falls back to the count check", async () => {
+  const { useAppStore } = await import("../src/store/appStore");
+  const store = useAppStore;
+  const ws = FakeWebSocket.current!;
+  expect(store.getState().connState).toBe("open"); // connection from the first test
+  const has = (needle: string) =>
+    store
+      .getState()
+      .messages.some((m) => JSON.stringify(m.parts).includes(needle));
+  const turnState = (running: boolean) =>
+    ws.server({
+      jsonrpc: "2.0",
+      method: "$/zcode/turnState",
+      params: { sessionId: "sess_1", running },
+    });
+  const chunkAt = (kind: string, mid: string | undefined, text: string) =>
+    ws.server({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "sess_1",
+        update: {
+          sessionUpdate: kind,
+          content: { type: "text", text },
+          ...(mid ? { messageId: mid } : {}),
+        },
+      },
+    });
+  const loads0 = ws.loads().length;
+
+  // Foreign turn ending on a thought: the journal's newest entry — and so the
+  // bridge's lastMessageId — is the thought's own `thought_`-prefixed id.
+  turnState(true);
+  chunkAt("agent_message_chunk", "m_t1", "T1");
+  chunkAt("agent_thought_chunk", "thought_m_t1", "TH1");
+  turnState(false);
+  await flush();
+  expect(has("TH1")).toBe(true);
+
+  // Re-entry: both tails are the RAW thought id — equal ids keep the painted
+  // snapshot. (The old prefix-stripping compare mismatched this and forced a
+  // full tail replay on every re-entry of a thought-tailed session.)
+  void store.getState().loadSession("sess_1");
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 1));
+  expect(ws.loadLimit(ws.loads()[loads0])).toBe(0);
+  ws.settleLoad({
+    replayMeta: {
+      cursor: "c",
+      hasMore: false,
+      totalMessages: 2,
+      lastMessageId: "thought_m_t1",
+      turnActive: false,
+    },
+  });
+  await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
+  await flush();
+  expect(has("TH1")).toBe(true); // kept, not dropped for a replay
+  expect(ws.loads().length).toBe(loads0 + 1); // and no full replay was sent
+
+  // A turn whose only trace is the optimistic prompt bubble (cancelled or
+  // failed before any backend content) leaves a LOCAL m-counter tail id that
+  // can never match a backend id: the count check decides — equal count
+  // keeps the snapshot, still no replay.
+  void store.getState().sendPrompt("PROMPT");
+  await flush();
+  expect(has("PROMPT")).toBe(true);
+  const promptFrame = [...ws.sent].reverse().find((f) => f.method === "session/prompt");
+  expect(promptFrame?.id).toBeDefined();
+  ws.server({ jsonrpc: "2.0", id: promptFrame!.id, result: { stopReason: "end_turn" } });
+  await flush();
+  expect(store.getState().isRunning).toBe(false);
+
+  void store.getState().loadSession("sess_1");
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 2));
+  expect(ws.loadLimit(ws.loads()[loads0 + 1])).toBe(0);
+  ws.settleLoad({
+    replayMeta: {
+      cursor: "c",
+      hasMore: false,
+      // The store's totalMessages (3, from the previous test's replay) is
+      // what the prompt-turn snapshot cached — equal counts, local tail.
+      totalMessages: 3,
+      lastMessageId: "m_t1",
+      turnActive: false,
+    },
+  });
+  await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
+  await flush();
+  expect(has("PROMPT")).toBe(true); // count check carried the verdict
+  expect(ws.loads().length).toBe(loads0 + 2); // no full replay
+
+  // ...but a moved count under a local tail still forces the full replay.
+  void store.getState().loadSession("sess_1");
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 3));
+  ws.settleLoad({
+    replayMeta: {
+      cursor: "c",
+      hasMore: false,
+      totalMessages: 9,
+      lastMessageId: "m_t1",
+      turnActive: false,
+    },
+  });
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 4));
+  expect(ws.loadLimit(ws.loads()[loads0 + 3])).toBe(30);
+  ws.settleLoad({
+    replayMeta: { cursor: "c9", hasMore: false, totalMessages: 9 },
+  });
+  await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
+});

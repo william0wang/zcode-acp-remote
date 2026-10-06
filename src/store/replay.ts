@@ -30,7 +30,7 @@ interface SessionSnapshot {
   replayCursor: string | null;
   hasMore: boolean;
   totalMessages: number | null;
-  // Normalized tail id (see snapshotTailId) — the primary reconcile key.
+  // Tail message id (see snapshotTailId) — the primary reconcile key.
   // Counts only refresh on replay, so a turn watched live leaves
   // totalMessages stale while the tail id is already the new one.
   lastMessageId: string | null;
@@ -69,16 +69,27 @@ export function removeSessionCache(sessionId: string): void {
 }
 
 /**
- * Normalized id of the newest chat message — the snapshot-side reconcile
- * key. Thought streams ride their own `thought_`-prefixed message ids
- * (siblings of the bare backend id), so the prefix is stripped to compare
- * against the bridge's `replayMeta.lastMessageId`. Local optimistic ids
- * (`m3`) never match a backend id and safely fall back to the count check.
+ * Id of the newest chat message — the snapshot-side reconcile key. Compared
+ * VERBATIM against the bridge's `replayMeta.lastMessageId`: that field is the
+ * newest journal entry's id as-is, and a thought IS its own journal entry
+ * with a `thought_`-prefixed id — so a turn ending on a thought has
+ * `thought_x` on both sides. Stripping the prefix here (the old behavior)
+ * mismatched exactly that case and forced a redundant full replay on every
+ * re-entry of the session.
  */
 export function snapshotTailId(messages: ChatMessage[]): string | null {
-  const last = messages[messages.length - 1];
-  if (!last) return null;
-  return last.id.startsWith("thought_") ? last.id.slice("thought_".length) : last.id;
+  return messages[messages.length - 1]?.id ?? null;
+}
+
+/**
+ * Local optimistic message ids (ensureMessage's `m1`, `m2`, … counter). They
+ * can never equal a backend/bridge id (bridge-generated ids are UUIDs), so a
+ * local tail id carries no reconcile signal — the caller falls back to the
+ * count check. A backend id of this exact shape would only demote itself to
+ * that same conservative fallback, never skip a needed replay.
+ */
+export function isLocalMessageId(id: string | null): boolean {
+  return id !== null && /^m\d+$/.test(id);
 }
 
 interface ReplayMeta {

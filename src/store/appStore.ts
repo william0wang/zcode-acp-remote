@@ -31,6 +31,7 @@ import {
   ensureMessage,
   findToolCallPart,
   isEarlierPageMeta,
+  isLocalMessageId,
   readReplayMeta,
   readSessionCache,
   removeSessionCache,
@@ -2123,16 +2124,22 @@ export const useAppStore = create<AppState>((set, get) => {
           // were gone". The tail id (bridge additive) is the primary key —
           // counts only refresh on replay, so a turn watched live leaves the
           // cached totalMessages stale and a count-only check would force a
-          // full replay of an unchanged tail on every re-entry. Bridges
-          // without the field (or id-less tails) fall back to the count
-          // check: snapshots are written between turns, so an equal count
-          // with an idle bridge turn means the history is what we show.
+          // full replay of an unchanged tail on every re-entry. Ids compare
+          // verbatim: a thought-tailed turn has `thought_x` on both sides.
+          // Bridges without the field, an id-less tail, or a LOCAL optimistic
+          // tail (ensureMessage's m-counter never matches a backend id) fall
+          // back to the count check: snapshots are written between turns, so
+          // an equal count with an idle bridge turn means the history is what
+          // we show.
           const result = await load(0);
           const meta = readReplayMeta(result);
           const serverTail = meta?.lastMessageId ?? null;
+          const cachedTail = isLocalMessageId(cached.lastMessageId)
+            ? null
+            : cached.lastMessageId;
           const unchanged =
-            serverTail != null && cached.lastMessageId != null
-              ? serverTail === cached.lastMessageId
+            serverTail != null && cachedTail != null
+              ? serverTail === cachedTail
               : typeof meta?.totalMessages === "number" &&
                 meta.totalMessages === cached.totalMessages;
           if (unchanged) {
