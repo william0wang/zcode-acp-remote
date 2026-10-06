@@ -62,4 +62,9 @@ git push origin main "${TAG}"
 # Repository". Drop it so the interactive `gh auth` credentials win.
 unset GITHUB_TOKEN GH_TOKEN
 gh release create "${TAG}" "${APK}" --title "${TAG}" --generate-notes
+# Only reached on a successful release (set -e bails out above otherwise).
+# The Rust target dir is disposable build state that grows to gigabytes;
+# dropping it also forces the next release to compile from scratch.
+rm -rf src-tauri/target
 echo "==> released ${TAG}: ${APK}"
+echo "==> cleaned src-tauri/target"
