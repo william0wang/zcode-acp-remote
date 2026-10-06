@@ -35,6 +35,7 @@ import {
   readSessionCache,
   removeSessionCache,
   REPLAY_TAIL_LIMIT,
+  snapshotTailId,
   writeSessionCache,
   type PlanEntry,
 } from "./replay";
@@ -879,6 +880,7 @@ export const useAppStore = create<AppState>((set, get) => {
       replayCursor: s.replayCursor,
       hasMore: s.hasMore,
       totalMessages: s.totalMessages,
+      lastMessageId: snapshotTailId(s.messages),
       configOptions: s.configOptions,
       currentModeId: s.currentModeId,
       usage: s.usage,
@@ -2117,16 +2119,23 @@ export const useAppStore = create<AppState>((set, get) => {
           });
 
         if (cached) {
-          // Reconcile the painted snapshot: totalMessages is the cheap "did
-          // anything happen while we were gone" check. Snapshots are only
-          // written between turns, so an equal count with an idle bridge turn
-          // means the history is exactly what we already show.
+          // Reconcile the painted snapshot: "did anything happen while we
+          // were gone". The tail id (bridge additive) is the primary key —
+          // counts only refresh on replay, so a turn watched live leaves the
+          // cached totalMessages stale and a count-only check would force a
+          // full replay of an unchanged tail on every re-entry. Bridges
+          // without the field (or id-less tails) fall back to the count
+          // check: snapshots are written between turns, so an equal count
+          // with an idle bridge turn means the history is what we show.
           const result = await load(0);
           const meta = readReplayMeta(result);
-          if (
-            typeof meta?.totalMessages === "number" &&
-            meta.totalMessages === cached.totalMessages
-          ) {
+          const serverTail = meta?.lastMessageId ?? null;
+          const unchanged =
+            serverTail != null && cached.lastMessageId != null
+              ? serverTail === cached.lastMessageId
+              : typeof meta?.totalMessages === "number" &&
+                meta.totalMessages === cached.totalMessages;
+          if (unchanged) {
             const res = result as {
               modes?: { currentModeId?: string };
               configOptions?: ConfigOption[];
@@ -2145,13 +2154,19 @@ export const useAppStore = create<AppState>((set, get) => {
                     loadingSession: false,
                     // A turn that survived the reconnect is still running on
                     // the bridge — restore the running UI, not the composer.
-                    isRunning: meta.turnActive === true,
+                    isRunning: meta?.turnActive === true,
                   }
                 : {},
             );
-            setActivity(sessionId, { running: meta.turnActive === true });
+            setActivity(sessionId, { running: meta?.turnActive === true });
             writeSessionCache(sessionId, {
               ...cached,
+              // Keep the count from rotting even though the id carried the
+              // verdict — an old-bridge fallback reconcile reads it next.
+              totalMessages:
+                typeof meta?.totalMessages === "number"
+                  ? meta.totalMessages
+                  : cached.totalMessages,
               configOptions,
               currentModeId,
             });

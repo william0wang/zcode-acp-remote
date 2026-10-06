@@ -240,3 +240,66 @@ test("the cache is LRU-bounded: the oldest session falls back to a full replay",
   });
   await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
 });
+
+test("a turn watched live re-enters without a full replay (tail-id reconcile)", async () => {
+  const { useAppStore } = await import("../src/store/appStore");
+  const store = useAppStore;
+  const ws = FakeWebSocket.current!;
+  expect(store.getState().connState).toBe("open"); // connection from the first test
+  const has = (needle: string) =>
+    store
+      .getState()
+      .messages.some((m) => JSON.stringify(m.parts).includes(needle));
+  const turnState = (running: boolean) =>
+    ws.server({
+      jsonrpc: "2.0",
+      method: "$/zcode/turnState",
+      params: { sessionId: "sess_1", running },
+    });
+  const loads0 = ws.loads().length;
+
+  // A foreign turn runs while we watch: the live chunk lands, the turn ends,
+  // and the end-of-turn snapshot caches it — with a totalMessages count that
+  // still predates the turn (counts only refresh on replay).
+  turnState(true);
+  chunk(ws, "sess_1", "LIVE1");
+  turnState(false);
+  await flush();
+  expect(has("LIVE1")).toBe(true);
+
+  // Re-entry: the cache paints instantly; the metadata-only reconcile
+  // reports the turn's messages (count moved) but the SAME tail id — the id
+  // carries the verdict and the unchanged tail must NOT replay from scratch.
+  void store.getState().loadSession("sess_1");
+  expect(has("LIVE1")).toBe(true); // painted before any response
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 1));
+  expect(ws.loadLimit(ws.loads()[loads0])).toBe(0);
+  ws.settleLoad({
+    replayMeta: {
+      cursor: "c",
+      hasMore: false,
+      totalMessages: 2,
+      lastMessageId: "m_LIVE1",
+      turnActive: false,
+    },
+  });
+  await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
+  await flush();
+  expect(has("LIVE1")).toBe(true); // kept, not dropped for a replay
+  expect(ws.loads().length).toBe(loads0 + 1); // and no full replay was sent
+
+  // Old bridge (no lastMessageId in the meta): the fallback is the count
+  // check, and a moved count still forces the traditional full replay.
+  void store.getState().loadSession("sess_1");
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 2));
+  expect(ws.loadLimit(ws.loads()[loads0 + 1])).toBe(0);
+  ws.settleLoad({
+    replayMeta: { cursor: "c", hasMore: false, totalMessages: 3, turnActive: false },
+  });
+  await vi.waitFor(() => expect(ws.loads().length).toBe(loads0 + 3));
+  expect(ws.loadLimit(ws.loads()[loads0 + 2])).toBe(30); // full replay
+  ws.settleLoad({
+    replayMeta: { cursor: "c3", hasMore: false, totalMessages: 3 },
+  });
+  await vi.waitFor(() => expect(store.getState().loadingSession).toBe(false));
+});

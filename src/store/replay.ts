@@ -30,6 +30,10 @@ interface SessionSnapshot {
   replayCursor: string | null;
   hasMore: boolean;
   totalMessages: number | null;
+  // Normalized tail id (see snapshotTailId) — the primary reconcile key.
+  // Counts only refresh on replay, so a turn watched live leaves
+  // totalMessages stale while the tail id is already the new one.
+  lastMessageId: string | null;
   configOptions: ConfigOption[];
   currentModeId: string | null;
   usage: ContextUsage | null;
@@ -64,10 +68,27 @@ export function removeSessionCache(sessionId: string): void {
   sessionCache.delete(sessionId);
 }
 
+/**
+ * Normalized id of the newest chat message — the snapshot-side reconcile
+ * key. Thought streams ride their own `thought_`-prefixed message ids
+ * (siblings of the bare backend id), so the prefix is stripped to compare
+ * against the bridge's `replayMeta.lastMessageId`. Local optimistic ids
+ * (`m3`) never match a backend id and safely fall back to the count check.
+ */
+export function snapshotTailId(messages: ChatMessage[]): string | null {
+  const last = messages[messages.length - 1];
+  if (!last) return null;
+  return last.id.startsWith("thought_") ? last.id.slice("thought_".length) : last.id;
+}
+
 interface ReplayMeta {
   cursor?: string;
   hasMore?: boolean;
   totalMessages?: number;
+  // Bridge additive: id of the newest message at the slice's end anchor.
+  // Preferred reconcile key over totalMessages (which drifts stale after
+  // turns watched live); absent on older bridges.
+  lastMessageId?: string;
   // Bridge flag: a turn is still in flight for this session (someone else's
   // prompt, or one that survived our reconnect) — restore the running UI.
   turnActive?: boolean;
