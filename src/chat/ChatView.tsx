@@ -24,6 +24,7 @@ import ReactDiffViewer from "react-diff-viewer-continued";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
+import { AUTO_EXPAND_TOP_PX, shouldAutoExpand } from "./autoExpand";
 import {
   ArrowDown,
   ArrowUp,
@@ -1044,11 +1045,43 @@ export function ChatView() {
   const totalMessages = useAppStore((s) => s.totalMessages);
   const loadingEarlier = useAppStore((s) => s.loadingEarlier);
   const loadEarlier = useAppStore((s) => s.loadEarlier);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
 
   const remaining =
     totalMessages != null ? Math.max(0, totalMessages - messages.length) : null;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const expandingRef = useRef(false);
+
+  // Auto load-earlier must key off GENUINE user input only: programmatic
+  // scrolls (the prepend anchor-restore, the entry content swap, the
+  // stick-to-bottom hook) also fire scroll events, and level-triggering on
+  // "scrollTop < threshold" re-armed on those — cascading 2+ page fetches
+  // per touch and on every session re-entry (shouldAutoExpand, edge-fired).
+  const lastInputRef = useRef(0);
+  const wasAtTopRef = useRef(false);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const mark = () => {
+      lastInputRef.current = Date.now();
+    };
+    el.addEventListener("pointerdown", mark, { passive: true });
+    el.addEventListener("wheel", mark, { passive: true });
+    el.addEventListener("touchstart", mark, { passive: true });
+    el.addEventListener("keydown", mark);
+    return () => {
+      el.removeEventListener("pointerdown", mark);
+      el.removeEventListener("wheel", mark);
+      el.removeEventListener("touchstart", mark);
+      el.removeEventListener("keydown", mark);
+    };
+  }, []);
+  // A new session repaints the viewport: forget the old session's input
+  // stamps and top-zone state so the entry swap cannot arm the trigger.
+  useEffect(() => {
+    lastInputRef.current = 0;
+    wasAtTopRef.current = false;
+  }, [activeSessionId]);
 
   // Older history arrives as PREPENDED pages (session/load_earlier). Anchor
   // the viewport: sample until the content height actually grew (network +
@@ -1078,7 +1111,15 @@ export function ChatView() {
   const onScroll = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
-    if (el.scrollTop < 60 && el.scrollHeight > el.clientHeight) expand();
+    const atTop = el.scrollTop < AUTO_EXPAND_TOP_PX && el.scrollHeight > el.clientHeight;
+    const fire = shouldAutoExpand({
+      atTop,
+      wasAtTop: wasAtTopRef.current,
+      sinceInputMs: Date.now() - lastInputRef.current,
+      expanding: expandingRef.current,
+    });
+    wasAtTopRef.current = atTop;
+    if (fire) expand();
   }, [expand]);
 
   const onNew = useCallback(
