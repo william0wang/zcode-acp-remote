@@ -530,6 +530,19 @@ let reconnectAttempt = 0;
 // When the in-flight openConnection() attempt started (0 = none). wakeProbe
 // uses it to recognize a connect attempt wedged past its 15s deadline.
 let connectingSince = 0;
+// >0 while a tryReconnect() call is in flight (stamped on entry, cleared in
+// its finally). A fired reconnect timer leaves a dead id behind, so
+// "!reconnectTimer" alone can't see the wedge where the timer callback
+// itself hangs — wakeProbe also treats an attempt that outlived every
+// legitimate budget (10s discovery fetch + 15s WS deadline) as stuck.
+let reconnectRunSince = 0;
+const RECONNECT_RUN_WEDGE_MS = 45_000;
+// Last time the ACP socket delivered a session/update (0 = never). Fresh
+// traffic proves liveness better than any probe — wakeProbe skips its ping
+// while a turn is streaming, so a loaded-but-slow tunnel never gets a
+// healthy connection torn down for answering slowly.
+let lastWireActivityAt = 0;
+const WIRE_ACTIVITY_FRESH_MS = 30_000;
 // Consecutive network-level discovery failures. A phone's network stack
 // takes a moment after launch — the first failed poll means "not yet",
 // not "hub down"; only DISCOVERY_FAIL_THRESHOLD in a row earn the banner.
@@ -1119,9 +1132,13 @@ export const useAppStore = create<AppState>((set, get) => {
     acp?.close();
     acp = null;
     connectingSince = 0;
+    reconnectRunSince = 0;
     pendingResponds.clear();
     pendingElicitResponds.clear();
     set({ permissions: {}, elicitations: {}, sessionStates: {} });
+    // Whatever was torn down has already kept the user waiting; restart the
+    // backoff from the bottom so recovery is a 1s retry, not another 30s.
+    reconnectAttempt = 0;
     scheduleReconnect();
   }
 
@@ -1129,6 +1146,7 @@ export const useAppStore = create<AppState>((set, get) => {
     const s = get();
     if (!s.profile || !s.instanceId) return;
     if (s.connState === "open") {
+      if (Date.now() - lastWireActivityAt < WIRE_ACTIVITY_FRESH_MS) return;
       if (await probeAlive(5000)) return;
       if (get().connState !== "open") return; // closed meanwhile — loop has it
       teardownZombieConnection();
@@ -1138,13 +1156,27 @@ export const useAppStore = create<AppState>((set, get) => {
       (s.connState === "connecting" &&
         connectingSince > 0 &&
         Date.now() - connectingSince > 30_000) ||
-      (s.connState === "reconnecting" && !reconnectTimer)
+      (s.connState === "reconnecting" &&
+        (!reconnectTimer ||
+          (reconnectRunSince > 0 &&
+            Date.now() - reconnectRunSince > RECONNECT_RUN_WEDGE_MS)))
     ) {
       teardownZombieConnection();
     }
   }
 
+  // Stamps reconnectRunSince around the body so wakeProbe can recognize a
+  // wedged attempt (see the comment on the variable).
   async function tryReconnect(): Promise<void> {
+    reconnectRunSince = Date.now();
+    try {
+      await tryReconnectInner();
+    } finally {
+      reconnectRunSince = 0;
+    }
+  }
+
+  async function tryReconnectInner(): Promise<void> {
     const s = get();
     if (!s.profile || !s.instanceId) return;
     // Probe: a hard-killed bridge lingers in the heartbeat view for up to 30s,
@@ -1212,6 +1244,7 @@ export const useAppStore = create<AppState>((set, get) => {
         if (state === "open") {
           reconnectAttempt = 0;
           connectingSince = 0;
+          lastWireActivityAt = Date.now();
           // Activity is broadcast-only: a fresh connection knows nothing
           // until events arrive (active session's turnActive is restored by
           // loadSession's replay). Stale notices (e.g. from the dropped
@@ -1236,6 +1269,7 @@ export const useAppStore = create<AppState>((set, get) => {
       },
       onUpdate: (sessionId, update, meta) => {
         if (stale()) return;
+        lastWireActivityAt = Date.now();
         // Page updates ride the earlier buffer; live-turn updates streaming
         // during the page request append normally instead of being prepended
         // to the top with the page. On a marker-capable bridge (0.44.1+) the
@@ -2768,8 +2802,16 @@ export const useAppStore = create<AppState>((set, get) => {
 // Zombie-socket guard: deep-sleep wake is the one moment connState can lie
 // ("open" socket that died mid-sleep without an onclose). Validate on every
 // foreground return — the probe is one tiny round-trip on a healthy pipe.
+// The interval covers the wedge that lands AFTER the wake probe already ran
+// (e.g. a reconnect attempt stuck on an unbounded await): without it the
+// banner can stick on "reconnecting" until the user exits and re-enters,
+// because nothing else re-examines the loop while the screen stays on.
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") useAppStore.getState().wakeProbe();
   });
+  setInterval(() => {
+    if (document.visibilityState === "visible")
+      useAppStore.getState().wakeProbe();
+  }, 20_000);
 }

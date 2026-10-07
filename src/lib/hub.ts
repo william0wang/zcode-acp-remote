@@ -62,7 +62,23 @@ export class HubClient {
     // POST; the discovery endpoints only ever needed the first two.
     method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
     body?: unknown,
+    // Slow-by-design routes override (null = wait indefinitely). A phone
+    // waking from deep sleep can park fetch() on a socket that never
+    // delivers a byte (no FIN, no RST — the old route is simply gone);
+    // without a deadline the reconnect loop's discovery await hangs
+    // forever and the banner wedges on "reconnecting". Aborts surface as
+    // network errors, which callers already treat as "hub unreachable,
+    // retry". Covers connect + response headers only: every observed hang
+    // mode delivers zero bytes, so headers never arrive — once they have,
+    // the body follows on the same hot socket.
+    opts?: { timeoutMs?: number | null },
   ): Promise<Response> {
+    const timeoutMs = opts?.timeoutMs !== undefined ? opts.timeoutMs : 10_000;
+    const controller = new AbortController();
+    const timer =
+      timeoutMs === null
+        ? null
+        : setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
     try {
       res = await fetch(this.url(path), {
@@ -72,13 +88,19 @@ export class HubClient {
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
       });
     } catch (e) {
+      const err = e as Error;
       throw new HubApiError(
-        `network error: ${(e as Error).message}`,
+        err.name === "AbortError"
+          ? `network error: no response within ${timeoutMs}ms (${path})`
+          : `network error: ${err.message}`,
         undefined,
         true,
       );
+    } finally {
+      if (timer !== null) clearTimeout(timer);
     }
     if (res.status === 401)
       throw new HubApiError("unauthorized: check token", 401);
@@ -190,10 +212,12 @@ export class HubClient {
     workspacePath: string,
     sessionId?: string,
   ): Promise<HubCreateInstanceResult> {
-    const res = await this.fetch("/api/instances", "POST", {
-      workspacePath,
-      ...(sessionId ? { sessionId } : {}),
-    });
+    const res = await this.fetch(
+      "/api/instances",
+      "POST",
+      { workspacePath, ...(sessionId ? { sessionId } : {}) },
+      { timeoutMs: null },
+    );
     return (await res.json()) as HubCreateInstanceResult;
   }
 
@@ -214,7 +238,9 @@ export class HubClient {
       q.set("before", String(cursor.before));
       q.set("beforeId", cursor.beforeId);
     }
-    const res = await this.fetch(`/api/projects/sessions?${q}`);
+    const res = await this.fetch(`/api/projects/sessions?${q}`, "GET", undefined, {
+      timeoutMs: null,
+    });
     return (await res.json()) as HubHistoryPage;
   }
 
@@ -635,7 +661,10 @@ export class HubClient {
     file: string;
     path: string;
   }): Promise<WriteEffect> {
-    const res = await this.fetch("/api/settings/backups/restore", "POST", body);
+    // Size-dependent file copy — minutes would be wrong, but 10s is too.
+    const res = await this.fetch("/api/settings/backups/restore", "POST", body, {
+      timeoutMs: 60_000,
+    });
     return (await res.json()) as WriteEffect;
   }
 
@@ -644,10 +673,13 @@ export class HubClient {
     url: string;
     channel?: string;
   }): Promise<unknown> {
+    // The hub machine downloads the artifact before answering — however
+    // long its own network takes.
     const res = await this.fetch(
       "/api/settings/app-update/install",
       "POST",
       body,
+      { timeoutMs: null },
     );
     return res.json();
   }
@@ -1020,9 +1052,12 @@ export class HubClient {
   async restartBackend(
     instanceId: string,
   ): Promise<{ cancelledTurns: number; closed: boolean }> {
+    // Stop + respawn of the sandboxed backend: seconds-scale, not instant.
     const res = await this.fetch(
       `/api/instances/${instanceId}/backend/restart`,
       "POST",
+      undefined,
+      { timeoutMs: 30_000 },
     );
     return (await res.json()) as { cancelledTurns: number; closed: boolean };
   }
